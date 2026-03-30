@@ -5,7 +5,7 @@ STEP 1 (mode="initial"): User enters targets → System filters recommended stoc
 STEP 2 (mode="edit"): User clicks "Edit Selection" → Shows ALL stocks for editing
 STEP 3 (mode="result"): User adjusts quantities → System re-optimizes with constraints
 """
-from flask import render_template, request, redirect, url_for, flash, session
+from flask import render_template, request, redirect, url_for, flash, session, jsonify
 from datetime import datetime
 import json
 import uuid
@@ -115,6 +115,13 @@ def optimize_stocks():
     # This avoids HTML/JavaScript quote escaping issues with JSON passing
     session['optimization_quantities'] = quantities
     session['optimization_mode'] = mode
+    # store target values so totals endpoint can recompute if session quantities are missing
+    try:
+        session['optimization_target_moyenne'] = form.target_moyenne.data
+        session['optimization_target_moyenne_nb'] = form.target_moyenne_nb.data
+    except Exception:
+        session['optimization_target_moyenne'] = None
+        session['optimization_target_moyenne_nb'] = None
 
     return render_template(
         'copper/optimize.html',
@@ -126,6 +133,45 @@ def optimize_stocks():
         mode=mode,
         form=form
     )
+
+
+@copper_bp.route('/optimize_stocks/totals', methods=['GET'])
+def optimize_stocks_totals():
+    """Return JSON with server-authoritative totals for the current optimization session."""
+    try:
+        quantities = session.get('optimization_quantities', {}) or {}
+        # If session quantities empty, try to recompute using stored targets
+        if not quantities:
+            mode = session.get('optimization_mode')
+            tgt = session.get('optimization_target_moyenne')
+            tgt_nb = session.get('optimization_target_moyenne_nb')
+            if tgt is not None:
+                try:
+                    # select_stocks_for_moyenne returns (selected_stocks, achieved_moyenne, achieved_moyenne_nb)
+                    selected_stocks, achieved_moyenne, achieved_moyenne_nb = select_stocks_for_moyenne(
+                        target_moyenne=tgt,
+                        target_moyenne_nb=tgt_nb
+                    )
+                    quantities = {s.id: s.local_balance for s in selected_stocks}
+                    # store back to session for future requests
+                    session['optimization_quantities'] = quantities
+                except Exception:
+                    quantities = {}
+
+        # ensure numeric values
+        total = 0.0
+        for v in quantities.values():
+            try:
+                total += float(v)
+            except Exception:
+                continue
+        return jsonify({
+            'total_recommended': total,
+            'quantities': quantities,
+        })
+    except Exception:
+        # Don't raise—return empty safe response
+        return jsonify({'total_recommended': 0.0, 'quantities': {}})
 
 
 @copper_bp.route('/optimize_stocks/confirm_output', methods=['POST'])

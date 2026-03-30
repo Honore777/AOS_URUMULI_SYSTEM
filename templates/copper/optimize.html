@@ -58,55 +58,68 @@
             <div class="bg-white p-6 rounded-lg shadow-md mb-8">
                 <h2 class="text-2xl font-bold mb-4 text-gray-800">📊 Recommended Stocks</h2>
                 
-                <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-blue-50 rounded-lg">
+                    <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-blue-50 rounded-lg">
                     <div>
-                        <p class="text-gray-600 text-sm">Target Moyenne:</p>
+                        <p class="text-gray-600 text-sm">Target Percentage:</p>
                         <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne.data }}</p>
                     </div>
                     <div>
-                        <p class="text-gray-600 text-sm">Target Moyenne NB:</p>
+                        <p class="text-gray-600 text-sm">Target Nobelium:</p>
                         <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne_nb.data }}</p>
                     </div>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
                     <div>
-                        <p class="text-gray-600 text-sm">Achieved Moyenne:</p>
+                        <p class="text-gray-600 text-sm">Achieved Percentage:</p>
                         <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne) }}</p>
                     </div>
                     <div>
-                        <p class="text-gray-600 text-sm">Achieved Moyenne NB:</p>
+                        <p class="text-gray-600 text-sm">Achieved Nobelium:</p>
                         <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne_nb) }}</p>
                     </div>
                 </div>
 
                 <!-- Recommended Stocks Table (Read-Only) -->
                 <div id="initial-stocks-table" class="overflow-x-auto mb-6">
-                    <table class="min-w-full bg-white border border-gray-300">
+                    <table id="initial-stocks-table-el" class="min-w-full bg-white border border-gray-300">
                         <thead class="bg-indigo-600 text-white">
                             <tr>
                                 <th class="px-4 py-2 text-left">Stock ID</th>
                                 <th class="px-4 py-2 text-left">Supplier</th>
                                 <th class="px-4 py-2 text-left">Unit %</th>
                                 <th class="px-4 py-2 text-left">T_Unity</th>
+                                <th class="px-4 py-2 text-left">Percentage</th>
+                                <th class="px-4 py-2 text-left">Nobelium</th>
                                 <th class="px-4 py-2 text-left">Available (kg)</th>
                                 <th class="px-4 py-2 text-left">Recommended (kg)</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-200">
+                            {% set total_recommended = 0 %}
                             {% for stock in selected_stocks %}
+                            {% set rec = (quantities.get(stock.id, 0) or 0) %}
                             <tr class="hover:bg-gray-50">
                                 <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
                                 <td class="px-4 py-2">{{ stock.supplier }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.unit_percent) }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.t_unity) }}</td>
+                                <td class="px-4 py-2">{{ '{:,.4f}'.format(stock.moyenne or 0) }}</td>
+                                <td class="px-4 py-2">{{ '{:,.4f}'.format(stock.moyenne_nb or 0) }}</td>
                                 <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(stock.local_balance) }}</td>
-                                <td class="px-4 py-2 text-right font-bold text-indigo-600">
-                                    {{ '{:,.2f}'.format(quantities.get(stock.id, 0)) }}
+                                <td class="px-4 py-2 text-right font-bold text-indigo-600 recommended-cell" data-value="{{ rec }}" data-stock-id="{{ stock.id }}">
+                                    {{ '{:,.2f}'.format(rec) }}
                                 </td>
                             </tr>
+                            {% set total_recommended = total_recommended + rec %}
                             {% endfor %}
                         </tbody>
+                        <tfoot class="bg-gray-100 font-bold">
+                            <tr>
+                                <td colspan="7" class="px-4 py-2 text-right">TOTAL Recommended</td>
+                                <td class="px-4 py-2 text-right" id="initial-total-recommended" data-value="{{ total_recommended }}">{{ '{:,.2f}'.format(total_recommended) }}</td>
+                            </tr>
+                        </tfoot>
                     </table>
                 </div>
 
@@ -139,6 +152,9 @@
                             class="bg-gray-600 text-white px-6 py-3 rounded-md hover:bg-gray-700 font-medium">
                         🖨️ Print Recommended
                     </button>
+                    <div id="initial-sum-check" class="ml-4 text-sm text-gray-700">
+                        Calculated sum: <span id="initial-sum-value">0.00</span> kg
+                    </div>
                 </div>
 
                 <!-- Bulk Output Recording Form for INITIAL selection -->
@@ -225,11 +241,11 @@
                 
                 <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-amber-50 rounded-lg border-l-4 border-amber-500">
                     <div>
-                        <p class="text-gray-600 text-sm">Target Moyenne:</p>
+                        <p class="text-gray-600 text-sm">Target Percentage:</p>
                         <p class="text-2xl font-bold text-amber-600">{{ form.target_moyenne.data }}</p>
                     </div>
                     <div>
-                        <p class="text-gray-600 text-sm">Target Moyenne NB:</p>
+                        <p class="text-gray-600 text-sm">Target Nobelium:</p>
                         <p class="text-2xl font-bold text-amber-600">{{ form.target_moyenne_nb.data }}</p>
                     </div>
                 </div>
@@ -318,7 +334,7 @@
                         <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne.data }}</p>
                     </div>
                     <div>
-                        <p class="text-gray-600 text-sm">Achieved Moyenne:</p>
+                            <p class="text-gray-600 text-sm">Achieved Percentage:</p>
                         <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne) }}</p>
                     </div>
                 </div>
@@ -329,7 +345,7 @@
                         <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne_nb.data }}</p>
                     </div>
                     <div>
-                        <p class="text-gray-600 text-sm">Achieved Moyenne NB:</p>
+                            <p class="text-gray-600 text-sm">Achieved Nobelium:</p>
                         <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne_nb) }}</p>
                     </div>
                 </div>
@@ -488,5 +504,36 @@ function printElement(elementId){
     w.focus();
     setTimeout(()=>{ w.print(); w.close(); }, 300);
 }
+// Compute and display client-side sum of recommended quantities for quick validation
+function computeInitialTotals(){
+    // Ask server for authoritative totals and quantities for this session
+    const url = "{{ url_for('copper.optimize_stocks_totals') }}";
+    fetch(url, { credentials: 'same-origin' })
+        .then(r => r.ok ? r.json() : Promise.reject(r))
+        .then(data => {
+            const total = Number(data.total_recommended || 0);
+            // Update server total element
+            const serverEl = document.getElementById('initial-total-recommended');
+            if(serverEl){
+                serverEl.dataset.value = total;
+                serverEl.innerText = total.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+            }
+
+            // Update client visible sum to match server (server is authoritative)
+            const el = document.getElementById('initial-sum-value');
+            if(el) el.innerText = total.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+            if(el) el.classList.remove('text-red-600');
+            if(serverEl) serverEl.classList.remove('text-red-600');
+        })
+        .catch(() => {
+            // If fetch fails, leave DOM as rendered by server; do not parse table client-side.
+            // This avoids brittle parsing and keeps server authoritative.
+            console.warn('Failed to fetch optimization totals; keeping server-rendered values.');
+        });
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+    computeInitialTotals();
+});
 </script>
 </html>

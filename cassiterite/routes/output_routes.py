@@ -4,7 +4,7 @@ STEP 1 (mode="initial"): User enters target moyenne → Filter stocks (BINARY)
 STEP 2 (mode="edit"): User clicks "Edit Selection" → Adjust quantities manually
 STEP 3 (mode="result"): User clicks "Recalculate" → Hybrid optimization
 """
-from flask import render_template, request, redirect, url_for, flash, session
+from flask import render_template, request, redirect, url_for, flash, session, jsonify
 from config import db
 from cassiterite.models import CassiteriteStock, CassiteriteOutput
 from cassiterite.forms import RecordCassiteriteOutputForm, OptimizeCassiteriteForm
@@ -219,6 +219,33 @@ def optimize():
         mode=mode,
         form=form
     )
+
+
+@cassiterite_bp.route('/optimize/totals', methods=['GET'])
+def cassiterite_optimize_totals():
+    """Return JSON with server-authoritative totals for the current cassiterite optimization session."""
+    try:
+        quantities = session.get('optimization_quantities', {}) or {}
+        # If session empty, try to recompute using stored target
+        if not quantities:
+            tgt = session.get('optimization_target_moyenne')
+            if tgt is not None:
+                try:
+                    selected_stocks, achieved = select_stocks_for_average_quality(target_moyenne=tgt)
+                    quantities = {s.id: s.local_balance for s in selected_stocks}
+                    session['optimization_quantities'] = quantities
+                except Exception:
+                    quantities = {}
+
+        total = 0.0
+        for v in quantities.values():
+            try:
+                total += float(v)
+            except Exception:
+                continue
+        return jsonify({'total_recommended': total, 'quantities': quantities})
+    except Exception:
+        return jsonify({'total_recommended': 0.0, 'quantities': {}})
 
 
 @cassiterite_bp.route('/confirm_bulk_output', methods=['POST'])
