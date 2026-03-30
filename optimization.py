@@ -1,4 +1,4 @@
-from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpBinary, LpContinuous
+from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpBinary, LpContinuous, PULP_CBC_CMD
 from copper.models import CopperStock
 from sqlalchemy import func
 from types import SimpleNamespace
@@ -55,8 +55,20 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None):
     # Constraint: at least one stock must be selected
     prob += lpSum(stock_vars[s.id] for s in remaining_stocks) >= 1
 
-    # Solve
-    prob.solve()
+    # Solve with a time limit and relative gap to avoid long blocking calls
+    # time_limit: seconds solver will run (10-12s suggested)
+    # gap_rel: relative optimality gap (e.g., 0.01 = 1%)
+    time_limit = 12
+    gap_rel = 0.01
+    try:
+        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+    except TypeError:
+        # Some pulp versions use different parameter name for gap; try ratioGap
+        try:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+        except Exception:
+            # Fallback: time limit only
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
 
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
 
@@ -182,8 +194,16 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
         # If no target specified, just minimize total used (prefer smaller quantities)
         prob += total_balance
     
-    # Solve
-    prob.solve()
+    # Solve with time limit and relative gap to prevent long blocking solves
+    time_limit = 12
+    gap_rel = 0.01
+    try:
+        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+    except TypeError:
+        try:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+        except Exception:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
     
     # ===== Extract results =====
     selected_stocks = []

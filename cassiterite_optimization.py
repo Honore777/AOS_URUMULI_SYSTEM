@@ -2,7 +2,7 @@
 Cassiterite Optimization Functions
 Follows the same hybrid binary/continuous pattern as copper
 """
-from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpBinary, LpContinuous
+from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpBinary, LpContinuous, PULP_CBC_CMD
 from cassiterite.models import CassiteriteStock
 from types import SimpleNamespace
 from config import db
@@ -66,8 +66,16 @@ def select_stocks_for_average_quality(target_moyenne=None):
     # At least one stock must be selected
     prob += lpSum(stock_vars[s.id] for s in remaining_stocks) >= 1
     
-    # Solve
-    prob.solve()
+    # Solve with time limit and relative gap to avoid long blocking calls
+    time_limit = 12
+    gap_rel = 0.01
+    try:
+        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+    except TypeError:
+        try:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+        except Exception:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
     
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
     if not selected_ids:
@@ -154,8 +162,16 @@ def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minim
     # Total quantity must be positive
     prob += total_qty >= 1
     
-    # Solve
-    prob.solve()
+    # Solve with time limit and relative gap to prevent long blocking solves
+    time_limit = 12
+    gap_rel = 0.01
+    try:
+        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+    except TypeError:
+        try:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+        except Exception:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
     
     # Extract results
     selected_stocks = []
