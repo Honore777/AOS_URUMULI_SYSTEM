@@ -32,24 +32,113 @@ def trace_time(func):
         start = time.perf_counter()
         try:
             result = func(*args, **kwargs)
-        except Exception as e:
+        except Exception:
             # Prefer app logger when running inside Flask app context
             try:
                 current_app.logger.exception("Exception in %s", func.__name__)
             except Exception:
                 logger.exception("Exception in %s", func.__name__)
             raise
-        finally:
-            end = time.perf_counter()
+
+        # Helper to log elapsed time (use app logger when available)
+        def _log_elapsed(s, e):
             try:
                 try:
-                    current_app.logger.info("TIMER: %s took %.4f seconds", func.__name__, end - start)
+                    current_app.logger.info("TIMER: %s took %.4f seconds", func.__name__, e - s)
                 except Exception:
-                    logger.info("TIMER: %s took %.4f seconds", func.__name__, end - start)
+                    logger.info("TIMER: %s took %.4f seconds", func.__name__, e - s)
             except Exception:
                 pass
 
+        # If the result is a generator/iterator (streaming response), wrap
+        # iteration so we measure time until the generator is exhausted.
+        try:
+            import inspect
+            import types
+            from flask import Response
+
+            # Async functions are not handled by this synchronous wrapper;
+            # detect coroutine functions above and avoid wrapping here.
+            if inspect.isgenerator(result) or isinstance(result, types.GeneratorType):
+                def gen():
+                    try:
+                        for item in result:
+                            yield item
+                    finally:
+                        end2 = time.perf_counter()
+                        _log_elapsed(start, end2)
+
+                return gen()
+
+            # If it's a Flask/Werkzeug Response with an iterable body, wrap its
+            # iterable so we measure the time until the response body has been
+            # fully iterated by the WSGI server.
+            if isinstance(result, Response):
+                try:
+                    orig_iter = result.response
+                    if orig_iter is None:
+                        # Nothing to iterate; log immediately
+                        end = time.perf_counter()
+                        _log_elapsed(start, end)
+                        return result
+
+                    def wrapped_iterable():
+                        try:
+                            for chunk in orig_iter:
+                                yield chunk
+                        finally:
+                            end2 = time.perf_counter()
+                            _log_elapsed(start, end2)
+
+                    # Replace the response iterable with our wrapped iterable
+                    result.response = wrapped_iterable()
+                except Exception:
+                    # If anything goes wrong wrapping the response, log now
+                    end = time.perf_counter()
+                    _log_elapsed(start, end)
+                return result
+
+        except Exception:
+            # Best-effort: if our inspection/wrapping fails, still log elapsed
+            try:
+                end = time.perf_counter()
+                _log_elapsed(start, end)
+            except Exception:
+                pass
+
+        # Default case: normal synchronous return value — log now.
+        end = time.perf_counter()
+        _log_elapsed(start, end)
         return result
+
+    # Support async coroutine functions by returning an async wrapper
+    try:
+        import inspect
+        if inspect.iscoroutinefunction(func):
+            async def async_wrapper(*args, **kwargs):
+                start = time.perf_counter()
+                try:
+                    res = await func(*args, **kwargs)
+                except Exception:
+                    try:
+                        current_app.logger.exception("Exception in %s", func.__name__)
+                    except Exception:
+                        logger.exception("Exception in %s", func.__name__)
+                    raise
+                finally:
+                    end = time.perf_counter()
+                    try:
+                        try:
+                            current_app.logger.info("TIMER: %s took %.4f seconds", func.__name__, end - start)
+                        except Exception:
+                            logger.info("TIMER: %s took %.4f seconds", func.__name__, end - start)
+                    except Exception:
+                        pass
+                return res
+
+            return async_wrapper
+    except Exception:
+        pass
 
     return wrapper
 

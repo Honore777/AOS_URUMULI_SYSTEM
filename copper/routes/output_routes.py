@@ -62,6 +62,14 @@ def record_output():
 
             out.update_debt()
             db.session.add(out)
+            # Flush so output is visible to DB-side aggregates (remaining_stock)
+            db.session.flush()
+
+            # Recalculate the related stock's remaining local balance and aggregates
+            stock1.local_balance = stock1.remaining_stock()
+            stock1.unit_percent = calculate_unit_percentage(stock1.local_balance, stock1.percentage)
+            from copper.models import CopperStock
+            CopperStock.update_global_moyennes()
 
             db.session.commit()
 

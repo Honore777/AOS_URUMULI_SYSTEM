@@ -82,15 +82,54 @@ def boss_dashboard():
     - Net position for the whole company
     - Pending payment approvals and recent bulk output plans
     """
-    from copper.models import CopperStock, CopperOutput, WorkerPayment
-    from cassiterite.models import CassiteriteStock, CassiteriteOutput
+    from copper.models import CopperStock, CopperOutput, WorkerPayment, SupplierPayment
+    from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment
 
     # Copper metrics (use DB-side aggregates to avoid pulling full tables)
+    # 1) Sales from customers
     copper_total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).scalar()
-    copper_total_supplier_obligation = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar()
-    copper_gross_profit = copper_total_sales - copper_total_supplier_obligation
-    # remaining_to_pay is calculated via relationship; approximate supplier debt via net_balance sum
-    copper_supplier_debt = copper_total_supplier_obligation
+
+    # 2) Original cost basis from suppliers (book cost of all purchased stock)
+    copper_cost_basis = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar() or 0
+
+    # 3) Inventory Value (current monetary value of remaining stock)
+    #    Sum over remaining lots: net_balance * (local_balance / input_kg)
+    #    This computes per-lot cost-per-kg * remaining kg so the KPI
+    #    consistently reports monetary value (RWF) rather than physical kg.
+    try:
+        copper_inventory_value = db.session.query(
+            func.coalesce(
+                func.sum(CopperStock.net_balance * CopperStock.local_balance / func.nullif(CopperStock.input_kg, 0)),
+                0,
+            )
+        ).filter(CopperStock.local_balance > 0, CopperStock.input_kg > 0).scalar() or 0
+    except Exception:
+        # fallback to kg-sum in the unlikely event the DB expression fails
+        copper_inventory_value = db.session.query(
+            func.coalesce(func.sum(CopperStock.local_balance), 0)
+        ).filter(CopperStock.local_balance > 0).scalar() or 0
+
+    # 4) Supplier payments already recorded against Coltan lots
+    copper_supplier_payments = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).scalar() or 0
+
+    # 5) Cost of stock sold (COGS) for copper: compute from recorded outputs
+    # linked to lots so we attribute cost to goods actually sold.
+    try:
+        copper_cost_of_stock_sold = db.session.query(
+            func.coalesce(
+                func.sum(
+                    CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))
+                ),
+                0.0,
+            )
+        ).join(CopperStock, CopperOutput.stock_id == CopperStock.id).scalar() or 0
+    except Exception:
+        logger.exception("boss_dashboard: failed to compute copper COGS from outputs; falling back")
+        copper_cost_of_stock_sold = (copper_cost_basis or 0) - (copper_inventory_value or 0)
+    copper_gross_profit = (copper_total_sales or 0) - (copper_cost_of_stock_sold or 0)
+
+    # 6) Supplier outstanding for Coltan = original supplier cost - payments.
+    copper_supplier_debt = copper_cost_basis - copper_supplier_payments
     copper_customer_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).scalar()
     # Subtract internal worker payments from cash position
     copper_worker_payments = db.session.query(func.coalesce(func.sum(WorkerPayment.amount), 0)).scalar()
@@ -101,16 +140,59 @@ def boss_dashboard():
     copper_cash_position = copper_total_sales - copper_customer_debt
 
     # Cassiterite metrics (use DB-side aggregates)
+    # 1) Sales from customers
     cass_total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar()
-    cass_total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
-    cass_gross_profit = cass_total_sales - cass_total_supplier_obligation
-    cass_supplier_debt = cass_total_supplier_obligation
+
+    # 2) Original cost basis from suppliers (book cost of all purchased cassiterite)
+    cass_cost_basis = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar() or 0
+
+    # 3) Inventory Value (current monetary value of remaining cassiterite)
+    try:
+        cass_inventory_value = db.session.query(
+            func.coalesce(
+                func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / func.nullif(CassiteriteStock.input_kg, 0)),
+                0,
+            )
+        ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0).scalar() or 0
+    except Exception:
+        cass_inventory_value = db.session.query(
+            func.coalesce(func.sum(CassiteriteStock.local_balance), 0)
+        ).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+
+    # 4) Supplier payments already recorded against Cassiterite lots
+    cass_supplier_payments = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).scalar() or 0
+
+    # 5) COGS for cassiterite computed from outputs linked to lots
+    try:
+        cass_cogs = db.session.query(
+            func.coalesce(
+                func.sum(
+                    CassiteriteOutput.output_kg * (CassiteriteStock.balance_to_pay / func.nullif(CassiteriteStock.input_kg, 0))
+                ),
+                0.0,
+            )
+        ).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).scalar() or 0
+    except Exception:
+        logger.exception("boss_dashboard: failed to compute cassiterite COGS from outputs; falling back")
+        cass_cogs = (cass_cost_basis or 0) - (cass_inventory_value or 0)
+    cass_cost_of_stock_sold = cass_cogs
+    cass_gross_profit = (cass_total_sales or 0) - (cass_cogs or 0)
+
+    # 6) Supplier outstanding for Cassiterite = original supplier cost - payments
+    cass_supplier_debt = cass_cost_basis - cass_supplier_payments
     cass_customer_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
     # Cash position for cassiterite: sales - customer debts
     cass_cash_position = cass_total_sales - cass_customer_debt
 
     # Combined KPIs
     total_gross_profit = copper_gross_profit + cass_gross_profit
+    # Combined Inventory Value (current cost of remaining stock for both minerals)
+    total_inventory_value = (copper_inventory_value or 0) + (cass_inventory_value or 0)
+    # Combined original cost basis and COGS
+    # Note: we prefer reporting Inventory Value and COGS; initial/purchased
+    # cost (total_initial_cost) is not used for gross profit reporting here.
+    total_cost_of_stock_sold = (copper_cost_of_stock_sold or 0) + (cass_cost_of_stock_sold or 0)
+    # Combined supplier debt (remaining obligations to all suppliers).
     total_supplier_debt = copper_supplier_debt + cass_supplier_debt
     total_customer_debt = copper_customer_debt + cass_customer_debt
     # Combined cash at hand: (total sales) - (customer debts) - (internal worker payments)
@@ -158,18 +240,27 @@ def boss_dashboard():
     return render_template(
         "boss/dashboard.html",
         copper_total_sales=copper_total_sales,
-        copper_total_supplier_obligation=copper_total_supplier_obligation,
+        copper_cost_basis=copper_cost_basis,
+        # Inventory Value (Coltan)
+        copper_inventory_value=copper_inventory_value,
+        copper_cost_of_stock_sold=copper_cost_of_stock_sold,
         copper_gross_profit=copper_gross_profit,
         copper_supplier_debt=copper_supplier_debt,
         copper_customer_debt=copper_customer_debt,
         copper_cash_position=copper_cash_position,
         cass_total_sales=cass_total_sales,
-        cass_total_supplier_obligation=cass_total_supplier_obligation,
+        cass_cost_basis=cass_cost_basis,
+        # Inventory Value (Cassiterite)
+        cass_inventory_value=cass_inventory_value,
+        cass_cost_of_stock_sold=cass_cost_of_stock_sold,
         cass_gross_profit=cass_gross_profit,
         cass_supplier_debt=cass_supplier_debt,
         cass_customer_debt=cass_customer_debt,
         cass_cash_position=cass_cash_position,
         total_gross_profit=total_gross_profit,
+        # Combined Inventory Value (Coltan + Cassiterite)
+        total_inventory_value=total_inventory_value,
+        total_cost_of_stock_sold=total_cost_of_stock_sold,
         total_supplier_debt=total_supplier_debt,
         total_customer_debt=total_customer_debt,
         total_internal_worker_payments=total_internal_worker_payments,
@@ -208,24 +299,57 @@ def boss_dashboard_data():
         date_from_obj = None
         date_to_obj = None
 
-    # reuse the KPI computations but apply mineral filter when provided
-    from copper.models import CopperStock, CopperOutput, WorkerPayment
-    from cassiterite.models import CassiteriteStock, CassiteriteOutput
+    # reuse the KPI computations but apply mineral/date filters when provided
+    from copper.models import CopperStock, CopperOutput, WorkerPayment, SupplierPayment
+    from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment
     from cassiterite.models.workers_payment import CassiteriteWorkerPayment
 
     def compute_copper(d_from=None, d_to=None):
-        # Filter outputs by output.date when date range provided
+        # Filter outputs by output.date when date range provided (customer side)
         q_outputs = CopperOutput.query
         if d_from:
             q_outputs = q_outputs.filter(CopperOutput.date >= d_from)
         if d_to:
             q_outputs = q_outputs.filter(CopperOutput.date <= d_to)
         # Compute aggregates on the DB side to avoid loading full tables
-        copper_total_sales = q_outputs.with_entities(func.coalesce(func.sum(CopperOutput.output_amount), 0)).scalar()
-        copper_total_supplier_obligation = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar()
-        copper_gross_profit = copper_total_sales - copper_total_supplier_obligation
-        # Use net_balance as the supplier obligation proxy (avoids per-row method calls)
-        copper_supplier_debt = copper_total_supplier_obligation
+        copper_total_sales = q_outputs.with_entities(func.coalesce(func.sum(CopperOutput.output_amount), 0)).scalar() or 0
+
+        # Stock-side: restrict to lots in the date window (original supplier
+        # cost basis is by stock.date).
+        stock_q = CopperStock.query
+        if d_from:
+            stock_q = stock_q.filter(CopperStock.date >= d_from)
+        if d_to:
+            stock_q = stock_q.filter(CopperStock.date <= d_to)
+
+        # Original cost basis for this window
+        copper_cost_basis = stock_q.with_entities(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar() or 0
+
+        # Inventory Value (current cost of remaining Coltan stock in this window)
+        inv_q = stock_q.filter(CopperStock.local_balance > 0, CopperStock.input_kg > 0)
+        copper_inventory_value = inv_q.with_entities(
+            func.coalesce(
+                func.sum(CopperStock.net_balance * CopperStock.local_balance / CopperStock.input_kg),
+                0,
+            )
+        ).scalar() or 0
+
+        # Supplier payments filtered by the same stock window
+        pay_q = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(
+            CopperStock, SupplierPayment.stock_id == CopperStock.id
+        )
+        if d_from:
+            pay_q = pay_q.filter(CopperStock.date >= d_from)
+        if d_to:
+            pay_q = pay_q.filter(CopperStock.date <= d_to)
+        copper_supplier_payments = pay_q.scalar() or 0
+
+        # COGS for this window and gross profit = Sales - COGS
+        copper_cogs = (copper_cost_basis or 0) - (copper_inventory_value or 0)
+        copper_gross_profit = (copper_total_sales or 0) - (copper_cogs or 0)
+
+        # Supplier debt = original supplier cost - payments
+        copper_supplier_debt = copper_cost_basis - copper_supplier_payments
         copper_customer_debt = q_outputs.with_entities(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).scalar()
         # Worker payments may have a paid_at/datetime field; filter by date if available
         wp_q = WorkerPayment.query
@@ -242,8 +366,10 @@ def boss_dashboard_data():
         copper_cash_position = copper_total_sales - copper_customer_debt
         return {
             'total_sales': copper_total_sales,
-            'total_supplier_obligation': copper_total_supplier_obligation,
+            # Inventory Value (Coltan)
+            'inventory_value': copper_inventory_value,
             'gross_profit': copper_gross_profit,
+            'cogs': (copper_cost_basis or 0) - (copper_inventory_value or 0),
             'supplier_debt': copper_supplier_debt,
             'customer_debt': copper_customer_debt,
             'worker_payments': copper_worker_payments,
@@ -251,15 +377,44 @@ def boss_dashboard_data():
         }
 
     def compute_cass(d_from=None, d_to=None):
+        # Customer side
         q_outputs = CassiteriteOutput.query
         if d_from:
             q_outputs = q_outputs.filter(CassiteriteOutput.date >= d_from)
         if d_to:
             q_outputs = q_outputs.filter(CassiteriteOutput.date <= d_to)
-        cass_total_sales = q_outputs.with_entities(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar()
-        cass_total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
-        cass_gross_profit = cass_total_sales - cass_total_supplier_obligation
-        cass_supplier_debt = cass_total_supplier_obligation
+        cass_total_sales = q_outputs.with_entities(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar() or 0
+
+        # Stock-side cost basis by lot.date
+        stock_q = CassiteriteStock.query
+        if d_from:
+            stock_q = stock_q.filter(CassiteriteStock.date >= d_from)
+        if d_to:
+            stock_q = stock_q.filter(CassiteriteStock.date <= d_to)
+
+        cass_cost_basis = stock_q.with_entities(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar() or 0
+
+        inv_q = stock_q.filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0)
+        cass_inventory_value = inv_q.with_entities(
+            func.coalesce(
+                func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
+                0,
+            )
+        ).scalar() or 0
+
+        pay_q = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).join(
+            CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id
+        )
+        if d_from:
+            pay_q = pay_q.filter(CassiteriteStock.date >= d_from)
+        if d_to:
+            pay_q = pay_q.filter(CassiteriteStock.date <= d_to)
+        cass_supplier_payments = pay_q.scalar() or 0
+
+        # COGS for this window and gross profit = Sales - COGS
+        cass_cogs = (cass_cost_basis or 0) - (cass_inventory_value or 0)
+        cass_gross_profit = (cass_total_sales or 0) - (cass_cogs or 0)
+        cass_supplier_debt = cass_cost_basis - cass_supplier_payments
         cass_customer_debt = q_outputs.with_entities(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
         wp_q = CassiteriteWorkerPayment.query
         try:
@@ -273,8 +428,10 @@ def boss_dashboard_data():
         cass_cash_position = cass_total_sales - cass_customer_debt
         return {
             'total_sales': cass_total_sales,
-            'total_supplier_obligation': cass_total_supplier_obligation,
+            # Inventory Value (Cassiterite)
+            'inventory_value': cass_inventory_value,
             'gross_profit': cass_gross_profit,
+            'cogs': (cass_cost_basis or 0) - (cass_inventory_value or 0),
             'supplier_debt': cass_supplier_debt,
             'customer_debt': cass_customer_debt,
             'worker_payments': cass_worker_payments,
@@ -288,6 +445,8 @@ def boss_dashboard_data():
 
     # combine
     total_gross_profit = (copper['gross_profit'] if copper else 0) + (cass['gross_profit'] if cass else 0)
+    # Inventory Value (combined) using per-mineral inventory_value fields
+    total_inventory_value = (copper['inventory_value'] if copper else 0) + (cass['inventory_value'] if cass else 0)
     total_supplier_debt = (copper['supplier_debt'] if copper else 0) + (cass['supplier_debt'] if cass else 0)
     total_customer_debt = (copper['customer_debt'] if copper else 0) + (cass['customer_debt'] if cass else 0)
     total_internal_worker_payments = (copper['worker_payments'] if copper else 0) + (cass['worker_payments'] if cass else 0)
@@ -324,6 +483,10 @@ def boss_dashboard_data():
 
     kpis = {
         'total_gross_profit': total_gross_profit,
+        # Combined Inventory Value for the current filters
+        'total_inventory_value': total_inventory_value,
+        # 'total_initial_cost' intentionally removed: UI no longer shows original purchased cost
+        'total_cost_of_stock_sold': (copper.get('cogs') if copper else 0) + (cass.get('cogs') if cass else 0),
         'total_supplier_debt': total_supplier_debt,
         'total_customer_debt': total_customer_debt,
         'total_internal_worker_payments': total_internal_worker_payments,

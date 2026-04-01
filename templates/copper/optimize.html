@@ -47,9 +47,11 @@
                     <button type="submit" 
                             name="action" 
                             value="filter"
+                            onclick="document.getElementById('optimize-warn').style.display='inline-block'"
                             class="bg-indigo-600 text-white px-6 py-3 rounded-md hover:bg-indigo-700 font-medium">
                         🔍 Filter Stocks
                     </button>
+                    <span id="optimize-warn" style="display:none;" class="ml-3 text-sm text-gray-700">Optimization will run up to 12 seconds.</span>
                 </form>
             </div>
 
@@ -104,8 +106,8 @@
                                 <td class="px-4 py-2">{{ stock.supplier }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.unit_percent) }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.t_unity) }}</td>
-                                <td class="px-4 py-2">{{ '{:,.4f}'.format(stock.moyenne or 0) }}</td>
-                                <td class="px-4 py-2">{{ '{:,.4f}'.format(stock.moyenne_nb or 0) }}</td>
+                                <td class="px-4 py-2">{{ '{:,.4f}'.format(stock.percentage or 0) }}</td>
+                                <td class="px-4 py-2">{{ '{:,.4f}'.format(stock.nb or 0) }}</td>
                                 <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(stock.local_balance) }}</td>
                                 <td class="px-4 py-2 text-right font-bold text-indigo-600 recommended-cell" data-value="{{ rec }}" data-stock-id="{{ stock.id }}">
                                     {{ '{:,.2f}'.format(rec) }}

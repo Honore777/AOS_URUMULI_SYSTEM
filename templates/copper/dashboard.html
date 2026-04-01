@@ -57,11 +57,27 @@
             </div>
             <div class="bg-gradient-to-br from-emerald-600 to-emerald-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-emerald-300">
                 <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Gross Profit (Coltan)</h3>
-                <div class="text-3xl font-bold mb-2">{{ '{:,.2f}'.format(gross_profit or 0) }}</div>
-                <div class="text-sm opacity-80">sales - supplier cost</div>
+                <div id="card-gross-profit" class="text-3xl font-bold mb-2">{{ '{:,.2f}'.format(gross_profit or 0) }}</div>
+                <div class="text-sm opacity-80">sales - cost of goods sold</div>
+            </div>
+            <div class="bg-gradient-to-br from-yellow-600 to-yellow-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-yellow-300">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Agaciro ka Stock Ihari (Cost of Stock Available)</h3>
+                <div id="card-inventory-value" class="text-3xl font-bold mb-2">0.00</div>
+                <div class="text-sm opacity-80">Agaciro ka stock Ihari</div>
+            </div>
+            <!-- Initial Cost KPI removed: dashboard now shows Inventory Value and COGS based on outputs -->
+            <div class="bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-amber-300">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Cost of Stock Sold (COGS)</h3>
+                <div id="card-cogs" class="text-3xl font-bold mb-2">0.00</div>
+                <div class="text-sm opacity-80">Initial cost of stock  − Cost of stock available (period COGS)</div>
+            </div>
+            <div class="bg-gradient-to-br from-red-700 to-red-900 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-red-400">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Supplier Outstanding</h3>
+                <div id="card-supplier-outstanding" class="text-3xl font-bold mb-2">0.00</div>
+                <div class="text-sm opacity-80">Stock-cost − supplier payments(Ayo dusigayemo abazana coltan)</div>
             </div>
             <div class="bg-gradient-to-br from-slate-600 to-slate-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2   border-slate-300">
-                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Imari ihari (Coltan)</h3>
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga ahari muntoki (Coltan)</h3>
                 <div class="text-3xl font-bold mb-2">{{ '{:,.2f}'.format(cash_position or 0) }}</div>
                 <div class="text-sm opacity-80">Ibyagurishijwe byose - imyenda y’abakiriya</div>
             </div>
@@ -524,15 +540,45 @@
             });
         }
 
-        // Update ALL stat cards using IDs (much cleaner!)
+        // Update ALL stat cards using IDs (robust, always set gross profit)
         function updateAllCards(data) {
-            document.getElementById('card-total-input').textContent = data.total_input.toFixed(2);
-            document.getElementById('card-total-output').textContent = data.total_output.toFixed(2);
-            document.getElementById('card-total-debt').textContent = data.total_debt.toFixed(2);
-            const remainingCount = (data.stocks || []).filter(s => (s.local_balance ?? 0) > 0).length;
-            document.getElementById('card-total-stocks').textContent = remainingCount;
-            document.getElementById('card-moyenne').textContent = data.moyenne.toFixed(4);
-            document.getElementById('card-moyenne-nb').textContent = data.moyenne_nb.toFixed(4);
+            console.debug('updateAllCards called', data && data.gross_profit);
+            // Attempt to update all cards but avoid throwing on missing/undefined values
+            try {
+                document.getElementById('card-total-input').textContent = formatNumber(data.total_input, 2);
+                document.getElementById('card-total-output').textContent = formatNumber(data.total_output, 2);
+                document.getElementById('card-total-debt').textContent = formatNumber(data.total_debt, 2);
+                const remainingCount = (data.stocks || []).filter(s => (s.local_balance ?? 0) > 0).length;
+                document.getElementById('card-total-stocks').textContent = formatNumber(remainingCount, 0);
+                document.getElementById('card-moyenne').textContent = formatNumber(data.moyenne, 4);
+                document.getElementById('card-moyenne-nb').textContent = formatNumber(data.moyenne_nb, 4);
+            } catch (err) {
+                // Log but continue to ensure gross profit is updated
+                console.warn('updateAllCards partial update failed', err);
+            }
+
+            // Always set gross profit as a final, separate step (server is authoritative)
+            try {
+                const gp = (data && data.gross_profit !== undefined) ? data.gross_profit : 0;
+                const el = document.getElementById('card-gross-profit');
+                if (el) el.textContent = formatNumber(gp, 2);
+                // Inventory value and supplier outstanding (server authoritative)
+                    try {
+                    const inv = (data && data.inventory_value !== undefined) ? data.inventory_value : 0;
+                    const out = (data && data.supplier_outstanding !== undefined) ? data.supplier_outstanding : 0;
+                        const cogs = (data && data.cost_of_stock_sold !== undefined) ? data.cost_of_stock_sold : ((data && data.total_supplier_obligation !== undefined ? data.total_supplier_obligation : 0) - (data && data.inventory_value !== undefined ? data.inventory_value : 0));
+                    const invEl = document.getElementById('card-inventory-value');
+                    const outEl = document.getElementById('card-supplier-outstanding');
+                        const cogsEl = document.getElementById('card-cogs');
+                    if (invEl) invEl.textContent = formatNumber(inv, 2);
+                    if (outEl) outEl.textContent = formatNumber(out, 2);
+                        if (cogsEl) cogsEl.textContent = formatNumber(cogs, 2);
+                } catch (inner) {
+                    console.warn('failed to set inventory/outstanding cards', inner);
+                }
+            } catch (e) {
+                console.warn('failed to set gross profit card', e);
+            }
         }
 
         // Reset filter and reload page

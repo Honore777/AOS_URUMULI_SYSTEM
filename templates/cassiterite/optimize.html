@@ -87,9 +87,11 @@
                     <button type="submit" 
                             name="action" 
                             value="filter"
+                            onclick="document.getElementById('cass-optimize-warn').style.display='inline-block'"
                             class="bg-indigo-600 text-white px-6 py-3 rounded-md hover:bg-indigo-700 font-medium">
                         🔍 Filter Stocks
                     </button>
+                    <span id="cass-optimize-warn" style="display:none;" class="ml-3 text-sm text-gray-700">Optimization will run up to 12 seconds.</span>
                 </form>
             </div>
 

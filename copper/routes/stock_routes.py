@@ -9,7 +9,7 @@ import openpyxl
 import pandas as pd
 
 from config import db
-from copper.models import CopperStock, CopperOutput
+from copper.models import CopperStock, CopperOutput, SupplierPayment
 from copper import copper_bp
 from core.models import Notification, create_notification, User
 from sqlalchemy.orm import joinedload, selectinload
@@ -255,12 +255,25 @@ def dashboard():
     total_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).scalar()
     total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).scalar()
     total_supplier_obligation = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar()
-    gross_profit = total_sales - total_supplier_obligation
+    # Inventory Value (current cost of remaining Coltan stock)
+    copper_inventory_value = db.session.query(
+        func.coalesce(
+            func.sum(CopperStock.net_balance * CopperStock.local_balance / CopperStock.input_kg),
+            0,
+        )
+    ).filter(CopperStock.local_balance > 0, CopperStock.input_kg > 0).scalar() or 0
+
+    # Cost of stock sold (COGS) = purchases (original supplier obligation)
+    # minus closing stock value (inventory_value). Then gross profit = Sales - COGS.
+    copper_cost_of_stock_sold = (total_supplier_obligation or 0) - (copper_inventory_value or 0)
+    gross_profit = (total_sales or 0) - (copper_cost_of_stock_sold or 0)
 
     supplier_debt = total_supplier_obligation
     customer_debt = total_debt
 
-    cash_position = gross_profit - customer_debt + supplier_debt
+    # Cash position for the Copper dashboard should represent cash at hand
+    # from sales minus outstanding customer debts (what's actually received).
+    cash_position = (total_sales or 0) - (customer_debt or 0)
 
     user_notifications = []
     if getattr(current_user, "is_authenticated", False):
@@ -431,10 +444,10 @@ def filter_stocks():
         if voucher_no:
             stocks_query = stocks_query.filter(CopperStock.voucher_no == voucher_no)
         
-        # Cap returned rows to avoid very large payloads when filtering
-        filtered_stocks = stocks_query.limit(1000).all()
-    
-    # Filter outputs by same date range (voucher filter does not apply here)
+        # Prefer a meaningful snapshot: only remaining stocks (local_balance > 0)
+        filtered_stocks = stocks_query.filter(CopperStock.local_balance > 0).all()
+
+        # Filter outputs by same date range (voucher filter does not apply here)
         outputs_query = CopperOutput.query.order_by(CopperOutput.date.desc())
         
         if start_date:
@@ -444,10 +457,14 @@ def filter_stocks():
         if end_date:
             end = datetime.strptime(end_date, '%Y-%m-%d').date()
             outputs_query = outputs_query.filter(CopperOutput.date <= end)
-        
-        filtered_outputs = outputs_query.limit(1000).all()
+
+        # Return all matching outputs for the filtered window. If this becomes large,
+        # consider paging in the client or server-side.
+        filtered_outputs = outputs_query.all()
     
-    # Aggregates from DB (avoid loading large lists into Python)
+    # Aggregates from DB (avoid loading large lists into Python).
+    # stock_filters represent the "original" cost basis window (what we
+    # ordered from suppliers in this filtered period).
         stock_filters = []
         if start_date:
             stock_filters.append(CopperStock.date >= start)
@@ -468,8 +485,68 @@ def filter_stocks():
         total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).filter(*output_filters).scalar() or 0
         total_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).filter(*output_filters).scalar() or 0
 
-        # Remaining stocks aggregates (only local_balance > 0)
+        # Total sales (monetary) for the filtered outputs window
+        total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).filter(*output_filters).scalar() or 0
+
+        # Total supplier obligation (net_balance) respecting the same stock filters.
+        # This is the original cost basis for these lots (what we owe initially
+        # before any supplier payments are recorded).
+        total_supplier_obligation = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).filter(*stock_filters).scalar() or 0
+
+        # Total payments made against the filtered stocks (all amounts already
+        # approved/recorded by the accountant against these lots).
+        total_payments = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(CopperStock, SupplierPayment.stock_id == CopperStock.id).filter(*stock_filters).scalar() or 0
+
+        # Remaining stocks aggregates (only local_balance > 0). We re-use this
+        # both for moyenne and for computing the current Inventory Value
+        # (agaciro ka stock isigaye mu bubiko).
         remaining_filters = list(stock_filters) + [CopperStock.local_balance > 0]
+
+        # Inventory Value (current cost of remaining stock).
+        # Per lot: cost_per_kg = net_balance / input_kg, then
+        # current_value = cost_per_kg * local_balance.
+        # Implemented in SQL as SUM(net_balance * local_balance / input_kg)
+        # and restricted to lots with positive input_kg to avoid
+        # division-by-zero issues.
+        remaining_value_filters = list(remaining_filters) + [CopperStock.input_kg > 0]
+        inventory_value = db.session.query(
+            func.coalesce(
+                func.sum(CopperStock.net_balance * CopperStock.local_balance / CopperStock.input_kg),
+                0,
+            )
+        ).filter(*remaining_value_filters).scalar() or 0
+
+        # Supplier outstanding (liability) is based on the original supplier
+        # obligation minus all payments recorded for these lots. It does NOT
+        # depend on how much stock is still physically remaining.
+        supplier_outstanding = (total_supplier_obligation or 0) - (total_payments or 0)
+
+        # Cost of stock sold (COGS) for the filtered window: compute from
+        # recorded outputs linked to lots. For each output row we compute
+        # cost = output_kg * (stock.net_balance / NULLIF(stock.input_kg,0)).
+        # This counts only goods actually removed, avoiding the issue where
+        # new purchases inflate COGS when they haven't been sold yet.
+        try:
+            cogs_q = db.session.query(
+                func.coalesce(
+                    func.sum(
+                        CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))
+                    ),
+                    0.0,
+                )
+            ).join(CopperStock, CopperOutput.stock_id == CopperStock.id)
+
+            # apply date filters when present
+            if output_filters:
+                for f in output_filters:
+                    cogs_q = cogs_q.filter(f)
+
+            cost_of_stock_sold = float(cogs_q.scalar() or 0.0)
+        except Exception:
+            logger.exception("Failed to compute COGS from outputs; falling back to purchases-minus-closing")
+            cost_of_stock_sold = (total_supplier_obligation or 0) - (inventory_value or 0)
+        # Gross profit for the filtered window should be Sales - COGS.
+        gross_profit = (total_sales or 0) - (cost_of_stock_sold or 0)
         total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
         total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
         moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
@@ -519,6 +596,14 @@ def filter_stocks():
             'total_input': round(total_input, 2),
             'total_output': round(total_output, 2),
             'total_debt': round(total_debt, 2),
+            # Added financial aggregates for the filtered window
+            'total_sales': round(total_sales, 2),
+            'total_supplier_obligation': round(total_supplier_obligation, 2),
+            'inventory_value': round(inventory_value, 2),
+            'cost_of_stock_sold': round(cost_of_stock_sold, 2),
+            'total_payments': round(total_payments, 2),
+            'supplier_outstanding': round(supplier_outstanding, 2),
+            'gross_profit': round(gross_profit, 2),
             'total_stocks': total_stocks,
             'moyenne': round(moyenne, 4),
             'moyenne_nb': round(moyenne_nb, 4)

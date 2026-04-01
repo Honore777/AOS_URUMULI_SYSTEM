@@ -55,6 +55,16 @@
                     <div id="kpi-total-gross-profit" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_gross_profit or 0) }}</div>
                     <div class="text-sm opacity-80">Coltan + Gasegereti</div>
                 </div>
+                <div class="bg-gradient-to-br from-slate-700 to-slate-900 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
+                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Agaciro ka stock isigaye (RWF)</h3>
+                        <div id="kpi-total-inventory-value" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_inventory_value or 0) }}</div>
+                        <div class="text-sm opacity-80">Igiteranyo cy'agaciro ka stock isigaye (Coltan + Gasegereti) mu mafaranga</div>
+                </div>
+                <div class="bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-amber-400/60">
+                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Agaciro ka stock twagurishije</h3>
+                    <div id="kpi-total-cogs" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_cost_of_stock_sold or 0) }}</div>
+                    <div class="text-sm opacity-80">Cost of goods sold across minerals</div>
+                </div>
                 <div class="bg-gradient-to-br from-red-600 to-red-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-red-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Umwenda w’Abatanga Ibicuruzwa</h3>
                     <div id="kpi-total-supplier-debt" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_supplier_debt or 0) }}</div>
@@ -71,7 +81,7 @@
                     <div class="text-sm opacity-80">Coltan + Gasegereti</div>
                 </div>
                 <div class="bg-gradient-to-br from-slate-600 to-slate-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
-                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga ahari</h3>
+                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga ahari muntoki</h3>
                     <div id="kpi-total-cash-at-hand" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_cash_at_hand or 0) }}</div>
                     <div class="text-sm opacity-80">Igiteranyo cy’ibyagurishijwe byose(sales) - imyenda y’abakiriya - amafaranga yishyuwe abakozi (imbere)</div>
                 </div>
@@ -95,9 +105,14 @@
                         <p class="font-semibold text-gray-600">Ibyagurishijwe byose</p>
                         <p id="copper-total-sales" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(copper_total_sales or 0) }}</p>
                     </div>
+                    <!-- initial cost removed: KPI now uses inventory value and COGS (cost_of_stock_sold) -->
                     <div class="flex items-center justify-between bg-white rounded-xl px-3 py-2 shadow-sm border border-gray-100">
-                        <p class="font-semibold text-gray-600">Ayo Tugomba kwishyura abanye ibicuruzwa</p>
-                        <p id="copper-total-supplier-obligation" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(copper_total_supplier_obligation or 0) }}</p>
+                        <p class="font-semibold text-gray-600">Agaciro ka stock isigaye (RWF)</p>
+                        <p id="copper-inventory-value" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(copper_inventory_value or 0) }}</p>
+                    </div>
+                    <div class="flex items-center justify-between bg-white rounded-xl px-3 py-2 shadow-sm border border-gray-100">
+                        <p class="font-semibold text-gray-600">Agaciro ka stock twagurishije  (Coltan)</p>
+                        <p id="copper-cogs" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(copper_cost_of_stock_sold or 0) }}</p>
                     </div>
                     <div class="flex items-center justify-between bg-emerald-50 rounded-xl px-3 py-2 shadow-sm border border-emerald-100">
                         <p class="font-semibold text-emerald-800">Inyungu Rusange</p>
@@ -112,7 +127,7 @@
                         <p id="copper-customer-debt" class="text-base font-bold tabular-nums text-blue-700">{{ '{:,.2f}'.format(copper_customer_debt or 0) }}</p>
                     </div>
                     <div class="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2 shadow-sm border border-slate-100">
-                        <p class="font-semibold text-slate-800">Amafaranga ahari</p>
+                        <p class="font-semibold text-slate-800">Amafaranga ahari muntoki(coltan)</p>
                         <p id="copper-cash-position" class="text-base font-bold tabular-nums text-slate-900">{{ '{:,.2f}'.format(copper_cash_position or 0) }}</p>
                     </div>
                     <div class="pt-4">
@@ -141,9 +156,14 @@
                         <p class="font-semibold text-gray-600">Ibyagurishijwe byose</p>
                         <p id="cass-total-sales" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(cass_total_sales or 0) }}</p>
                     </div>
+                    <!-- initial cost removed: KPI now uses inventory value and COGS (cost_of_stock_sold) -->
                     <div class="flex items-center justify-between bg-white rounded-xl px-3 py-2 shadow-sm border border-gray-100">
-                        <p class="font-semibold text-gray-600">Ayo Tugomba kwishyura abanye ibicuruzwa</p>
-                        <p id="cass-total-supplier-obligation" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(cass_total_supplier_obligation or 0) }}</p>
+                        <p class="font-semibold text-gray-600">Agaciro ka stock isigaye (RWF)</p>
+                        <p id="cass-inventory-value" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(cass_inventory_value or 0) }}</p>
+                    </div>
+                    <div class="flex items-center justify-between bg-white rounded-xl px-3 py-2 shadow-sm border border-gray-100">
+                        <p class="font-semibold text-gray-600">Agaciro ka stock twagurishije(Gasegereti)</p>
+                        <p id="cass-cogs" class="text-base font-semibold tabular-nums text-gray-900">{{ '{:,.2f}'.format(cass_cost_of_stock_sold or 0) }}</p>
                     </div>
                     <div class="flex items-center justify-between bg-emerald-50 rounded-xl px-3 py-2 shadow-sm border border-emerald-100">
                         <p class="font-semibold text-emerald-800">Inyungu Rusange</p>
@@ -158,7 +178,7 @@
                         <p id="cass-customer-debt" class="text-base font-bold tabular-nums text-blue-700">{{ '{:,.2f}'.format(cass_customer_debt or 0) }}</p>
                     </div>
                     <div class="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2 shadow-sm border border-slate-100">
-                        <p class="font-semibold text-slate-800">Amafaranga ahari</p>
+                        <p class="font-semibold text-slate-800">Amafaranga ahari muntoki(Gasegereti)</p>
                         <p id="cass-cash-position" class="text-base font-bold tabular-nums text-slate-900">{{ '{:,.2f}'.format(cass_cash_position or 0) }}</p>
                     </div>
                     <div class="pt-4">

@@ -215,7 +215,17 @@ def dashboard():
         total_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
         total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar()
         total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
-        gross_profit = total_sales - total_supplier_obligation
+        # Inventory Value (current cost of remaining Cassiterite stock)
+        cass_inventory_value = db.session.query(
+            func.coalesce(
+                func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
+                0,
+            )
+        ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0).scalar() or 0
+
+        # COGS = purchases - closing stock value; gross profit = sales - COGS
+        cass_cost_of_stock_sold = (total_supplier_obligation or 0) - (cass_inventory_value or 0)
+        gross_profit = (total_sales or 0) - (cass_cost_of_stock_sold or 0)
 
         # Debts (DB-side aggregate for supplier debt)
         from sqlalchemy import func
@@ -316,9 +326,12 @@ def cassiterite_filter_stocks():
         if lot_no:
             stocks_query = stocks_query.filter(CassiteriteStock.voucher_no == lot_no)
 
-        # Fetch lists for serialization (cap results to avoid very large payloads)
-        filtered_stocks = stocks_query.limit(1000).all()
-        filtered_outputs = outputs_query.limit(1000).all()
+        # Prefer a meaningful snapshot: only remaining stocks (local_balance > 0)
+        filtered_stocks = stocks_query.filter(CassiteriteStock.local_balance > 0).all()
+
+        # Outputs are already date-filtered above; return all matching outputs.
+        # NOTE: if you expect many outputs, consider paging here instead of returning all.
+        filtered_outputs = outputs_query.all()
 
         # Build common stock filters for DB-side aggregates
         stock_filters = []
@@ -332,6 +345,21 @@ def cassiterite_filter_stocks():
         # Aggregates from DB (faster and avoids loading full tables into Python)
         total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).filter(*stock_filters).scalar() or 0
         total_stocks = db.session.query(func.coalesce(func.count(CassiteriteStock.id), 0)).filter(*stock_filters).scalar() or 0
+            # Build common stock filters for DB-side aggregates
+        stock_filters = []
+        if start_date:
+                
+                stock_filters.append(CassiteriteStock.date >= start)
+        if end_date:
+                stock_filters.append(CassiteriteStock.date <= end)
+        if lot_no:
+                stock_filters.append(CassiteriteStock.voucher_no == lot_no)
+
+            # Aggregates from DB (faster and avoids loading full tables into Python).
+            # stock_filters here represent the original cost-basis window (lots
+            # purchased from suppliers in this filtered period).
+        total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).filter(*stock_filters).scalar() or 0
+        total_stocks = db.session.query(func.coalesce(func.count(CassiteriteStock.id), 0)).filter(*stock_filters).scalar() or 0
 
         output_filters = []
         if start_date:
@@ -342,11 +370,65 @@ def cassiterite_filter_stocks():
         total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).filter(*output_filters).scalar() or 0
         total_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).filter(*output_filters).scalar() or 0
 
+        # Total sales (monetary) for the filtered outputs window
+        total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).filter(*output_filters).scalar() or 0
+
+        # Total supplier obligation (balance_to_pay) respecting the same stock filters
+        total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(*stock_filters).scalar() or 0
+
+        # Total payments made against the filtered cassiterite stocks
+        from cassiterite.models import CassiteriteSupplierPayment
+        total_payments = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
+
+        # Inventory value (book cost) and supplier outstanding (liability)
+        inventory_value = total_supplier_obligation
+        supplier_outstanding = (inventory_value or 0) - (total_payments or 0)
+
+        # Gross profit for the filtered window
+        gross_profit = (total_sales or 0) - (total_supplier_obligation or 0)
+
         # Remaining stocks aggregates (only local_balance > 0)
         remaining_filters = list(stock_filters) + [CassiteriteStock.local_balance > 0]
         total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
         total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
         moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+            # Total supplier obligation (balance_to_pay) respecting the same stock
+            # filters. This is the original cost basis for these lots (what we
+            # owe suppliers before any payments are deducted).
+           
+        total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(*stock_filters).scalar() or 0
+
+            # Total payments made against the filtered cassiterite stocks
+        from cassiterite.models import CassiteriteSupplierPayment
+        total_payments = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
+
+            # Remaining stocks aggregates (only local_balance > 0). We will reuse
+            # this both for moyenne and Inventory Value (current cost of remaining
+            # stock).
+        remaining_filters = list(stock_filters) + [CassiteriteStock.local_balance > 0]
+
+            # Inventory Value (current cost of remaining cassiterite stock).
+            # Per lot: cost_per_kg = balance_to_pay / input_kg, then
+            # current_value = cost_per_kg * local_balance.
+            # Implemented in SQL as SUM(balance_to_pay * local_balance / input_kg)
+            # and restricted to positive input_kg to avoid division-by-zero.
+        remaining_value_filters = list(remaining_filters) + [CassiteriteStock.input_kg > 0]
+        inventory_value = db.session.query(
+                func.coalesce(
+                    func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
+                    0,
+                )
+            ).filter(*remaining_value_filters).scalar() or 0
+
+            # Supplier outstanding (liability) is based on the original supplier
+            # obligation minus all payments recorded for these lots.
+        supplier_outstanding = (total_supplier_obligation or 0) - (total_payments or 0)
+
+            # Gross profit for the filtered window remains tied to the original
+            # cost basis, not the current Inventory Value.
+        gross_profit = (total_sales or 0) - (total_supplier_obligation or 0)
+            # Remaining stocks aggregates (only local_balance > 0)
+        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
 
         # Serialize stocks
         stocks_data = []
@@ -388,6 +470,27 @@ def cassiterite_filter_stocks():
                 'output_kg': round(o.output_kg or 0, 2)
             })
 
+        # Compute period COGS from recorded outputs linked to lots. For each
+        # output row cost = output_kg * (stock.balance_to_pay / NULLIF(stock.input_kg,0)).
+        # This ensures COGS counts only goods actually sold in the window.
+        try:
+            cogs_q = db.session.query(
+                func.coalesce(
+                    func.sum(
+                        CassiteriteOutput.output_kg * (CassiteriteStock.balance_to_pay / func.nullif(CassiteriteStock.input_kg, 0))
+                    ),
+                    0.0,
+                )
+            ).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id)
+
+            if output_filters:
+                for f in output_filters:
+                    cogs_q = cogs_q.filter(f)
+
+            cost_of_stock_sold = float(cogs_q.scalar() or 0.0)
+        except Exception:
+            logger.exception("cassiterite.filter_stocks: failed computing COGS from outputs; falling back")
+            cost_of_stock_sold = (total_supplier_obligation or 0) - (inventory_value or 0)
         logger.info("cassiterite.filter_stocks: completed stocks=%d outputs=%d", len(filtered_stocks), len(filtered_outputs))
         return jsonify({
             'stocks': stocks_data,
@@ -396,7 +499,16 @@ def cassiterite_filter_stocks():
             'total_output': round(total_output, 2),
             'total_debt': round(total_debt, 2),
             'total_stocks': total_stocks,
-            'moyenne': round(moyenne, 4)
+            'moyenne': round(moyenne, 4),
+
+            # Added fields for filtered financial view
+            'total_sales': round(total_sales, 2),
+            'total_supplier_obligation': round(total_supplier_obligation, 2),
+            'inventory_value': round(inventory_value, 2),
+            'cost_of_stock_sold': round(cost_of_stock_sold, 2),
+            'total_payments': round(total_payments, 2),
+            'supplier_outstanding': round(supplier_outstanding, 2),
+            'gross_profit': round(gross_profit, 2),
         })
     except Exception:
         logger.exception("cassiterite.filter_stocks failed params=%s", request.get_json() or {})

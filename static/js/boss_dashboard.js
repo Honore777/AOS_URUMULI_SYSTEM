@@ -26,6 +26,8 @@ function updateKPIs(kpis) {
     if (!kpis) return;
     const mapping = {
         'total_gross_profit': 'kpi-total-gross-profit',
+        'total_inventory_value': 'kpi-total-inventory-value',
+        'total_cost_of_stock_sold': 'kpi-total-cogs',
         'total_supplier_debt': 'kpi-total-supplier-debt',
         'total_customer_debt': 'kpi-total-customer-debt',
         'total_internal_worker_payments': 'kpi-total-internal-worker-payments',
@@ -41,7 +43,9 @@ function updatePerMineralKPIs(copper, cass) {
     if (copper) {
         const map = {
             'total_sales': 'copper-total-sales',
-            'total_supplier_obligation': 'copper-total-supplier-obligation',
+            // Inventory Value (Coltan)
+            'inventory_value': 'copper-inventory-value',
+            'cogs': 'copper-cogs',
             'gross_profit': 'copper-gross-profit',
             'supplier_debt': 'copper-supplier-debt',
             'customer_debt': 'copper-customer-debt',
@@ -55,8 +59,10 @@ function updatePerMineralKPIs(copper, cass) {
     if (cass) {
         const map = {
             'total_sales': 'cass-total-sales',
-            'total_supplier_obligation': 'cass-total-supplier-obligation',
-            'gross_profit': 'cass-gross-profit',
+            // Inventory Value (Cassiterite)
+                'inventory_value': 'cass-inventory-value',
+                'cogs': 'cass-cogs',
+                'gross_profit': 'cass-gross-profit',
             'supplier_debt': 'cass-supplier-debt',
             'customer_debt': 'cass-customer-debt',
             'cash_position': 'cass-cash-position'

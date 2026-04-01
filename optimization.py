@@ -204,6 +204,11 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
             prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
         except Exception:
             prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
+    from pulp import LpStatus, value
+    try:
+        logger.info("select_stocks_with_minimum_quantities: solver status=%s objective=%s", LpStatus[prob.status], value(prob.objective))
+    except Exception:
+        logger.info("select_stocks_with_minimum_quantities: solver finished (could not read status/objective)")
     
     # ===== Extract results =====
     selected_stocks = []

@@ -52,11 +52,27 @@
             </div>
             <div class="bg-gradient-to-br from-emerald-600 to-emerald-800 text-white p-6 rounded-lg shadow-lg">
                 <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Gross Profit (Cassiterite)</h3>
-                <div class="text-3xl font-bold mb-2">{{ '{:,.2f}'.format(gross_profit or 0) }}</div>
-                <div class="text-sm opacity-80">sales - supplier cost</div>
+                <div id="cass-card-gross-profit" class="text-3xl font-bold mb-2">{{ '{:,.2f}'.format(gross_profit or 0) }}</div>
+                <div class="text-sm opacity-80">sales - stock cost</div>
+            </div>
+            <div class="bg-gradient-to-br from-yellow-600 to-yellow-800 text-white p-6 rounded-lg shadow-lg">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Stock Cost(Ayo twaguze stock)</h3>
+                <div id="cass-card-inventory-value" class="text-3xl font-bold mb-2">0.00</div>
+                <div class="text-sm opacity-80">Ayo twaguze stock</div>
+            </div>
+            <!-- initial cost card removed: UI shows Inventory Value (current remaining value) and COGS instead -->
+            <div class="bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-lg shadow-lg">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Cost of Stock Sold (COGS)</h3>
+                <div id="cass-card-cogs" class="text-3xl font-bold mb-2">0.00</div>
+                <div class="text-sm opacity-80">Purchases − Closing stock (period COGS)</div>
+            </div>
+            <div class="bg-gradient-to-br from-red-700 to-red-900 text-white p-6 rounded-lg shadow-lg">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Supplier Outstanding</h3>
+                <div id="cass-card-supplier-outstanding" class="text-3xl font-bold mb-2">0.00</div>
+                <div class="text-sm opacity-80">Stock-cost − supplier payments(Ayo dusigayemo abazana cassiterite)</div>
             </div>
             <div class="bg-gradient-to-br from-slate-600 to-slate-800 text-white p-6 rounded-lg shadow-lg">
-                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Imari ihari (Gasegereti)</h3>
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga ahari muntoki (Gasegereti)</h3>
                 <div class="text-3xl font-bold mb-2">{{ '{:,.2f}'.format(cash_position or 0) }}</div>
                 <div class="text-sm opacity-80">Ibyagurishijwe byose - imyenda y’abakiriya</div>
             </div>
@@ -387,6 +403,12 @@
             document.getElementById('cass-card-total-stocks').textContent = formatNumber(totalStocks, 0);
             document.getElementById('cass-card-moyenne').textContent = formatNumber(moyenneValue, 4);
 
+            // inventory & outstanding placeholders
+            const invElInit = document.getElementById('cass-card-inventory-value');
+            const outElInit = document.getElementById('cass-card-supplier-outstanding');
+            if (invElInit) invElInit.textContent = formatNumber(0, 2);
+            if (outElInit) outElInit.textContent = formatNumber(0, 2);
+
             // Initial fetch for table/cards
             fetch('{{ url_for("cassiterite.cassiterite_filter_stocks") }}', {
                 method: 'POST',
@@ -517,12 +539,37 @@
         }
 
         function cassUpdateCards(data) {
-            document.querySelector('.bg-gradient-to-br.from-teal-600.to-teal-800 .text-4xl').textContent = formatNumber(data.total_input,2);
-            document.querySelector('.bg-gradient-to-br.from-blue-600.to-blue-800 .text-4xl').textContent = formatNumber(data.total_output,2);
-            document.querySelector('.bg-gradient-to-br.from-orange-600.to-orange-800 .text-4xl').textContent = formatNumber(data.total_debt,2);
-            const remainingCount = (data.stocks || []).filter(s => (s.local_balance ?? 0) > 0).length;
-            document.getElementById('cass-card-total-stocks').textContent = formatNumber(remainingCount,0);
-            document.getElementById('cass-card-moyenne').textContent = formatNumber(data.moyenne,4);
+            console.debug('cassUpdateCards called', data && data.gross_profit);
+            try {
+                document.querySelector('.bg-gradient-to-br.from-teal-600.to-teal-800 .text-4xl').textContent = formatNumber(data.total_input,2);
+                document.querySelector('.bg-gradient-to-br.from-blue-600.to-blue-800 .text-4xl').textContent = formatNumber(data.total_output,2);
+                document.querySelector('.bg-gradient-to-br.from-orange-600.to-orange-800 .text-4xl').textContent = formatNumber(data.total_debt,2);
+                const remainingCount = (data.stocks || []).filter(s => (s.local_balance ?? 0) > 0).length;
+                document.getElementById('cass-card-total-stocks').textContent = formatNumber(remainingCount,0);
+                document.getElementById('cass-card-moyenne').textContent = formatNumber(data.moyenne,4);
+            } catch (err) {
+                console.warn('cassUpdateCards partial update failed', err);
+            }
+
+            // Always set gross profit last
+            try {
+                const gp = (data && data.gross_profit !== undefined) ? data.gross_profit : 0;
+                const el = document.getElementById('cass-card-gross-profit');
+                if (el) el.textContent = formatNumber(gp, 2);
+
+                // Inventory and supplier outstanding
+                const inv = (data && data.inventory_value !== undefined) ? data.inventory_value : 0;
+                const out = (data && data.supplier_outstanding !== undefined) ? data.supplier_outstanding : 0;
+                const cogs = (data && data.cost_of_stock_sold !== undefined) ? data.cost_of_stock_sold : ((data && data.total_supplier_obligation !== undefined ? data.total_supplier_obligation : 0) - (data && data.inventory_value !== undefined ? data.inventory_value : 0));
+                const invEl = document.getElementById('cass-card-inventory-value');
+                const outEl = document.getElementById('cass-card-supplier-outstanding');
+                const cogsEl = document.getElementById('cass-card-cogs');
+                if (invEl) invEl.textContent = formatNumber(inv, 2);
+                if (outEl) outEl.textContent = formatNumber(out, 2);
+                if (cogsEl) cogsEl.textContent = formatNumber(cogs, 2);
+            } catch (e) {
+                console.warn('failed to set cass gross profit/inventory/outstanding cards', e);
+            }
         }
 
         function cassResetFilter(event) {
