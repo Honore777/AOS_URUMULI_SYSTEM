@@ -355,14 +355,7 @@
                         <label class="block text-sm font-semibold text-gray-700 mb-1">Exchange</label>
                         <input type="number" step="0.01" name="exchange" id="edit-copper-exchange" class="w-full px-3 py-2 border rounded-lg">
                     </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-1">Transport (TAG)</label>
-                        <input type="number" step="0.01" name="transport_tag" id="edit-copper-transport" class="w-full px-3 py-2 border rounded-lg">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-1">RRA 3% percent</label>
-                        <input type="number" step="0.0001" name="rra_3_percent_default" id="edit-copper-rra3-default" class="w-full px-3 py-2 border rounded-lg">
-                    </div>
+                    <!-- transport and RRA inputs removed to keep edit modal minimal and fast -->
                   
                 </div>
                 <div class="flex justify-end gap-3 mt-4">
@@ -403,8 +396,10 @@
             document.getElementById('card-moyenne').textContent = formatNumber(moyenneValue, 4);
             document.getElementById('card-moyenne-nb').textContent = formatNumber(moyenneNbValue, 4);
             
-            // Fetch initial data (page 1) and initialize table/cards
-            fetchPage(1);
+            // Fetch initial page and include aggregates so stat cards populate.
+            // We keep the page small but request aggregates asynchronously
+            // to avoid server-render blocking while ensuring cards show values.
+            fetchPage(1, 5, true);
         }
 
         // Charts removed: keep compatibility no-op
@@ -424,7 +419,7 @@
             const endDate = document.getElementById('filter-end-date').value;
             const voucherNo = document.getElementById('filter-voucher').value;
             const page = 1;
-            const per_page = 20;
+            const per_page = 10;
 
             // Use paged fetch to avoid large payloads
             fetch('{{ url_for("copper.filter_stocks") }}', {
@@ -438,7 +433,8 @@
                     voucher_no: voucherNo,
                     page: page,
                     per_page: per_page,
-                    include_all: false
+                    include_all: false,
+                    include_aggregates: true
                 })
             })
             .then(response => response.json())
@@ -540,8 +536,11 @@
                 document.getElementById('card-total-input').textContent = formatNumber(data.total_input, 2);
                 document.getElementById('card-total-output').textContent = formatNumber(data.total_output, 2);
                 document.getElementById('card-total-debt').textContent = formatNumber(data.total_debt, 2);
+                // Prefer the paged total returned by the API so the card shows
+                // the full number of matching rows (not just the current page).
                 const remainingCount = (data.stocks || []).filter(s => (s.local_balance ?? 0) > 0).length;
-                document.getElementById('card-total-stocks').textContent = formatNumber(remainingCount, 0);
+                const totalRemaining = (typeof data.total === 'number') ? data.total : remainingCount;
+                document.getElementById('card-total-stocks').textContent = formatNumber(totalRemaining, 0);
                 document.getElementById('card-moyenne').textContent = formatNumber(data.moyenne, 4);
                 document.getElementById('card-moyenne-nb').textContent = formatNumber(data.moyenne_nb, 4);
             } catch (err) {
@@ -574,7 +573,9 @@
         }
 
         // Fetch a specific page of filtered stocks
-        function fetchPage(page = 1, per_page = 20) {
+        // include_aggregates=false makes the API return only paged rows
+        // and skip heavy aggregates (faster initial load).
+        function fetchPage(page = 1, per_page = 10, include_aggregates = true) {
             const startDate = document.getElementById('filter-start-date').value;
             const endDate = document.getElementById('filter-end-date').value;
             const voucherNo = document.getElementById('filter-voucher').value;
@@ -582,7 +583,7 @@
             fetch('{{ url_for("copper.filter_stocks") }}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ start_date: startDate, end_date: endDate, voucher_no: voucherNo, page: page, per_page: per_page, include_all: false })
+                body: JSON.stringify({ start_date: startDate, end_date: endDate, voucher_no: voucherNo, page: page, per_page: per_page, include_all: false, include_aggregates: include_aggregates })
             })
             .then(r => r.json())
             .then(data => {
@@ -641,7 +642,7 @@
             fetch('{{ url_for("copper.filter_stocks") }}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ start_date: '', end_date: '', voucher_no: '', page: 1, per_page: 20, include_all: false })
+                body: JSON.stringify({ start_date: '', end_date: '', voucher_no: '', page: 1, per_page: 10, include_all: false, include_aggregates: true })
             })
             .then(r => r.json())
             .then(data => { window.currentFilteredData = data; updateTable(data.stocks); updateAllCards(data); renderPaginationControls(data.page || 1, data.pages || 1); })
@@ -649,6 +650,13 @@
         }
 
         // ---- Edit/Delete Copper Stocks (modal) ----
+        // Helper that safely sets form field values if element exists.
+        function setIfExists(id, value) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = (value === null || value === undefined) ? '' : value;
+        }
+
         function openCopperEditModal(stock, isFromApi = false) {
             const modal = document.getElementById('edit-copper-modal');
             const form = document.getElementById('edit-copper-form');
@@ -659,19 +667,15 @@
             const baseEditUrl = "{{ url_for('copper.edit_stock', stock_id=0) }}";
             form.action = baseEditUrl.replace('/0/', `/${id}/`);
 
-            document.getElementById('edit-copper-date').value = stock.date || '';
-            document.getElementById('edit-copper-voucher').value = stock.voucher_no || '';
-            document.getElementById('edit-copper-supplier').value = stock.supplier || '';
-            document.getElementById('edit-copper-input').value = stock.input_kg ?? '';
-            document.getElementById('edit-copper-percentage').value = stock.percentage ?? '';
-            document.getElementById('edit-copper-nb').value = stock.nb ?? '';
-            document.getElementById('edit-copper-u-price').value = stock.u_price ?? '';
-            document.getElementById('edit-copper-exchange').value = stock.exchange ?? '';
-            document.getElementById('edit-copper-transport').value = stock.transport_tag ?? '';
-            if (document.getElementById('edit-copper-rra3-default')) {
-                document.getElementById('edit-copper-rra3-default').value = stock.rra_3_percent ?? stock.rra_3_percent_default ?? '';
-            }
-            
+            // Only set the reduced set of editable fields (keeps modal small and fast)
+            setIfExists('edit-copper-date', stock.date || '');
+            setIfExists('edit-copper-voucher', stock.voucher_no || '');
+            setIfExists('edit-copper-supplier', stock.supplier || '');
+            setIfExists('edit-copper-input', stock.input_kg ?? '');
+            setIfExists('edit-copper-percentage', stock.percentage ?? '');
+            setIfExists('edit-copper-nb', stock.nb ?? '');
+            setIfExists('edit-copper-u-price', stock.u_price ?? '');
+            setIfExists('edit-copper-exchange', stock.exchange ?? '');
 
             modal.classList.remove('hidden');
             modal.classList.add('flex');

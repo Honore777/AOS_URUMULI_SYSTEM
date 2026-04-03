@@ -23,6 +23,27 @@ def optimize_stocks():
     
     # Initialize variables
     form = CopperOptimizationForm()
+    # Prefill form fields from session if available so searches/pagination
+    # do not accidentally clear or display 'None' when the session holds
+    # previously-entered targets.
+    try:
+        sess_tgt = session.get('optimization_target_moyenne')
+        if (form.target_moyenne.data in (None, '')) and sess_tgt is not None:
+            form.target_moyenne.data = sess_tgt
+    except Exception:
+        pass
+    try:
+        sess_tgt_nb = session.get('optimization_target_moyenne_nb')
+        if (form.target_moyenne_nb.data in (None, '')) and sess_tgt_nb is not None:
+            form.target_moyenne_nb.data = sess_tgt_nb
+    except Exception:
+        pass
+    try:
+        sess_total = session.get('optimization_target_total_quantity')
+        if (form.target_total_quantity.data in (None, '')) and sess_total is not None:
+            form.target_total_quantity.data = sess_total
+    except Exception:
+        pass
     selected_stocks = []
     achieved_moyenne = 0
     achieved_moyenne_nb = 0
@@ -165,6 +186,11 @@ def optimize_stocks():
                 minimum_quantities=minimum_quantities,
                 target_total_quantity=target_total_quantity,
             )
+            # Compute achieved total quantity from returned quantities dict
+            try:
+                achieved_total_quantity = float(sum(float(v) for v in quantities.values())) if quantities else 0.0
+            except Exception:
+                achieved_total_quantity = 0.0
             mode = 'result'
         
         # ═══════════════════════════════════════════════════
@@ -257,13 +283,23 @@ def optimize_stocks():
     except Exception:
         page = 1
     try:
-        per_page = int(request.args.get('per_page', 40))
+        # Default interactive page size to 10 for faster UI responsiveness
+        per_page = int(request.args.get('per_page', 10))
         if per_page < 5:
             per_page = 5
-        if per_page > 200:
-            per_page = 200
+        # Enforce a strict upper bound of 10 for optimization forms
+        if per_page > 10:
+            per_page = 10
     except Exception:
-        per_page = 40
+        per_page = 10
+
+    # Cap edit-mode page size to improve responsiveness for the editable form.
+    try:
+        edit_mode_active = (mode == 'edit') or (request.args.get('mode') == 'edit') or (session.get('optimization_mode') == 'edit')
+        if edit_mode_active:
+            per_page = min(per_page, 10)
+    except Exception:
+        pass
 
     q = (request.args.get('q') or '').strip()
 
@@ -378,12 +414,25 @@ def optimize_stocks_totals():
             # If any target is present (not None/'None'/empty), recompute recommended quantities
             if _has_valid_target(tgt) or _has_valid_target(tgt_nb) or _has_valid_target(tgt_total):
                 try:
-                    # select_stocks_for_moyenne returns (selected_stocks, achieved_moyenne, achieved_moyenne_nb)
-                    selected_stocks, achieved_moyenne, achieved_moyenne_nb = select_stocks_for_moyenne(
+                    # select_stocks_for_moyenne may return (selected_stocks, achieved_moyenne,
+                    # achieved_moyenne_nb) or the extended (selected_stocks, achieved_moyenne,
+                    # achieved_moyenne_nb, achieved_total_quantity). Accept both shapes.
+                    res = select_stocks_for_moyenne(
                         target_moyenne=tgt,
                         target_moyenne_nb=tgt_nb,
                         target_total_quantity=tgt_total,
                     )
+                    if isinstance(res, (list, tuple)) and len(res) >= 3:
+                        selected_stocks = res[0]
+                        achieved_moyenne = res[1]
+                        achieved_moyenne_nb = res[2]
+                        if len(res) >= 4:
+                            try:
+                                achieved_total_quantity = float(res[3] or 0)
+                            except Exception:
+                                achieved_total_quantity = 0.0
+                    else:
+                        selected_stocks, achieved_moyenne, achieved_moyenne_nb = [], 0, 0
                     quantities = {s.id: s.local_balance for s in selected_stocks}
                     # store back to session for future requests
                     session['optimization_quantities'] = quantities

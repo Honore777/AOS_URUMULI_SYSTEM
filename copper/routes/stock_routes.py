@@ -17,8 +17,32 @@ from flask_login import current_user
 from sqlalchemy import func
 import logging
 from utils import trace_time
+import time
+from threading import Lock
 
 logger = logging.getLogger(__name__)
+
+# Simple cache for dashboard aggregates to avoid repeated heavy SQL
+_AGG_CACHE = {}
+_AGG_CACHE_LOCK = Lock()
+
+def _get_dashboard_aggregates(ttl=10):
+    try:
+        with _AGG_CACHE_LOCK:
+            entry = _AGG_CACHE.get('dashboard')
+            if entry and (time.time() - entry.get('ts', 0) < entry.get('ttl', ttl)):
+                return entry.get('data')
+    except Exception:
+        pass
+    # compute fresh (caller will set cache after computing)
+    return None
+
+def _set_dashboard_aggregates(data, ttl=10):
+    try:
+        with _AGG_CACHE_LOCK:
+            _AGG_CACHE['dashboard'] = {'ts': time.time(), 'data': data, 'ttl': ttl}
+    except Exception:
+        pass
 
 
 def _parse_date(s):
@@ -246,42 +270,58 @@ def dashboard():
     # Pagination parameters
     page = request.args.get('page', 1, type=int)
     per_page = 20
-    stocks_pagination = CopperStock.query.options(selectinload(CopperStock.supplier_payments)).order_by(CopperStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    # Avoid pre-loading related supplier_payments here to reduce hydration cost on dashboard.
+    stocks_pagination = CopperStock.query.order_by(CopperStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
     stocks = stocks_pagination.items
     outputs = CopperOutput.query.order_by(CopperOutput.date.desc()).limit(10).all()
-
-    total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).scalar()
-    total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).scalar()
-    total_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).scalar()
-    total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).scalar()
-    total_supplier_obligation = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar()
-    # Inventory Value (current cost of remaining Coltan stock)
-    copper_inventory_value = db.session.query(
-        func.coalesce(
-            func.sum(CopperStock.net_balance * CopperStock.local_balance / CopperStock.input_kg),
-            0,
-        )
-    ).filter(CopperStock.local_balance > 0, CopperStock.input_kg > 0).scalar() or 0
-
-    # Cost of stock sold (COGS) = purchases (original supplier obligation)
-    # minus closing stock value (inventory_value). Then gross profit = Sales - COGS.
-    copper_cost_of_stock_sold = (total_supplier_obligation or 0) - (copper_inventory_value or 0)
-    gross_profit = (total_sales or 0) - (copper_cost_of_stock_sold or 0)
-
-    supplier_debt = total_supplier_obligation
-    customer_debt = total_debt
-
-    # Cash position for the Copper dashboard should represent cash at hand
-    # from sales minus outstanding customer debts (what's actually received).
-    cash_position = (total_sales or 0) - (customer_debt or 0)
+    # Try to use cached dashboard aggregates when available to keep the
+    # initial page render fast. If a cache entry exists use it; otherwise
+    # defer heavy aggregate computation to the client (via `/api/filter_stocks`
+    # with `include_aggregates=true`) so the server-side template render
+    # remains under the interactive threshold.
+    # Ensure these are always defined to avoid UnboundLocalError when
+    # cached_aggs is present or when the user is not authenticated.
+    moyenne = 0
+    moyenne_nb = 0
+    remaining_stocks_count = 0
+    cached_aggs = _get_dashboard_aggregates(ttl=10)
+    if cached_aggs:
+        total_input = cached_aggs.get('total_input', 0)
+        total_output = cached_aggs.get('total_output', 0)
+        total_debt = cached_aggs.get('total_debt', 0)
+        total_sales = cached_aggs.get('total_sales', 0)
+        total_supplier_obligation = cached_aggs.get('total_supplier_obligation', 0)
+        copper_inventory_value = cached_aggs.get('inventory_value', 0)
+        copper_cost_of_stock_sold = cached_aggs.get('cost_of_stock_sold', 0)
+        gross_profit = cached_aggs.get('gross_profit', 0)
+        supplier_debt = total_supplier_obligation
+        customer_debt = total_debt
+        cash_position = cached_aggs.get('cash_position', 0)
+        moyenne = cached_aggs.get('moyenne', 0)
+        moyenne_nb = cached_aggs.get('moyenne_nb', 0)
+    else:
+        # Lightweight placeholders - real aggregates are fetched asynchronously
+        total_input = 0
+        total_output = 0
+        total_debt = 0
+        total_sales = 0
+        total_supplier_obligation = 0
+        copper_inventory_value = 0
+        copper_cost_of_stock_sold = 0
+        gross_profit = 0
+        supplier_debt = 0
+        customer_debt = 0
+        cash_position = 0
 
     user_notifications = []
     if getattr(current_user, "is_authenticated", False):
         # Show all unread notifications and up to 10 already-read notifications
+        # Only fetch a small recent set of unread notifications to avoid heavy hydration
         unread = (
             Notification.query.options(joinedload(Notification.user))
             .filter_by(user_id=current_user.id, read_at=None)
             .order_by(Notification.created_at.desc())
+            .limit(20)
             .all()
         )
         read = (
@@ -293,13 +333,30 @@ def dashboard():
         )
         user_notifications = unread + read
 
-    # Remaining stocks aggregates (compute counts/aggregates only — avoid hydrating full lists)
-    remaining_stocks_count = CopperStock.query.filter(CopperStock.local_balance > 0).count()
-    total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
-    total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
-    moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
-    total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
-    moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
+        # Remaining stocks aggregates (compute counts/aggregates only — avoid hydrating full lists)
+        cached = _get_dashboard_aggregates(ttl=10)
+        if cached:
+            remaining_stocks_count = cached.get('remaining_stocks_count', 0)
+            total_unit_percent = cached.get('total_unit_percent', 0)
+            total_remaining_balance = cached.get('total_remaining_balance', 0)
+            moyenne = cached.get('moyenne', 0)
+            total_t_unity = cached.get('total_t_unity', 0)
+            moyenne_nb = cached.get('moyenne_nb', 0)
+        else:
+            remaining_stocks_count = CopperStock.query.filter(CopperStock.local_balance > 0).count()
+            total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+            total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+            moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+            total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+            moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
+            _set_dashboard_aggregates({
+                'remaining_stocks_count': remaining_stocks_count,
+                'total_unit_percent': total_unit_percent,
+                'total_remaining_balance': total_remaining_balance,
+                'moyenne': moyenne,
+                'total_t_unity': total_t_unity,
+                'moyenne_nb': moyenne_nb,
+            }, ttl=10)
 
     return render_template(
         'copper/dashboard.html',
@@ -446,7 +503,16 @@ def filter_stocks():
         # Prefer a meaningful snapshot: only remaining stocks (local_balance > 0)
         # Support pagination from client to avoid returning huge payloads.
         page = int(data.get('page', 1) or 1)
-        per_page = int(data.get('per_page', 20) or 20)
+        # Default to a small page size for interactive forms; cap to 10.
+        per_page = int(data.get('per_page', 10) or 10)
+        if per_page < 5:
+            per_page = 5
+        if per_page > 10:
+            per_page = 10
+
+        # Whether the caller wants heavy aggregates (inventory, COGS, sales aggregates).
+        # Dashboard initial load should set this to False to keep page load fast.
+        include_aggregates = bool(data.get('include_aggregates', True))
 
         stocks_local_q = stocks_query.filter(CopperStock.local_balance > 0)
         stocks_pagination = stocks_local_q.paginate(page=page, per_page=per_page, error_out=False)
@@ -482,129 +548,196 @@ def filter_stocks():
         # Build a per-stock sum of output_kg to avoid N+1 DB calls when
         # computing remaining per-stock. Aggregate in Python (one pass) and reuse below.
         from collections import defaultdict
+        import time
+        timings = {}
         outputs_sums = defaultdict(float)
         for o in filtered_outputs:
             if o and o.stock_id:
                 outputs_sums[o.stock_id] += float(o.output_kg or 0)
-    
-            import time
-            # Aggregates from DB (avoid loading large lists into Python).
-            timings = {}
-            t0 = time.perf_counter()
-    # stock_filters represent the "original" cost basis window (what we
-    # ordered from suppliers in this filtered period).
-        stock_filters = []
-        if start_date:
-            stock_filters.append(CopperStock.date >= start)
-        if end_date:
-            stock_filters.append(CopperStock.date <= end)
-        if voucher_no:
-            stock_filters.append(CopperStock.voucher_no == voucher_no)
 
-        total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).filter(*stock_filters).scalar() or 0
-        total_stocks = db.session.query(func.coalesce(func.count(CopperStock.id), 0)).filter(*stock_filters).scalar() or 0
-        timings['stock_aggregates'] = time.perf_counter() - t0
+        # Start timing for DB aggregates
+        if include_aggregates:
+            # If caller requested the global dashboard aggregates (no date/voucher filters)
+            # try using the in-process cache to avoid repeating heavy SQL.
+            use_cache_key = not (start_date or end_date or voucher_no)
+            cached_aggs = None
+            if use_cache_key:
+                cached_aggs = _get_dashboard_aggregates()
 
-        output_filters = []
-        if start_date:
-            output_filters.append(CopperOutput.date >= start)
-        if end_date:
-            output_filters.append(CopperOutput.date <= end)
+            if cached_aggs:
+                # Use cached aggregate values and avoid running heavy queries
+                total_input = cached_aggs.get('total_input', 0)
+                total_stocks = cached_aggs.get('total_stocks', stocks_pagination.total)
+                total_output = cached_aggs.get('total_output', 0)
+                total_debt = cached_aggs.get('total_debt', 0)
+                total_sales = cached_aggs.get('total_sales', 0)
+                total_supplier_obligation = cached_aggs.get('total_supplier_obligation', 0)
+                total_payments = cached_aggs.get('total_payments', 0)
+                inventory_value = cached_aggs.get('inventory_value', 0)
+                cost_of_stock_sold = cached_aggs.get('cost_of_stock_sold', 0)
+                supplier_outstanding = cached_aggs.get('supplier_outstanding', 0)
+                gross_profit = cached_aggs.get('gross_profit', 0)
+                total_unit_percent = cached_aggs.get('total_unit_percent', 0)
+                total_remaining_balance = cached_aggs.get('total_remaining_balance', 0)
+                moyenne = cached_aggs.get('moyenne', 0)
+                total_t_unity = cached_aggs.get('total_t_unity', 0)
+                moyenne_nb = cached_aggs.get('moyenne_nb', 0)
+                timings['stock_aggregates'] = 0.0
+                timings['output_aggregates'] = 0.0
+                timings['sales_aggregate'] = 0.0
+                timings['supplier_obligation'] = 0.0
+                timings['payments_aggregate'] = 0.0
+                timings['inventory_value'] = 0.0
+                timings['cogs_aggregate'] = 0.0
+                timings['remaining_aggregates'] = 0.0
+            else:
+                t0 = time.perf_counter()
+                # stock_filters represent the "original" cost basis window (what we
+                # ordered from suppliers in this filtered period).
+                stock_filters = []
+                if start_date:
+                    stock_filters.append(CopperStock.date >= start)
+                if end_date:
+                    stock_filters.append(CopperStock.date <= end)
+                if voucher_no:
+                    stock_filters.append(CopperStock.voucher_no == voucher_no)
 
-        t1 = time.perf_counter()
-        total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).filter(*output_filters).scalar() or 0
-        total_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).filter(*output_filters).scalar() or 0
-        timings['output_aggregates'] = time.perf_counter() - t1
+                total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).filter(*stock_filters).scalar() or 0
+                total_stocks = db.session.query(func.coalesce(func.count(CopperStock.id), 0)).filter(*stock_filters).scalar() or 0
+                timings['stock_aggregates'] = time.perf_counter() - t0
 
-        # Total sales (monetary) for the filtered outputs window
-        t2 = time.perf_counter()
-        total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).filter(*output_filters).scalar() or 0
-        timings['sales_aggregate'] = time.perf_counter() - t2
+                output_filters = []
+                if start_date:
+                    output_filters.append(CopperOutput.date >= start)
+                if end_date:
+                    output_filters.append(CopperOutput.date <= end)
 
-        # Total supplier obligation (net_balance) respecting the same stock filters.
-        # This is the original cost basis for these lots (what we owe initially
-        # before any supplier payments are recorded).
-        t3 = time.perf_counter()
-        total_supplier_obligation = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).filter(*stock_filters).scalar() or 0
-        timings['supplier_obligation'] = time.perf_counter() - t3
+                t1 = time.perf_counter()
+                total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).filter(*output_filters).scalar() or 0
+                total_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).filter(*output_filters).scalar() or 0
+                timings['output_aggregates'] = time.perf_counter() - t1
 
-        # Total payments made against the filtered stocks (all amounts already
-        # approved/recorded by the accountant against these lots).
-        t4 = time.perf_counter()
-        total_payments = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(CopperStock, SupplierPayment.stock_id == CopperStock.id).filter(*stock_filters).scalar() or 0
-        timings['payments_aggregate'] = time.perf_counter() - t4
+                # Total sales (monetary) for the filtered outputs window
+                t2 = time.perf_counter()
+                total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).filter(*output_filters).scalar() or 0
+                timings['sales_aggregate'] = time.perf_counter() - t2
 
-        # Remaining stocks aggregates (only local_balance > 0). We re-use this
-        # both for moyenne and for computing the current Inventory Value
-        # (agaciro ka stock isigaye mu bubiko).
-        remaining_filters = list(stock_filters) + [CopperStock.local_balance > 0]
+                # Total supplier obligation (net_balance) respecting the same stock filters.
+                t3 = time.perf_counter()
+                total_supplier_obligation = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).filter(*stock_filters).scalar() or 0
+                timings['supplier_obligation'] = time.perf_counter() - t3
 
-        # Inventory Value (current cost of remaining stock).
-        # Per lot: cost_per_kg = net_balance / input_kg, then
-        # current_value = cost_per_kg * local_balance.
-        # Implemented in SQL as SUM(net_balance * local_balance / input_kg)
-        # and restricted to lots with positive input_kg to avoid
-        # division-by-zero issues.
-        remaining_value_filters = list(remaining_filters) + [CopperStock.input_kg > 0]
-        try:
-            t5 = time.perf_counter()
-            inventory_value = db.session.query(
-                func.coalesce(
-                    func.sum(CopperStock.net_balance * CopperStock.local_balance / CopperStock.input_kg),
-                    0,
-                )
-            ).filter(*remaining_value_filters).scalar() or 0
-            timings['inventory_value'] = time.perf_counter() - t5
-        except Exception:
-            logger.exception('filter_stocks: inventory_value aggregate failed')
+                # Total payments made against the filtered stocks
+                t4 = time.perf_counter()
+                total_payments = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(CopperStock, SupplierPayment.stock_id == CopperStock.id).filter(*stock_filters).scalar() or 0
+                timings['payments_aggregate'] = time.perf_counter() - t4
+
+                # Remaining stocks aggregates (only local_balance > 0)
+                remaining_filters = list(stock_filters) + [CopperStock.local_balance > 0]
+
+                remaining_value_filters = list(remaining_filters) + [CopperStock.input_kg > 0]
+                try:
+                    t5 = time.perf_counter()
+                    inventory_value = db.session.query(
+                        func.coalesce(
+                            func.sum(CopperStock.net_balance * CopperStock.local_balance / CopperStock.input_kg),
+                            0,
+                        )
+                    ).filter(*remaining_value_filters).scalar() or 0
+                    timings['inventory_value'] = time.perf_counter() - t5
+                except Exception:
+                    logger.exception('filter_stocks: inventory_value aggregate failed')
+                    inventory_value = 0
+                    timings['inventory_value'] = None
+
+                supplier_outstanding = (total_supplier_obligation or 0) - (total_payments or 0)
+
+                try:
+                    t6 = time.perf_counter()
+                    cogs_q = db.session.query(
+                        func.coalesce(
+                            func.sum(
+                                CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))
+                            ),
+                            0.0,
+                        )
+                    ).join(CopperStock, CopperOutput.stock_id == CopperStock.id)
+
+                    if output_filters:
+                        for f in output_filters:
+                            cogs_q = cogs_q.filter(f)
+
+                    cost_of_stock_sold = float(cogs_q.scalar() or 0.0)
+                    timings['cogs_aggregate'] = time.perf_counter() - t6
+                except Exception:
+                    logger.exception("Failed to compute COGS from outputs; falling back to purchases-minus-closing")
+                    cost_of_stock_sold = (total_supplier_obligation or 0) - (inventory_value or 0)
+                    timings['cogs_aggregate'] = None
+
+                gross_profit = (total_sales or 0) - (cost_of_stock_sold or 0)
+                t7 = time.perf_counter()
+                total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
+                total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
+                timings['remaining_aggregates'] = time.perf_counter() - t7
+                moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+                total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(*remaining_filters).scalar() or 0
+                moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
+
+                # Cache global dashboard aggregates for a short TTL to speed up
+                # repeated dashboard loads in development and small deployments.
+                if use_cache_key:
+                    try:
+                        _set_dashboard_aggregates({
+                            'total_input': total_input,
+                            'total_output': total_output,
+                            'total_debt': total_debt,
+                            'total_sales': total_sales,
+                            'total_supplier_obligation': total_supplier_obligation,
+                            'total_payments': total_payments,
+                            'inventory_value': inventory_value,
+                            'cost_of_stock_sold': cost_of_stock_sold,
+                            'supplier_outstanding': supplier_outstanding,
+                            'gross_profit': gross_profit,
+                            'total_stocks': total_stocks,
+                            'total_unit_percent': total_unit_percent,
+                            'total_remaining_balance': total_remaining_balance,
+                            'moyenne': moyenne,
+                            'total_t_unity': total_t_unity,
+                            'moyenne_nb': moyenne_nb,
+                            'cash_position': (total_sales or 0) - (total_debt or 0),
+                        }, ttl=10)
+                    except Exception:
+                        logger.exception('Failed to set dashboard aggregates cache')
+        else:
+            # Caller asked for a lightweight page (no heavy aggregates).
+            total_input = 0
+            total_stocks = stocks_pagination.total
+            total_output = 0
+            total_debt = 0
+            total_sales = 0
+            total_supplier_obligation = 0
+            total_payments = 0
             inventory_value = 0
-            timings['inventory_value'] = None
-
-        # Supplier outstanding (liability) is based on the original supplier
-        # obligation minus all payments recorded for these lots. It does NOT
-        # depend on how much stock is still physically remaining.
-        supplier_outstanding = (total_supplier_obligation or 0) - (total_payments or 0)
-
-        # Cost of stock sold (COGS) for the filtered window: compute from
-        # recorded outputs linked to lots. For each output row we compute
-        # cost = output_kg * (stock.net_balance / NULLIF(stock.input_kg,0)).
-        # This counts only goods actually removed, avoiding the issue where
-        # new purchases inflate COGS when they haven't been sold yet.
-        try:
-            t6 = time.perf_counter()
-            cogs_q = db.session.query(
-                func.coalesce(
-                    func.sum(
-                        CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))
-                    ),
-                    0.0,
-                )
-            ).join(CopperStock, CopperOutput.stock_id == CopperStock.id)
-
-            # apply date filters when present
-            if output_filters:
-                for f in output_filters:
-                    cogs_q = cogs_q.filter(f)
-
-            cost_of_stock_sold = float(cogs_q.scalar() or 0.0)
-            timings['cogs_aggregate'] = time.perf_counter() - t6
-        except Exception:
-            logger.exception("Failed to compute COGS from outputs; falling back to purchases-minus-closing")
-            cost_of_stock_sold = (total_supplier_obligation or 0) - (inventory_value or 0)
-            timings['cogs_aggregate'] = None
-        # Gross profit for the filtered window should be Sales - COGS.
-        gross_profit = (total_sales or 0) - (cost_of_stock_sold or 0)
-        t7 = time.perf_counter()
-        total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
-        total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
-        timings['remaining_aggregates'] = time.perf_counter() - t7
-        moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
-        total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(*remaining_filters).scalar() or 0
-        moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
-        timings['total_time'] = sum([v for v in timings.values() if isinstance(v, float)])
-        logger.info('filter_stocks timings: %s', timings)
+            cost_of_stock_sold = 0
+            gross_profit = 0
+            supplier_outstanding = 0
+            total_unit_percent = 0
+            total_remaining_balance = 0
+            moyenne = 0
+            total_t_unity = 0
+            moyenne_nb = 0
+            timings['stock_aggregates'] = 0.0
+            timings['output_aggregates'] = 0.0
+            timings['sales_aggregate'] = 0.0
+            timings['supplier_obligation'] = 0.0
+            timings['payments_aggregate'] = 0.0
+            timings['inventory_value'] = 0.0
+            timings['cogs_aggregate'] = 0.0
+            timings['remaining_aggregates'] = 0.0
+        # Defer final timing and logging until after we build the response payload
         
-        # Build stocks data for table
+        # Build stocks data for table (measure time so we can see where the remainder is spent)
+        t_build = time.perf_counter()
         stocks_data = []
         for stock in filtered_stocks:
             stocks_data.append({
@@ -632,17 +765,21 @@ def filter_stocks():
                 'moyenne': round(stock.moyenne or 0, 4),
                 'moyenne_nb': round(stock.moyenne_nb or 0, 4)
             })
+        build_rows_time = time.perf_counter() - t_build
 
-    # Build outputs data for charts (date vs output_kg)
+        # Build outputs data for charts (date vs output_kg)
+        t_build_out = time.perf_counter()
         outputs_data = []
         for output in filtered_outputs:
             outputs_data.append({
                 'date': output.date.strftime('%Y-%m-%d'),
                 'output_kg': round(output.output_kg or 0, 2)
             })
+        build_outputs_time = time.perf_counter() - t_build_out
 
-        logger.info("filter_stocks: completed stocks=%d outputs=%d page=%d", len(filtered_stocks), len(filtered_outputs), page)
-        return jsonify({
+        # Measure JSON response construction time
+        t_json = time.perf_counter()
+        payload = {
             'stocks': stocks_data,
             'outputs': outputs_data,
             'page': page,
@@ -663,7 +800,25 @@ def filter_stocks():
             'total_stocks': total_stocks,
             'moyenne': round(moyenne, 4),
             'moyenne_nb': round(moyenne_nb, 4)
-        })
+        }
+        try:
+            from flask import jsonify
+            resp = jsonify(payload)
+        except Exception:
+            # fallback to manual json build if jsonify fails
+            import json
+            resp = json.dumps(payload)
+        json_time = time.perf_counter() - t_json
+
+        # Finalize timings and log a full breakdown
+        timings['build_rows'] = build_rows_time
+        timings['build_outputs'] = build_outputs_time
+        timings['jsonify'] = json_time
+        timings['total_time'] = sum([v for v in timings.values() if isinstance(v, float)])
+        logger.info('filter_stocks timings: %s', timings)
+
+        logger.info("filter_stocks: completed stocks=%d outputs=%d page=%d", len(filtered_stocks), len(filtered_outputs), page)
+        return resp
     except Exception:
         logger.exception("filter_stocks failed")
         return jsonify({'error': 'internal server error'}), 500

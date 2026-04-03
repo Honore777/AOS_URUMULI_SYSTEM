@@ -162,7 +162,7 @@
                     <!-- Edit Selection Button -->
                     <form method="POST" action="{{ url_for('cassiterite.optimize') }}" class="space-y-0">
                         {{ form.hidden_tag() }}
-                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
+                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value|default('', true) }}">
 
                         <button type="submit" 
                                 name="action" 
@@ -281,7 +281,7 @@
                 <div class="mb-3 flex items-center justify-between">
                     <form method="GET" action="{{ url_for('cassiterite.optimize') }}" class="flex items-center gap-2">
                         <input type="hidden" name="mode" value="edit">
-                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
+                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value|default('', true) }}">
                         <input type="text" name="q" value="{{ q }}" placeholder="Search supplier..." class="px-3 py-2 border border-gray-300 rounded-md" />
                         <button type="submit" class="bg-indigo-600 text-white px-3 py-2 rounded-md">Search</button>
                     </form>
@@ -290,7 +290,7 @@
 
                     <form id="cass-optimize-edit-form" method="POST" action="{{ url_for('cassiterite.optimize') }}" class="space-y-4">
                     {{ form.hidden_tag() }}
-                    <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
+                    <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value|default('', true) }}">
 
                     <div id="cass-edit-stocks-table" class="overflow-x-auto mb-6">
                         <table class="min-w-full bg-white border border-gray-300">
@@ -380,6 +380,11 @@
                         <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne) }}%</p>
                     </div>
                 </div>
+
+                    <div class="mb-4 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                        <p class="text-gray-600 text-sm">Achieved Total Quantity:</p>
+                        <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_total_quantity) }} kg</p>
+                    </div>
 
                 <p class="bg-blue-50 border border-blue-200 text-blue-800 p-3 rounded mb-4 text-sm">
                     ℹ️ <strong>Binary vs Continuous:</strong> Stocks you specified a quantity for have continuous values (may have decimals). Others use binary approach (0 or full amount).
@@ -509,7 +514,7 @@
 
                 <div class="flex gap-3">
                     <form method="POST" action="{{ url_for('cassiterite.optimize') }}" class="flex-1">
-                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
+                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value|default('', true) }}">
                         <button type="submit" 
                                 name="action" 
                                 value="back_to_initial"

@@ -8,6 +8,8 @@ except Exception:
     HAS_HIGHS = False
 
 import shutil, os, sys
+import time
+from threading import Lock
 
 def _find_highs_executable():
     """Return path to highs executable if available, else None.
@@ -46,6 +48,34 @@ from utils import trace_time
 
 logger = logging.getLogger(__name__)
 
+# Simple in-process cache for optimizer results to avoid repeated solves
+# Keyed by function name + parameters. Stores lightweight serializable
+# results (ids, numeric aggregates) and rehydrates ORM objects on hit.
+_OPT_CACHE = {}
+_OPT_CACHE_LOCK = Lock()
+
+def _cache_get(key, ttl=60):
+    try:
+        with _OPT_CACHE_LOCK:
+            entry = _OPT_CACHE.get(key)
+            if not entry:
+                return None
+            ts = entry.get('ts', 0)
+            if (time.time() - ts) > entry.get('ttl', ttl):
+                # expired
+                _OPT_CACHE.pop(key, None)
+                return None
+            return entry.get('data')
+    except Exception:
+        return None
+
+def _cache_set(key, data, ttl=60):
+    try:
+        with _OPT_CACHE_LOCK:
+            _OPT_CACHE[key] = {'ts': time.time(), 'data': data, 'ttl': ttl}
+    except Exception:
+        pass
+
 @trace_time
 def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, target_total_quantity=None, minimize_quantity=False):
     """
@@ -62,6 +92,30 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
 
     if not rows:
         return [], 0, 0
+
+    # Check cache to avoid repeated heavy solves for identical parameters
+    try:
+        cache_key = (
+            'select_stocks_for_moyenne',
+            repr(target_moyenne),
+            repr(target_moyenne_nb),
+            repr(target_total_quantity),
+            str(bool(minimize_quantity)),
+        )
+        cached = _cache_get(cache_key, ttl=60)
+        if cached:
+            try:
+                ids = cached.get('ids', [])
+                if ids:
+                    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all()
+                else:
+                    selected_stocks = []
+                return selected_stocks, float(cached.get('achieved_moyenne', 0)), float(cached.get('achieved_moyenne_nb', 0)), float(cached.get('total_balance', 0))
+            except Exception:
+                # Cache miss due to DB rehydration failure — continue to compute
+                pass
+    except Exception:
+        pass
 
     remaining_stocks = [SimpleNamespace(id=r[0], unit_percent=float(r[1] or 0), local_balance=float(r[2] or 0), t_unity=float(r[3] or 0)) for r in rows]
     stock_vars = {s.id: LpVariable(f"stock{s.id}", cat=LpBinary) for s in remaining_stocks}
@@ -129,6 +183,21 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
     # Choose solver and log decision for diagnostics
     solver_name = 'CBC'
     solver_path = None
+    # Wrap solver invocation to measure elapsed time and log it. If HiGHS
+    # takes longer than the requested time_limit, we log a warning so
+    # operators can decide whether to prefer CBC in deployments.
+    def _run_solver_and_time(solver_callable, label):
+        start = time.perf_counter()
+        try:
+            solver_callable()
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_for_moyenne: solver %s elapsed=%.4f seconds", label, elapsed)
+            except Exception:
+                pass
+            return elapsed
+
     try:
         if HAS_HIGHS and HiGHS_CMD is not None:
             highs_exec = _find_highs_executable()
@@ -137,20 +206,22 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
                 solver_name = 'HiGHS'
                 logger.info("select_stocks_for_moyenne: using HiGHS at %s", highs_exec)
                 try:
-                    prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit))
+                    elapsed = _run_solver_and_time(lambda: prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit)), 'HiGHS')
+                    if elapsed > max(1.0, time_limit * 1.05):
+                        logger.warning("select_stocks_for_moyenne: HiGHS exceeded time_limit (requested=%ss, elapsed=%.3fs)", time_limit, elapsed)
                 except Exception as e:
                     logger.warning("select_stocks_for_moyenne: HiGHS execution failed (%s), falling back to CBC", e)
-                    prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+                    _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
             else:
                 logger.info("select_stocks_for_moyenne: HiGHS detected in pulp but highs executable not found; using CBC")
-                prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
         else:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
     except TypeError:
         try:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
         except Exception:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
     from pulp import LpStatus, value
     try:
         logger.info("select_stocks_for_moyenne: solver used=%s path=%s status=%s objective=%s",
@@ -175,6 +246,23 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
     achieved_moyenne_nb = (total_tunity / total_balance_val) if total_balance_val else 0
 
     # Return the achieved total quantity as well so callers can display it
+    try:
+        # Cache lightweight result (ids + aggregates) for short TTL to avoid
+        # re-solving identical problems during quick UI navigation.
+        try:
+            selected_ids = [s.id for s in selected_stocks]
+        except Exception:
+            selected_ids = []
+        cache_data = {
+            'ids': selected_ids,
+            'achieved_moyenne': float(achieved_moyenne),
+            'achieved_moyenne_nb': float(achieved_moyenne_nb),
+            'total_balance': float(total_balance_val),
+        }
+        _cache_set(cache_key, cache_data, ttl=60)
+    except Exception:
+        pass
+
     return selected_stocks, achieved_moyenne, achieved_moyenne_nb, float(total_balance_val)
 
 
@@ -212,6 +300,22 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
 
     if not rows:
         return [], 0, 0, {}
+
+    # Build a cache key that includes the minimum_quantities entries (sorted)
+    try:
+        min_tuple = tuple(sorted(((int(k), float(v)) for k, v in (minimum_quantities or {}).items()))) if minimum_quantities else ()
+    except Exception:
+        min_tuple = ()
+    cache_key = ('select_stocks_with_minimum_quantities', repr(target_moyenne), repr(target_moyenne_nb), repr(target_total_quantity), repr(min_tuple))
+    cached = _cache_get(cache_key, ttl=60)
+    if cached:
+        try:
+            ids = cached.get('ids', [])
+            quantities_cached = cached.get('quantities', {}) or {}
+            selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all() if ids else []
+            return selected_stocks, float(cached.get('achieved_moyenne', 0)), float(cached.get('achieved_moyenne_nb', 0)), quantities_cached
+        except Exception:
+            pass
 
     remaining_stocks = [SimpleNamespace(id=r[0], local_balance=float(r[1] or 0), unit_percent=float(r[2] or 0), t_unity=float(r[3] or 0)) for r in rows]
 
@@ -316,6 +420,18 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
     # Choose solver and log decision for diagnostics
     solver_name = 'CBC'
     solver_path = None
+    def _run_solver_and_time(solver_callable, label):
+        start = time.perf_counter()
+        try:
+            solver_callable()
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_with_minimum_quantities: solver %s elapsed=%.4f seconds", label, elapsed)
+            except Exception:
+                pass
+            return elapsed
+
     try:
         if HAS_HIGHS and HiGHS_CMD is not None:
             highs_exec = _find_highs_executable()
@@ -324,20 +440,22 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
                 solver_name = 'HiGHS'
                 logger.info("select_stocks_with_minimum_quantities: using HiGHS at %s", highs_exec)
                 try:
-                    prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit))
+                    elapsed = _run_solver_and_time(lambda: prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit)), 'HiGHS')
+                    if elapsed > max(1.0, time_limit * 1.05):
+                        logger.warning("select_stocks_with_minimum_quantities: HiGHS exceeded time_limit (requested=%ss, elapsed=%.3fs)", time_limit, elapsed)
                 except Exception as e:
                     logger.warning("select_stocks_with_minimum_quantities: HiGHS execution failed (%s), falling back to CBC", e)
-                    prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+                    _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
             else:
                 logger.info("select_stocks_with_minimum_quantities: HiGHS detected in pulp but highs executable not found; using CBC")
-                prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
         else:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
     except TypeError:
         try:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
         except Exception:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
     logger.info("select_stocks_with_minimum_quantities: solver used=%s path=%s", solver_name, solver_path)
     from pulp import LpStatus, value
     try:
@@ -384,4 +502,15 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
 
     # Rehydrate ORM objects for display
     selected_stocks = CopperStock.query.filter(CopperStock.id.in_(selected_ids)).all()
+    try:
+        cache_data = {
+            'ids': selected_ids,
+            'quantities': quantities,
+            'achieved_moyenne': float(achieved_moyenne),
+            'achieved_moyenne_nb': float(achieved_moyenne_nb),
+        }
+        _cache_set(cache_key, cache_data, ttl=60)
+    except Exception:
+        pass
+
     return selected_stocks, achieved_moyenne, achieved_moyenne_nb, quantities

@@ -21,7 +21,7 @@ class Config:
         'SQLALCHEMY_TRACK_MODIFICATIONS', 'False'
     ).lower() in ('1', 'true', 'yes')
 
-    SUPABASE_URL=os.environ.get('DATABASE_URL')
+    SUPABASE_URL=os.environ.get('DATABASE_URL_TESTING')
 
     # Brevo (Transactional email) configuration
     BREVO_API_KEY = os.environ.get('BREVO_API_KEY')
@@ -29,7 +29,7 @@ class Config:
     BREVO_SENDER_NAME = os.environ.get('BREVO_SENDER_NAME', 'Urumuli Smart System')
 
     # Optional Supabase (useful for storage/auth separate from DB)
-    SUPABASE_URL = os.environ.get('SUPABASE_URL')
+    SUPABASE_URL = os.environ.get('SUPABASE_URL_TESTING')
     SUPABASE_KEY = os.environ.get('SERVICE_KEY')
 
     # SQLAlchemy engine options for robust connections (adjust pool_size for production)
