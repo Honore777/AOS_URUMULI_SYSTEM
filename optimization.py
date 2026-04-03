@@ -91,7 +91,7 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
     ).filter(CopperStock.local_balance > 0).all()
 
     if not rows:
-        return [], 0, 0
+        return [], 0, 0, 0.0
 
     # Check cache to avoid repeated heavy solves for identical parameters
     try:
@@ -232,7 +232,7 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
 
     if not selected_ids:
-        return [], 0, 0
+        return [], 0, 0, 0.0
 
     # Rehydrate selected stocks ORM objects (for display) but compute aggregates using DB
     selected_stocks = CopperStock.query.filter(CopperStock.id.in_(selected_ids)).all()

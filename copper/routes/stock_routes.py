@@ -561,35 +561,47 @@ def filter_stocks():
             # try using the in-process cache to avoid repeating heavy SQL.
             use_cache_key = not (start_date or end_date or voucher_no)
             cached_aggs = None
-            if use_cache_key:
+            # If caller requested full aggregates, compute fresh values instead
+            # of relying on any possibly-partial cache entry. This avoids
+            # returning stale zeroed aggregates when the cache was only seeded
+            # with lightweight values (e.g., moyenne).
+            if use_cache_key and not include_aggregates:
                 cached_aggs = _get_dashboard_aggregates()
 
             if cached_aggs:
-                # Use cached aggregate values and avoid running heavy queries
-                total_input = cached_aggs.get('total_input', 0)
-                total_stocks = cached_aggs.get('total_stocks', stocks_pagination.total)
-                total_output = cached_aggs.get('total_output', 0)
-                total_debt = cached_aggs.get('total_debt', 0)
-                total_sales = cached_aggs.get('total_sales', 0)
-                total_supplier_obligation = cached_aggs.get('total_supplier_obligation', 0)
-                total_payments = cached_aggs.get('total_payments', 0)
-                inventory_value = cached_aggs.get('inventory_value', 0)
-                cost_of_stock_sold = cached_aggs.get('cost_of_stock_sold', 0)
-                supplier_outstanding = cached_aggs.get('supplier_outstanding', 0)
-                gross_profit = cached_aggs.get('gross_profit', 0)
-                total_unit_percent = cached_aggs.get('total_unit_percent', 0)
-                total_remaining_balance = cached_aggs.get('total_remaining_balance', 0)
-                moyenne = cached_aggs.get('moyenne', 0)
-                total_t_unity = cached_aggs.get('total_t_unity', 0)
-                moyenne_nb = cached_aggs.get('moyenne_nb', 0)
-                timings['stock_aggregates'] = 0.0
-                timings['output_aggregates'] = 0.0
-                timings['sales_aggregate'] = 0.0
-                timings['supplier_obligation'] = 0.0
-                timings['payments_aggregate'] = 0.0
-                timings['inventory_value'] = 0.0
-                timings['cogs_aggregate'] = 0.0
-                timings['remaining_aggregates'] = 0.0
+                # If the caller requested full aggregates, ensure the cached
+                # entry contains the heavy financial keys; otherwise ignore
+                # this cache entry so we compute the full aggregates now.
+                heavy_keys = ('inventory_value', 'cost_of_stock_sold', 'total_sales', 'total_supplier_obligation')
+                if include_aggregates and not all(k in cached_aggs for k in heavy_keys):
+                    # treat as cache miss for full-aggregate request
+                    cached_aggs = None
+                else:
+                    # Use cached aggregate values and avoid running heavy queries
+                    total_input = cached_aggs.get('total_input', 0)
+                    total_stocks = cached_aggs.get('total_stocks', stocks_pagination.total)
+                    total_output = cached_aggs.get('total_output', 0)
+                    total_debt = cached_aggs.get('total_debt', 0)
+                    total_sales = cached_aggs.get('total_sales', 0)
+                    total_supplier_obligation = cached_aggs.get('total_supplier_obligation', 0)
+                    total_payments = cached_aggs.get('total_payments', 0)
+                    inventory_value = cached_aggs.get('inventory_value', 0)
+                    cost_of_stock_sold = cached_aggs.get('cost_of_stock_sold', 0)
+                    supplier_outstanding = cached_aggs.get('supplier_outstanding', 0)
+                    gross_profit = cached_aggs.get('gross_profit', 0)
+                    total_unit_percent = cached_aggs.get('total_unit_percent', 0)
+                    total_remaining_balance = cached_aggs.get('total_remaining_balance', 0)
+                    moyenne = cached_aggs.get('moyenne', 0)
+                    total_t_unity = cached_aggs.get('total_t_unity', 0)
+                    moyenne_nb = cached_aggs.get('moyenne_nb', 0)
+                    timings['stock_aggregates'] = 0.0
+                    timings['output_aggregates'] = 0.0
+                    timings['sales_aggregate'] = 0.0
+                    timings['supplier_obligation'] = 0.0
+                    timings['payments_aggregate'] = 0.0
+                    timings['inventory_value'] = 0.0
+                    timings['cogs_aggregate'] = 0.0
+                    timings['remaining_aggregates'] = 0.0
             else:
                 t0 = time.perf_counter()
                 # stock_filters represent the "original" cost basis window (what we
