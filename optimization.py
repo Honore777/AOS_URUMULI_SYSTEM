@@ -1,5 +1,43 @@
 from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpBinary, LpContinuous, PULP_CBC_CMD
-from copper.models import CopperStock
+# Prefer HiGHS solver if available; fall back to CBC via PULP_CBC_CMD
+try:
+    from pulp import HiGHS_CMD
+    HAS_HIGHS = True
+except Exception:
+    HiGHS_CMD = None
+    HAS_HIGHS = False
+
+import shutil, os, sys
+
+def _find_highs_executable():
+    """Return path to highs executable if available, else None.
+
+    Checks PATH first via shutil.which('highs'), then looks in common
+    conda env locations (sys.prefix/Library/bin/highs.exe on Windows).
+    """
+    # First try PATH (cross-platform). Check both unix and windows executable names.
+    which = shutil.which('highs') or shutil.which('highs.exe')
+    if which:
+        return which
+
+    # Next check common virtualenv/conda locations and system locations.
+    prefix = sys.prefix
+    candidates = [
+        os.path.join(prefix, 'Library', 'bin', 'highs.exe'),  # conda on Windows
+        os.path.join(prefix, 'Scripts', 'highs.exe'),        # venv on Windows
+        os.path.join(prefix, 'bin', 'highs'),                # venv/virtualenv on Unix
+        os.path.join('/usr', 'local', 'bin', 'highs'),        # common system location
+        os.path.join('/usr', 'bin', 'highs'),                # fallback system location
+    ]
+
+    for candidate in candidates:
+        try:
+            if os.path.exists(candidate):
+                return candidate
+        except Exception:
+            continue
+
+    return None
 from sqlalchemy import func
 from types import SimpleNamespace
 from config import db
@@ -9,11 +47,12 @@ from utils import trace_time
 logger = logging.getLogger(__name__)
 
 @trace_time
-def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None):
+def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, target_total_quantity=None, minimize_quantity=False):
     """
     Original function: Binary selection (all or nothing per stock)
     Used for initial auto-filtering
     """
+    from copper.models import CopperStock
     rows = db.session.query(
         CopperStock.id,
         CopperStock.unit_percent,
@@ -37,38 +76,87 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None):
     # Objective: minimize absolute difference(s)
     objective_terms = []
 
-    if target_moyenne:
+    if target_moyenne is not None:
         error_moyenne = LpVariable("error_moyenne", lowBound=0)
         prob += error_moyenne >= total_unit_percent - target_moyenne * total_balance
         prob += error_moyenne >= -(total_unit_percent - target_moyenne * total_balance)
         objective_terms.append(error_moyenne)
 
-    if target_moyenne_nb:
+    if target_moyenne_nb is not None:
         error_moyenne_nb = LpVariable("error_moyenne_nb", lowBound=0)
         prob += error_moyenne_nb >= total_t_unity - target_moyenne_nb * total_balance
         prob += error_moyenne_nb >= -(total_t_unity - target_moyenne_nb * total_balance)
         objective_terms.append(error_moyenne_nb)
 
+    # Minimize quantity error when a target_total_quantity is provided
+    if target_total_quantity is not None:
+        try:
+            tgt_q = float(target_total_quantity)
+            error_total = LpVariable("error_total", lowBound=0)
+            prob += error_total >= total_balance - tgt_q
+            prob += error_total >= -(total_balance - tgt_q)
+            objective_terms.append(error_total)
+        except Exception:
+            pass
+
     # Objective: minimize total error
+    # If requested, prefer solutions with smaller total quantity as a tie-breaker.
+    # We add a small-weighted total_balance term so objective still prioritizes
+    # quality error but prefers smaller totals when errors are equal.
+    if minimize_quantity:
+        try:
+            small_weight = 1e-3
+            objective_terms.append(small_weight * total_balance)
+        except Exception:
+            objective_terms.append(total_balance)
+
     prob += lpSum(objective_terms)
 
     # Constraint: at least one stock must be selected
     prob += lpSum(stock_vars[s.id] for s in remaining_stocks) >= 1
+
+    # NOTE: do NOT enforce strict equality on total quantity here.
+    # We use a soft objective term (`error_total`) above to allow
+    # the solver to return the closest feasible selection instead
+    # of producing an infeasible model when exact equality cannot
+    # be achieved with binary-only choices.
 
     # Solve with a time limit and relative gap to avoid long blocking calls
     # time_limit: seconds solver will run (10-12s suggested)
     # gap_rel: relative optimality gap (e.g., 0.01 = 1%)
     time_limit = 12
     gap_rel = 0.01
+    # Choose solver and log decision for diagnostics
+    solver_name = 'CBC'
+    solver_path = None
     try:
-        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+        if HAS_HIGHS and HiGHS_CMD is not None:
+            highs_exec = _find_highs_executable()
+            if highs_exec:
+                solver_path = highs_exec
+                solver_name = 'HiGHS'
+                logger.info("select_stocks_for_moyenne: using HiGHS at %s", highs_exec)
+                try:
+                    prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit))
+                except Exception as e:
+                    logger.warning("select_stocks_for_moyenne: HiGHS execution failed (%s), falling back to CBC", e)
+                    prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+            else:
+                logger.info("select_stocks_for_moyenne: HiGHS detected in pulp but highs executable not found; using CBC")
+                prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+        else:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
     except TypeError:
-        # Some pulp versions use different parameter name for gap; try ratioGap
         try:
             prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
         except Exception:
-            # Fallback: time limit only
             prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
+    from pulp import LpStatus, value
+    try:
+        logger.info("select_stocks_for_moyenne: solver used=%s path=%s status=%s objective=%s",
+                    solver_name, solver_path, LpStatus[prob.status], value(prob.objective) if prob.status is not None else None)
+    except Exception:
+        logger.info("select_stocks_for_moyenne: solver used=%s path=%s (could not read status/objective)", solver_name, solver_path)
 
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
 
@@ -86,10 +174,11 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None):
     achieved_moyenne = (total_unit / total_balance_val) if total_balance_val else 0
     achieved_moyenne_nb = (total_tunity / total_balance_val) if total_balance_val else 0
 
-    return selected_stocks, achieved_moyenne, achieved_moyenne_nb
+    # Return the achieved total quantity as well so callers can display it
+    return selected_stocks, achieved_moyenne, achieved_moyenne_nb, float(total_balance_val)
 
 
-def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb=None, minimum_quantities=None):
+def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb=None, minimum_quantities=None, target_total_quantity=None):
     """
     Advanced function: HYBRID selection (mix of binary and continuous)
     
@@ -113,6 +202,7 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
         (selected_stocks_list, achieved_moyenne, achieved_moyenne_nb, quantities_dict)
     """
     # Load only the columns needed for LP; rehydrate selected ORM objects later
+    from copper.models import CopperStock
     rows = db.session.query(
         CopperStock.id,
         CopperStock.local_balance,
@@ -129,11 +219,25 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
     stock_vars = {}
     for s in remaining_stocks:
         if minimum_quantities and s.id in minimum_quantities:
-            min_qty = minimum_quantities[s.id]
+            # Allow a continuous variable between the user-specified minimum
+            # and the available `local_balance` for that stock.
+            try:
+                min_qty = float(minimum_quantities[s.id])
+            except Exception:
+                min_qty = 0.0
+            if min_qty < 0:
+                min_qty = 0.0
+            max_qty = float(s.local_balance)
+            if min_qty > max_qty:
+                # Clamp requested minimum to available quantity
+                min_qty = max_qty
+            # Preserve hybrid design: when the user provides a minimum_quantities
+            # entry, treat it as a fixed quantity (lowBound == upBound) so PuLP
+            # uses exactly that amount for this stock.
             stock_vars[s.id] = LpVariable(
                 f"stock{s.id}",
                 lowBound=min_qty,
-                upBound=min(min_qty, s.local_balance) if s.local_balance else min_qty,
+                upBound=min_qty,
                 cat=LpContinuous,
             )
         else:
@@ -172,13 +276,13 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
     # ===== SAME ERROR MINIMIZATION AS ORIGINAL =====
     objective_terms = []
     
-    if target_moyenne:
+    if target_moyenne is not None:
         error_moyenne = LpVariable("error_moyenne", lowBound=0)
         prob += error_moyenne >= total_unit_percent - target_moyenne * total_balance
         prob += error_moyenne >= -(total_unit_percent - target_moyenne * total_balance)
         objective_terms.append(error_moyenne)
     
-    if target_moyenne_nb:
+    if target_moyenne_nb is not None:
         error_moyenne_nb = LpVariable("error_moyenne_nb", lowBound=0)
         prob += error_moyenne_nb >= total_t_unity - target_moyenne_nb * total_balance
         prob += error_moyenne_nb >= -(total_t_unity - target_moyenne_nb * total_balance)
@@ -186,6 +290,18 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
     
     # ===== CONSTRAINT: Total quantity must be positive =====
     prob += total_balance >= 1
+
+    # Optional hard constraint: force total selected quantity to match target
+    if target_total_quantity is not None:
+        try:
+            tgt_q = float(target_total_quantity)
+            # Instead of strict equality, minimize its error via objective
+            error_total = LpVariable("error_total", lowBound=0)
+            prob += error_total >= total_balance - tgt_q
+            prob += error_total >= -(total_balance - tgt_q)
+            objective_terms.append(error_total)
+        except Exception:
+            pass
     
     # ===== OBJECTIVE: Minimize error =====
     if objective_terms:
@@ -197,13 +313,32 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
     # Solve with time limit and relative gap to prevent long blocking solves
     time_limit = 12
     gap_rel = 0.01
+    # Choose solver and log decision for diagnostics
+    solver_name = 'CBC'
+    solver_path = None
     try:
-        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+        if HAS_HIGHS and HiGHS_CMD is not None:
+            highs_exec = _find_highs_executable()
+            if highs_exec:
+                solver_path = highs_exec
+                solver_name = 'HiGHS'
+                logger.info("select_stocks_with_minimum_quantities: using HiGHS at %s", highs_exec)
+                try:
+                    prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit))
+                except Exception as e:
+                    logger.warning("select_stocks_with_minimum_quantities: HiGHS execution failed (%s), falling back to CBC", e)
+                    prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+            else:
+                logger.info("select_stocks_with_minimum_quantities: HiGHS detected in pulp but highs executable not found; using CBC")
+                prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
+        else:
+            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
     except TypeError:
         try:
             prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
         except Exception:
             prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
+    logger.info("select_stocks_with_minimum_quantities: solver used=%s path=%s", solver_name, solver_path)
     from pulp import LpStatus, value
     try:
         logger.info("select_stocks_with_minimum_quantities: solver status=%s objective=%s", LpStatus[prob.status], value(prob.objective))

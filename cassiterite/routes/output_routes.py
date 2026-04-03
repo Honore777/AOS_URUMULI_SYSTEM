@@ -123,8 +123,28 @@ def optimize():
     selected_stocks = []
     achieved_moyenne = 0
     quantities = {}
+    achieved_total_quantity = 0
     mode = None
     all_stocks = []
+    # If user arrived via a plain GET (no explicit mode param), avoid
+    # re-entering a previously-stored edit mode. Only restore edit mode
+    # when the user explicitly requests it (mode=edit in query string).
+    # Also clear prior optimization state so clicking Back -> Dashboard
+    # then Optimize opens the initial target-entry step.
+    # Treat explicit 'None' (string) or empty values as absent — in those
+    # cases we should clear previous optimization state so a plain
+    # Optimize click always shows the initial target-entry view.
+    mode_arg = request.args.get('mode')
+    if request.method == 'GET' and (mode_arg is None or (isinstance(mode_arg, str) and mode_arg.strip().lower() in ('', 'none'))):
+        for _k in (
+            'optimization_mode',
+            'optimization_quantities',
+            'optimization_target_moyenne',
+            'optimization_target_moyenne_nb',
+            'optimization_target_total_quantity',
+            'cassiterite_optimization_edits',
+        ):
+            session.pop(_k, None)
     
     if form.validate_on_submit():
         target_moyenne = form.target_moyenne.data
@@ -134,7 +154,7 @@ def optimize():
         # STEP 1: User clicks "Filter Stocks" with target
         # ═══════════════════════════════════════════════════
         if action == 'filter':
-            selected_stocks, achieved_moyenne = select_stocks_for_average_quality(
+            selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(
                 target_moyenne=target_moyenne
             )
             
@@ -152,8 +172,9 @@ def optimize():
         # ═══════════════════════════════════════════════════
         elif action == 'edit':
             # Get the previously selected stocks for reference
-            selected_stocks, achieved_moyenne = select_stocks_for_average_quality(
-                target_moyenne=target_moyenne
+            selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(
+                target_moyenne=target_moyenne,
+                minimize_quantity=True,
             )
             
             quantities = {s.id: s.local_balance for s in selected_stocks}
@@ -167,24 +188,62 @@ def optimize():
         elif action == 'recalculate':
             # Capture user's adjusted quantities
             minimum_quantities = {}
+            # Merge any page-saved edits from session with current form inputs
+            session_edits = session.get('cassiterite_optimization_edits', {}) or {}
+            merged_edits = {}
+            for k, v in (session_edits or {}).items():
+                try:
+                    merged_edits[int(k)] = float(v)
+                except Exception:
+                    continue
+
+            # Fetch all candidate stocks once to validate and clamp
             all_stocks_list = db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance).filter(CassiteriteStock.local_balance > 0).order_by(CassiteriteStock.date.desc()).all()
-            
+
+            # Seed minimum_quantities from previously computed recommended quantities
+            # so Recalculate starts from the recommended baseline and then applies edits.
+            recommended = session.get('optimization_quantities', {}) or {}
+            seeded_minima = {}
+            for k, v in recommended.items():
+                try:
+                    seeded_minima[int(k)] = float(v)
+                except Exception:
+                    continue
+            minimum_quantities.update(seeded_minima)
+
             for s in all_stocks_list:
                 qty_key = f'qty_{s.id}'
+                # Form input overrides any session-saved edit
+                form_val = None
                 if qty_key in request.form:
                     try:
                         user_qty = request.form[qty_key].strip()
                         if user_qty:
-                            min_qty = float(user_qty)
-                            min_qty = min(min_qty, s.local_balance)  # Cap to available
-                            
-                            # Only add if user changed from full balance
-                            if abs(min_qty - s.local_balance) > 0.01:  # float tolerance
-                                if min_qty > 0:
-                                    minimum_quantities[s.id] = min_qty
+                            form_val = float(user_qty)
                     except (ValueError, TypeError):
-                        pass
-            
+                        form_val = None
+
+                if form_val is not None:
+                    candidate = min(form_val, s.local_balance)
+                    merged_edits[s.id] = candidate
+
+            # Build/overlay minimum_quantities from merged_edits when user changed from baseline
+            for s in all_stocks_list:
+                if s.id in merged_edits:
+                    min_qty = merged_edits[s.id]
+                    # Clamp to available
+                    if min_qty < 0:
+                        min_qty = 0.0
+                    if min_qty > s.local_balance:
+                        min_qty = float(s.local_balance)
+
+                    baseline = seeded_minima.get(s.id, s.local_balance)
+                    if abs(min_qty - baseline) > 0.01:
+                        minimum_quantities[s.id] = min_qty
+
+            # Persist merged edits back to session for continuity
+            session['cassiterite_optimization_edits'] = {str(k): float(v) for k, v in merged_edits.items()}
+
             # Re-optimize with hybrid variables
             selected_stocks, achieved_moyenne, quantities = select_stocks_with_minimum_quantities_cassiterite(
                 target_moyenne=target_moyenne,
@@ -197,27 +256,107 @@ def optimize():
         # ═══════════════════════════════════════════════════
         elif action == 'back_to_initial':
             mode = 'initial'
-            selected_stocks, achieved_moyenne = select_stocks_for_average_quality(
+            selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(
                 target_moyenne=target_moyenne
             )
             quantities = {s.id: s.local_balance for s in selected_stocks}
     
-    # Get all stocks for edit mode display (only selected columns)
-    all_stocks = db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance).filter(CassiteriteStock.local_balance > 0).order_by(CassiteriteStock.date.desc()).all()
+        # If the user performed a GET search while in edit mode (mode=edit),
+        # rehydrate the previously computed recommendation from session so the
+        # supplier search / pagination keeps the user in the edit view instead
+        # of dropping back to the initial page.
+        if request.method == 'GET' and request.args.get('mode') == 'edit':
+            try:
+                sess_qty = session.get('optimization_quantities') or {}
+                if sess_qty:
+                    ids = [int(k) for k in sess_qty.keys()]
+                    selected_stocks = CassiteriteStock.query.filter(CassiteriteStock.id.in_(ids)).all()
+                    quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
+                    mode = 'edit'
+                else:
+                    # Fall back to recomputing selection using provided or stored target
+                    tgt = request.args.get('target_moyenne') or session.get('optimization_target_moyenne')
+                    try:
+                        tgt_f = float(tgt) if tgt not in (None, '') else None
+                    except Exception:
+                        tgt_f = None
+                    if tgt_f is not None:
+                        selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(target_moyenne=tgt_f, minimize_quantity=True)
+                        quantities = {s.id: s.local_balance for s in selected_stocks}
+                        mode = 'edit'
+            except Exception:
+                selected_stocks = []
+                quantities = {}
+                mode = None
+
+        # Get all stocks for edit mode display (only selected columns)
+        # Support pagination and supplier search for edit table
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1:
+            page = 1
+    except Exception:
+        page = 1
+    try:
+        per_page = int(request.args.get('per_page', 40))
+        if per_page < 5:
+            per_page = 5
+        if per_page > 200:
+            per_page = 200
+    except Exception:
+        per_page = 40
+
+    q = (request.args.get('q') or '').strip()
+    base_q = db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance).filter(CassiteriteStock.local_balance > 0)
+    if q:
+        base_q = base_q.filter(CassiteriteStock.supplier.ilike(f"%{q}%"))
+
+    total_count = base_q.count()
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+
+    all_stocks = base_q.order_by(CassiteriteStock.date.desc()).offset((page - 1) * per_page).limit(per_page).all()
     
-    # Store in session
-    session['optimization_quantities'] = quantities
-    session['optimization_mode'] = mode
-    session['optimization_target_moyenne'] = form.target_moyenne.data if form.target_moyenne.data else 0
+    # Only persist session values when appropriate to avoid wiping
+    # previously computed state on unrelated GETs (e.g., supplier search).
+    def _set_session_target_if_present(key, value):
+        if value is None:
+            return
+        if isinstance(value, str) and value.strip().lower() in ('', 'none'):
+            return
+        try:
+            session[key] = float(value)
+        except Exception:
+            session[key] = value
+
+    if quantities:
+        session['optimization_quantities'] = quantities
+
+    if mode is not None:
+        session['optimization_mode'] = mode
+
+    # Prefer POSTed value after a Filter/Edit action; otherwise pick up
+    # explicit query params when present (pagination/search links).
+    if request.method == 'POST' and form is not None:
+        _set_session_target_if_present('optimization_target_moyenne', form.target_moyenne.data)
+    else:
+        _set_session_target_if_present('optimization_target_moyenne', request.args.get('target_moyenne'))
     
     return render_template(
         'cassiterite/optimize.html',
         selected_stocks=selected_stocks,
         all_stocks=all_stocks,
         achieved_moyenne=achieved_moyenne,
+        achieved_total_quantity=achieved_total_quantity,
         quantities=quantities,
         mode=mode,
-        form=form
+        form=form,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        total_count=total_count,
+        q=q,
     )
 
 
@@ -229,9 +368,17 @@ def cassiterite_optimize_totals():
         # If session empty, try to recompute using stored target
         if not quantities:
             tgt = session.get('optimization_target_moyenne')
-            if tgt is not None:
+
+            def _has_valid_target(val):
+                if val is None:
+                    return False
+                if isinstance(val, str) and val.strip().lower() in ('', 'none'):
+                    return False
+                return True
+
+            if _has_valid_target(tgt):
                 try:
-                    selected_stocks, achieved = select_stocks_for_average_quality(target_moyenne=tgt)
+                    selected_stocks, achieved, _achieved_total = select_stocks_for_average_quality(target_moyenne=tgt)
                     quantities = {s.id: s.local_balance for s in selected_stocks}
                     session['optimization_quantities'] = quantities
                 except Exception:
@@ -246,6 +393,27 @@ def cassiterite_optimize_totals():
         return jsonify({'total_recommended': total, 'quantities': quantities})
     except Exception:
         return jsonify({'total_recommended': 0.0, 'quantities': {}})
+
+
+@cassiterite_bp.route('/optimize/save_edits', methods=['POST'])
+def cassiterite_save_edits():
+    """AJAX endpoint to persist partial cassiterite edits (id -> qty) into session."""
+    try:
+        payload = request.get_json() or {}
+        edits = session.get('cassiterite_optimization_edits', {}) or {}
+        for sid, qty in (payload.get('edits') or {}).items():
+            try:
+                sid_i = int(sid)
+                qty_f = float(qty)
+                if qty_f < 0:
+                    continue
+                edits[str(sid_i)] = qty_f
+            except Exception:
+                continue
+        session['cassiterite_optimization_edits'] = edits
+        return jsonify({'ok': True})
+    except Exception:
+        return jsonify({'ok': False}), 400
 
 
 @cassiterite_bp.route('/confirm_bulk_output', methods=['POST'])

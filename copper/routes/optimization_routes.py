@@ -26,12 +26,31 @@ def optimize_stocks():
     selected_stocks = []
     achieved_moyenne = 0
     achieved_moyenne_nb = 0
+    achieved_total_quantity = 0
     quantities = {}
     mode = None  # initial, edit, or result
+
+    # If user arrived via a plain GET (no explicit mode param), clear any
+    # previously-stored optimization state so the Optimize link always
+    # opens the initial target-entry screen. Treat string 'None' or empty
+    # values as absent.
+    mode_arg = request.args.get('mode')
+    if request.method == 'GET' and (mode_arg is None or (isinstance(mode_arg, str) and mode_arg.strip().lower() in ('', 'none'))):
+        for _k in (
+            'optimization_mode',
+            'optimization_quantities',
+            'optimization_target_moyenne',
+            'optimization_target_moyenne_nb',
+            'optimization_target_total_quantity',
+            'optimization_edits',
+            'optimization_changes',
+        ):
+            session.pop(_k, None)
 
     if form.validate_on_submit():
         target_moyenne = form.target_moyenne.data
         target_moyenne_nb = form.target_moyenne_nb.data
+        target_total_quantity = form.target_total_quantity.data
         action = request.form.get('action', '')
         
         # ═══════════════════════════════════════════════════
@@ -39,9 +58,10 @@ def optimize_stocks():
         # ═══════════════════════════════════════════════════
         if action == 'filter':
             # Auto-filter stocks based on target quality
-            selected_stocks, achieved_moyenne, achieved_moyenne_nb = select_stocks_for_moyenne(
+            selected_stocks, achieved_moyenne, achieved_moyenne_nb, achieved_total_quantity = select_stocks_for_moyenne(
                 target_moyenne=target_moyenne,
-                target_moyenne_nb=target_moyenne_nb
+                target_moyenne_nb=target_moyenne_nb,
+                target_total_quantity=target_total_quantity,
             )
             
             # Create quantity dict for display
@@ -53,9 +73,11 @@ def optimize_stocks():
         # ═══════════════════════════════════════════════════
         elif action == 'edit':
             # Show ALL stocks for user to edit quantities
-            selected_stocks, achieved_moyenne, achieved_moyenne_nb = select_stocks_for_moyenne(
+            selected_stocks, achieved_moyenne, achieved_moyenne_nb, achieved_total_quantity = select_stocks_for_moyenne(
                 target_moyenne=target_moyenne,
-                target_moyenne_nb=target_moyenne_nb
+                target_moyenne_nb=target_moyenne_nb,
+                target_total_quantity=target_total_quantity,
+                minimize_quantity=True,
             )
             
             # Initialize quantities from selected stocks
@@ -66,34 +88,82 @@ def optimize_stocks():
         # STEP 3: User clicks "Recalculate" with adjustments
         # ═══════════════════════════════════════════════════
         elif action == 'recalculate':
-            # Capture user's adjusted quantities from form
+            # Capture user's adjusted quantities from form and session-saved edits
             minimum_quantities = {}
-            
-            # Get only remaining stocks to check form values (avoid loading inactive rows)
+
+            # Load any page-saved edits from session (id -> qty)
+            session_edits = session.get('optimization_edits', {}) or {}
+            # Normalize to int->float map
+            merged_edits = {}
+            for k, v in session_edits.items():
+                try:
+                    merged_edits[int(k)] = float(v)
+                except Exception:
+                    continue
+
+            # Fetch all candidate stocks once
             all_stocks_list = CopperStock.query.filter(CopperStock.local_balance > 0).all()
+            changes = {}
+
+            # Seed minimum_quantities from previously computed recommended quantities
+            # so Recalculate starts from the recommended baseline and then applies edits.
+            recommended = session.get('optimization_quantities', {}) or {}
+            seeded_minima = {}
+            for k, v in recommended.items():
+                try:
+                    seeded_minima[int(k)] = float(v)
+                except Exception:
+                    continue
+            # Initialize with seeded minima (may be empty)
+            minimum_quantities.update(seeded_minima)
+
             for s in all_stocks_list:
                 qty_key = f'qty_{s.id}'
+                # Form input overrides any session-saved edit
+                form_val = None
                 if qty_key in request.form:
                     try:
                         user_qty = request.form[qty_key].strip()
-                        if user_qty:  # Only if user entered something
-                            min_qty = float(user_qty)
-                            # Cap to available balance
-                            min_qty = min(min_qty, s.local_balance)
-                            
-                            # ONLY add to minimum_quantities if user CHANGED from full balance
-                            # If unchanged (equals full balance) → stays BINARY (PuLP decides 0 or all)
-                            if abs(min_qty - s.local_balance) > 0.01:  # tolerance for float comparison
-                                if min_qty > 0:
-                                    minimum_quantities[s.id] = min_qty
+                        if user_qty:
+                            form_val = float(user_qty)
                     except (ValueError, TypeError):
-                        pass
+                        form_val = None
+
+                if form_val is not None:
+                    candidate = min(form_val, s.local_balance)
+                    merged_edits[s.id] = candidate
+
+                # If user provided an explicit edit, overlay it onto seeded minima
+                if s.id in merged_edits:
+                    min_qty = merged_edits[s.id]
+                    # Clamp values to available range
+                    if min_qty < 0:
+                        min_qty = 0.0
+                    if min_qty > s.local_balance:
+                        min_qty = float(s.local_balance)
+
+                    # Determine baseline for comparison: prefer seeded baseline if present
+                    baseline = seeded_minima.get(s.id, s.local_balance)
+                    if abs(min_qty - baseline) > 0.01:
+                        # Apply override (including explicit zero to exclude)
+                        minimum_quantities[s.id] = min_qty
+                        changes[s.id] = {'before': baseline, 'after': min_qty}
+                    else:
+                        # No meaningful change from baseline; ensure seeded baseline remains
+                        if s.id in seeded_minima:
+                            minimum_quantities[s.id] = seeded_minima[s.id]
+
+            # Persist merged edits and changes back to session for continuity
+            # store as strings to keep JSON serialization safe
+            session['optimization_edits'] = {str(k): float(v) for k, v in merged_edits.items()}
+            session['optimization_changes'] = {str(k): v for k, v in changes.items()}
             
             # Re-optimize with user's minimum quantities as constraints
             selected_stocks, achieved_moyenne, achieved_moyenne_nb, quantities = select_stocks_with_minimum_quantities(
                 target_moyenne=target_moyenne,
                 target_moyenne_nb=target_moyenne_nb,
-                minimum_quantities=minimum_quantities
+                minimum_quantities=minimum_quantities,
+                target_total_quantity=target_total_quantity,
             )
             mode = 'result'
         
@@ -102,26 +172,150 @@ def optimize_stocks():
         # ═══════════════════════════════════════════════════
         elif action == 'back_to_initial':
             mode = 'initial'
-            selected_stocks, achieved_moyenne, achieved_moyenne_nb = select_stocks_for_moyenne(
+            selected_stocks, achieved_moyenne, achieved_moyenne_nb, achieved_total_quantity = select_stocks_for_moyenne(
                 target_moyenne=target_moyenne,
-                target_moyenne_nb=target_moyenne_nb
+                target_moyenne_nb=target_moyenne_nb,
+                target_total_quantity=target_total_quantity,
             )
             quantities = {s.id: s.local_balance for s in selected_stocks}
 
     # Get all stocks to display in template (for edit mode)
-    all_stocks = CopperStock.query.filter(CopperStock.local_balance > 0).all()
+    # If user performed a GET search while in edit mode (mode=edit),
+    # re-run the filter to populate recommended quantities so the
+    # search keeps the user in the 'edit' view instead of dropping
+    # back to the initial page.
+    if request.method == 'GET' and request.args.get('mode') == 'edit':
+        try:
+            # Prefer using session-saved recommended quantities (from previous Edit action)
+            sess_qty = session.get('optimization_quantities') or {}
+            if sess_qty:
+                # Rehydrate ORM objects for selected stocks from session keys
+                try:
+                    ids = [int(k) for k in sess_qty.keys()]
+                    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all()
+                    quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
+                    mode = 'edit'
+                except Exception:
+                    selected_stocks = []
+                    quantities = {}
+                    mode = None
+            else:
+                # Fall back to recomputing selection using provided or stored targets
+                tgt_m = request.args.get('target_moyenne') or session.get('optimization_target_moyenne')
+                tgt_nb = request.args.get('target_moyenne_nb') or session.get('optimization_target_moyenne_nb')
+                tgt_total = request.args.get('target_total_quantity') or session.get('optimization_target_total_quantity')
+                try:
+                    tgt_m_f = float(tgt_m) if tgt_m not in (None, '') else None
+                except Exception:
+                    tgt_m_f = None
+                selected_stocks, achieved_moyenne, achieved_moyenne_nb, achieved_total_quantity = select_stocks_for_moyenne(
+                    target_moyenne=tgt_m_f,
+                    target_moyenne_nb=(float(tgt_nb) if tgt_nb else None),
+                    target_total_quantity=(float(tgt_total) if tgt_total else None),
+                    minimize_quantity=True,
+                )
+                quantities = {s.id: s.local_balance for s in selected_stocks}
+                mode = 'edit'
+        except Exception:
+            # Fall back to defaults if anything fails
+            selected_stocks = []
+            quantities = {}
+            mode = None
+
+    # Support server-side pagination and supplier search for the edit table
+    # If the user returns via a plain GET (no mode param) but the last
+    # optimization flow left them in 'edit', restore that state from session
+    # so the page doesn't drop back to the welcome message.
+    if request.method == 'GET' and mode is None:
+        sess_mode = session.get('optimization_mode')
+        try:
+            # If the user was previously editing, restore edit mode so
+            # searches and pagination continue to show the editable table.
+            if sess_mode == 'edit':
+                sess_qty = session.get('optimization_quantities') or {}
+                if sess_qty:
+                    ids = [int(k) for k in sess_qty.keys()]
+                    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all()
+                    quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
+                    mode = 'edit'
+            # If the last session mode was 'initial' (user previously filtered)
+            # or there was no session mode, show the initial target-entry form
+            # when clicking the Optimize Stocks link.
+            elif sess_mode == 'initial' or sess_mode is None:
+                mode = 'initial'
+            # If session mode is 'result', prefer to show results when appropriate
+            elif sess_mode == 'result':
+                mode = 'result'
+        except Exception:
+            # ignore and continue with defaults
+            pass
+
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1:
+            page = 1
+    except Exception:
+        page = 1
+    try:
+        per_page = int(request.args.get('per_page', 40))
+        if per_page < 5:
+            per_page = 5
+        if per_page > 200:
+            per_page = 200
+    except Exception:
+        per_page = 40
+
+    q = (request.args.get('q') or '').strip()
+
+    base_query = CopperStock.query.filter(CopperStock.local_balance > 0)
+    if q:
+        # simple supplier search (case-insensitive)
+        base_query = base_query.filter(CopperStock.supplier.ilike(f"%{q}%"))
+
+    total_count = base_query.count()
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+
+    all_stocks = base_query.order_by(CopperStock.date.desc()).offset((page - 1) * per_page).limit(per_page).all()
 
     # Store quantities in session for retrieve later (when form submits)
-    # This avoids HTML/JavaScript quote escaping issues with JSON passing
-    session['optimization_quantities'] = quantities
-    session['optimization_mode'] = mode
-    # store target values so totals endpoint can recompute if session quantities are missing
-    try:
-        session['optimization_target_moyenne'] = form.target_moyenne.data
-        session['optimization_target_moyenne_nb'] = form.target_moyenne_nb.data
-    except Exception:
-        session['optimization_target_moyenne'] = None
-        session['optimization_target_moyenne_nb'] = None
+    # Only overwrite stored quantities when we have a non-empty set. This
+    # prevents a plain GET (such as a supplier search) from wiping the
+    # previously computed recommended quantities.
+    if quantities:
+        session['optimization_quantities'] = quantities
+
+    # Only set optimization_mode when we have an explicit mode to avoid
+    # accidentally clearing a previously active edit session on plain GETs.
+    if mode is not None:
+        session['optimization_mode'] = mode
+
+    # Update stored target values only when provided by the current
+    # request (POST form submission or explicit GET query params). Do
+    # not overwrite existing session targets with empty/None values from
+    # an unrelated GET (e.g., a simple search).
+    def _set_session_target_if_present(key, value):
+        if value is None:
+            return
+        if isinstance(value, str) and value.strip().lower() in ('', 'none'):
+            return
+        try:
+            # store numeric targets as floats when possible
+            session[key] = float(value)
+        except Exception:
+            session[key] = value
+
+    # Prefer POSTed form values when available (i.e. after Filter/Edit actions)
+    if request.method == 'POST' and form is not None:
+        _set_session_target_if_present('optimization_target_moyenne', form.target_moyenne.data)
+        _set_session_target_if_present('optimization_target_moyenne_nb', form.target_moyenne_nb.data)
+        _set_session_target_if_present('optimization_target_total_quantity', form.target_total_quantity.data)
+    else:
+        # Otherwise, pick up explicit query params if present (e.g., search/pagination links)
+        _set_session_target_if_present('optimization_target_moyenne', request.args.get('target_moyenne'))
+        _set_session_target_if_present('optimization_target_moyenne_nb', request.args.get('target_moyenne_nb'))
+        _set_session_target_if_present('optimization_target_total_quantity', request.args.get('target_total_quantity'))
 
     return render_template(
         'copper/optimize.html',
@@ -129,10 +323,38 @@ def optimize_stocks():
         all_stocks=all_stocks,
         achieved_moyenne=achieved_moyenne,
         achieved_moyenne_nb=achieved_moyenne_nb,
+        achieved_total_quantity=achieved_total_quantity,
         quantities=quantities,
         mode=mode,
-        form=form
+        form=form,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        total_count=total_count,
+        q=q,
     )
+
+
+@copper_bp.route('/optimize_stocks/save_edits', methods=['POST'])
+def save_optimize_edits():
+    """AJAX endpoint to persist partial edits (id -> qty) into session."""
+    try:
+        payload = request.get_json() or {}
+        edits = session.get('optimization_edits', {}) or {}
+        for sid, qty in (payload.get('edits') or {}).items():
+            try:
+                sid_i = int(sid)
+                qty_f = float(qty)
+                # clamp non-negative
+                if qty_f < 0:
+                    continue
+                edits[str(sid_i)] = qty_f
+            except Exception:
+                continue
+        session['optimization_edits'] = edits
+        return jsonify({'ok': True})
+    except Exception:
+        return jsonify({'ok': False}), 400
 
 
 @copper_bp.route('/optimize_stocks/totals', methods=['GET'])
@@ -145,12 +367,22 @@ def optimize_stocks_totals():
             mode = session.get('optimization_mode')
             tgt = session.get('optimization_target_moyenne')
             tgt_nb = session.get('optimization_target_moyenne_nb')
-            if tgt is not None:
+            tgt_total = session.get('optimization_target_total_quantity')
+            def _has_valid_target(val):
+                if val is None:
+                    return False
+                if isinstance(val, str) and val.strip().lower() in ('', 'none'):
+                    return False
+                return True
+
+            # If any target is present (not None/'None'/empty), recompute recommended quantities
+            if _has_valid_target(tgt) or _has_valid_target(tgt_nb) or _has_valid_target(tgt_total):
                 try:
                     # select_stocks_for_moyenne returns (selected_stocks, achieved_moyenne, achieved_moyenne_nb)
                     selected_stocks, achieved_moyenne, achieved_moyenne_nb = select_stocks_for_moyenne(
                         target_moyenne=tgt,
-                        target_moyenne_nb=tgt_nb
+                        target_moyenne_nb=tgt_nb,
+                        target_total_quantity=tgt_total,
                     )
                     quantities = {s.id: s.local_balance for s in selected_stocks}
                     # store back to session for future requests
@@ -191,15 +423,17 @@ def confirm_bulk_output():
     
     # DEBUG: Log what we're receiving
     print(f"\n{'='*80}")
-    print(f"📌 RETRIEVED quantities FROM SESSION:")
-    print(f"   Type: {type(quantities)}")
-    print(f"   Length: {len(quantities)}")
-    print(f"   repr(): {repr(quantities)}")
-    print(f"   Content: {quantities}")
-    print(f"{'='*80}\n")
-    
-    if not quantities:
-        flash("❌ No quantities to output", "danger")
+    tgt = session.get('optimization_target_moyenne')
+    tgt_nb = session.get('optimization_target_moyenne_nb')
+    tgt_total = session.get('optimization_target_total_quantity')
+            # If any target is present, attempt to recompute selection server-side
+    if tgt is not None or tgt_nb is not None or tgt_total is not None:
+        print(f"   repr(): {repr(quantities)}")
+        print(f"   Content: {quantities}")
+        print(f"{'='*80}\n")
+        target_moyenne=tgt,
+        target_moyenne_nb=tgt_nb,
+        target_total_quantity=tgt_total,
         return redirect(url_for('copper.optimize_stocks'))
     
     # DEBUG: Show what we're processing
@@ -225,7 +459,17 @@ def confirm_bulk_output():
     # 1) Build and store a BulkOutputPlan so the store keeper (and boss)
     #    can see the exact optimal table that was used here.
     # ------------------------------------------------------------------
+    # Batch-fetch all involved stocks to avoid N+1 queries
     plan_items = []
+    try:
+        requested_ids = [int(sid) for sid in quantities.keys()]
+    except Exception:
+        requested_ids = []
+    stocks_map = {}
+    if requested_ids:
+        stocks = CopperStock.query.filter(CopperStock.id.in_(requested_ids)).all()
+        stocks_map = {s.id: s for s in stocks}
+
     for stock_id_str, qty in quantities.items():
         try:
             stock_id = int(stock_id_str)
@@ -233,7 +477,7 @@ def confirm_bulk_output():
         except (ValueError, TypeError):
             continue
 
-        stock = CopperStock.query.get(stock_id)
+        stock = stocks_map.get(stock_id)
         if not stock or qty_float <= 0:
             continue
 
@@ -300,12 +544,13 @@ def confirm_bulk_output():
     # 2) Execute the actual outputs as before (business logic unchanged)
     # ------------------------------------------------------------------
     output_count = 0
+    # Reuse batch-fetched stocks_map to process outputs (single try per stock)
     for stock_id_str, qty in quantities.items():
         try:
             stock_id = int(stock_id_str)
             qty = float(qty)
 
-            stock = CopperStock.query.get(stock_id)
+            stock = stocks_map.get(stock_id) or CopperStock.query.get(stock_id)
             if not stock:
                 continue
 
@@ -358,7 +603,6 @@ def confirm_bulk_output():
             print(f"   unit_percent: {stock.unit_percent}\n")
 
             output_count += 1
-
         except (ValueError, TypeError) as e:
             print(f"❌ Error processing stock {stock_id_str}: {e}\n")
             flash(f"❌ Error processing stock: {e}", "danger")

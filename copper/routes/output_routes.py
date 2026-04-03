@@ -42,8 +42,8 @@ def record_output():
             amount_paid = float(request.form.get('amount_paid') or 0)
             note = request.form.get("note")
 
-            stock1 = CopperStock.query.get(stock_id)
-            available_balance = stock1.local_balance or 0
+            # Use the already-fetched `stock` object instead of a second DB call
+            available_balance = stock.local_balance or 0
 
             if output_kg > available_balance:
                 flash(f"❌ Error: You cannot output {output_kg} kg. Only {available_balance} kg available.", "danger")
@@ -66,8 +66,8 @@ def record_output():
             db.session.flush()
 
             # Recalculate the related stock's remaining local balance and aggregates
-            stock1.local_balance = stock1.remaining_stock()
-            stock1.unit_percent = calculate_unit_percentage(stock1.local_balance, stock1.percentage)
+            stock.local_balance = stock.remaining_stock()
+            stock.unit_percent = calculate_unit_percentage(stock.local_balance, stock.percentage)
             from copper.models import CopperStock
             CopperStock.update_global_moyennes()
 

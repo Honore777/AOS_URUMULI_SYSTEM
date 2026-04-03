@@ -16,7 +16,8 @@ class CassiteriteSupplierPayment(db.Model):
     stock_id = db.Column(
         db.Integer,
         db.ForeignKey('cassiterite_stock.id'),
-        nullable=False
+        nullable=False,
+        index=True,
     )
     
     amount = db.Column(db.Float, nullable=False)

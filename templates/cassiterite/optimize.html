@@ -31,6 +31,7 @@
         </div>
         {% endif %}
         {% endwith %}
+        {% set target_moyenne_value = form.target_moyenne.data if form and (form.target_moyenne.data is not none and form.target_moyenne.data != 'None') else '' %}
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
         <!-- SECTION 1: INITIAL - Enter target quality and show recommended  -->
@@ -104,13 +105,18 @@
                     <div class="grid grid-cols-2 gap-4">
                         <div>
                             <p class="text-gray-600 text-sm">Target Moyenne:</p>
-                            <p class="text-2xl font-bold text-green-600">{{ form.target_moyenne.data }}%</p>
+                            <p class="text-2xl font-bold text-green-600">{{ target_moyenne_value }}{% if target_moyenne_value %}%{% endif %}</p>
                         </div>
                         <div>
                             <p class="text-gray-600 text-sm">Achieved Moyenne:</p>
                             <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne) }}%</p>
                         </div>
                     </div>
+                </div>
+
+                <div class="mb-4 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                    <p class="text-gray-600 text-sm">Achieved Total Quantity:</p>
+                    <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_total_quantity) }} kg</p>
                 </div>
 
                 <!-- Recommended Stocks Table -->
@@ -156,7 +162,7 @@
                     <!-- Edit Selection Button -->
                     <form method="POST" action="{{ url_for('cassiterite.optimize') }}" class="space-y-0">
                         {{ form.hidden_tag() }}
-                        <input type="hidden" name="target_moyenne" value="{{ form.target_moyenne.data }}">
+                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
 
                         <button type="submit" 
                                 name="action" 
@@ -264,7 +270,7 @@
                 
                 <div class="bg-amber-50 p-4 rounded-lg border-l-4 border-amber-500 mb-6">
                     <p class="text-gray-600 text-sm">Target Moyenne:</p>
-                    <p class="text-2xl font-bold text-amber-600">{{ form.target_moyenne.data }}%</p>
+                    <p class="text-2xl font-bold text-amber-600">{{ target_moyenne_value }}{% if target_moyenne_value %}%{% endif %}</p>
                 </div>
 
                 <p class="bg-yellow-100 text-yellow-800 p-3 rounded mb-4 text-sm">
@@ -272,9 +278,19 @@
                 </p>
 
                 <!-- EDITABLE FORM -->
-                <form method="POST" action="{{ url_for('cassiterite.optimize') }}" class="space-y-4">
+                <div class="mb-3 flex items-center justify-between">
+                    <form method="GET" action="{{ url_for('cassiterite.optimize') }}" class="flex items-center gap-2">
+                        <input type="hidden" name="mode" value="edit">
+                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
+                        <input type="text" name="q" value="{{ q }}" placeholder="Search supplier..." class="px-3 py-2 border border-gray-300 rounded-md" />
+                        <button type="submit" class="bg-indigo-600 text-white px-3 py-2 rounded-md">Search</button>
+                    </form>
+                    <div class="text-sm text-gray-600">Showing page {{ page }} / {{ total_pages }} — {{ total_count }} rows</div>
+                </div>
+
+                    <form id="cass-optimize-edit-form" method="POST" action="{{ url_for('cassiterite.optimize') }}" class="space-y-4">
                     {{ form.hidden_tag() }}
-                    <input type="hidden" name="target_moyenne" value="{{ form.target_moyenne.data }}">
+                    <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
 
                     <div id="cass-edit-stocks-table" class="overflow-x-auto mb-6">
                         <table class="min-w-full bg-white border border-gray-300">
@@ -297,16 +313,30 @@
                                     <td class="px-4 py-2">
                                         <input type="number" 
                                                name="qty_{{ stock.id }}" 
-                                               value="{{ "%.2f"|format(quantities.get(stock.id, stock.local_balance)) }}"
+                                               value="{{ '%.2f'|format(quantities.get(stock.id)) if stock.id in quantities else '' }}"
                                                step="0.01"
                                                min="0"
-                                               placeholder="0"
+                                               placeholder=""
                                                class="w-32 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-amber-500 text-right">
+                                        {% if stock.id in quantities %}
+                                            <div class="mt-1 text-xs text-green-700 font-semibold">Recommended</div>
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
                         </table>
+                        <div class="mt-3 flex items-center justify-between">
+                            <div>
+                                {% if page > 1 %}
+                                    <a href="{{ url_for('cassiterite.optimize') }}?page={{ page-1 }}&per_page={{ per_page }}&q={{ q }}&mode={{ mode or '' }}&target_moyenne={{ target_moyenne_value }}" class="px-3 py-1 bg-gray-200 rounded">← Prev</a>
+                                {% endif %}
+                                {% if page < total_pages %}
+                                    <a href="{{ url_for('cassiterite.optimize') }}?page={{ page+1 }}&per_page={{ per_page }}&q={{ q }}&mode={{ mode or '' }}&target_moyenne={{ target_moyenne_value }}" class="px-3 py-1 bg-gray-200 rounded ml-2">Next →</a>
+                                {% endif %}
+                            </div>
+                            <div class="text-sm text-gray-600">Per page: {{ per_page }}</div>
+                        </div>
                     </div>
 
                     <!-- Action Buttons -->
@@ -340,10 +370,10 @@
             <div class="bg-white p-6 rounded-lg shadow-md mb-8">
                 <h2 class="text-2xl font-bold mb-4 text-gray-800">✅ Step 3: Optimized Results (Hybrid Variables)</h2>
                 
-                <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                    <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
                     <div>
                         <p class="text-gray-600 text-sm">Target Moyenne:</p>
-                        <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne.data }}%</p>
+                        <p class="text-2xl font-bold text-indigo-600">{{ target_moyenne_value }}{% if target_moyenne_value %}%{% endif %}</p>
                     </div>
                     <div>
                         <p class="text-gray-600 text-sm">Achieved Moyenne:</p>
@@ -479,7 +509,7 @@
 
                 <div class="flex gap-3">
                     <form method="POST" action="{{ url_for('cassiterite.optimize') }}" class="flex-1">
-                        <input type="hidden" name="target_moyenne" value="{{ form.target_moyenne.data }}">
+                        <input type="hidden" name="target_moyenne" value="{{ target_moyenne_value }}">
                         <button type="submit" 
                                 name="action" 
                                 value="back_to_initial"
@@ -515,6 +545,52 @@
         w.focus();
         setTimeout(()=>{ w.print(); w.close(); }, 300);
     }
+    // Autosave edits for cassiterite edit form (debounced)
+    (function(){
+        const form = document.getElementById('cass-optimize-edit-form');
+        if(!form) return;
+
+        function collectEdits(){
+            const inputs = form.querySelectorAll('input[name^="qty_"]');
+            const edits = {};
+            inputs.forEach(i => {
+                const val = (i.value||'').trim();
+                if(val !== '') edits[i.name.replace('qty_', '')] = parseFloat(val);
+            });
+            return edits;
+        }
+
+        let saveTimeout = null;
+        async function saveEdits(){
+            const edits = collectEdits();
+            if(Object.keys(edits).length === 0) return;
+            try{
+                await fetch('/cassiterite/optimize/save_edits', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({edits})
+                });
+            }catch(e){
+                console.warn('Cassiterite autosave failed', e);
+            }
+        }
+
+        form.addEventListener('input', (e)=>{
+            if(!e.target.name || !e.target.name.startsWith('qty_')) return;
+            if(saveTimeout) clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(saveEdits, 800);
+        });
+
+        window.addEventListener('beforeunload', ()=>{
+            const edits = collectEdits();
+            if(Object.keys(edits).length === 0) return;
+            try{
+                navigator.sendBeacon('/cassiterite/optimize/save_edits', new Blob([JSON.stringify({edits})], {type:'application/json'}));
+            }catch(e){
+                fetch('/cassiterite/optimize/save_edits', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({edits})});
+            }
+        });
+    })();
     </script>
 </body>
 </html>

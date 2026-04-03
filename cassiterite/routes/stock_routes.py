@@ -327,11 +327,27 @@ def cassiterite_filter_stocks():
             stocks_query = stocks_query.filter(CassiteriteStock.voucher_no == lot_no)
 
         # Prefer a meaningful snapshot: only remaining stocks (local_balance > 0)
-        filtered_stocks = stocks_query.filter(CassiteriteStock.local_balance > 0).all()
+        # Support pagination parameters from client to avoid returning all rows
+        page = int(data.get('page', 1) or 1)
+        per_page = int(data.get('per_page', 20) or 20)
+        include_all = bool(data.get('include_all'))
 
-        # Outputs are already date-filtered above; return all matching outputs.
-        # NOTE: if you expect many outputs, consider paging here instead of returning all.
-        filtered_outputs = outputs_query.all()
+        stocks_local_q = stocks_query.filter(CassiteriteStock.local_balance > 0)
+        stocks_pagination = stocks_local_q.paginate(page=page, per_page=per_page, error_out=False)
+        filtered_stocks = stocks_pagination.items
+
+        # Safeguard large result sets
+        MAX_RETURN_ROWS = 2000
+        if include_all and stocks_pagination.total > MAX_RETURN_ROWS:
+            logger.warning("cassiterite.filter_stocks: include_all requested but total %d > max %d", stocks_pagination.total, MAX_RETURN_ROWS)
+            return jsonify({'error': 'Request would return too many rows; please narrow your filter or use the export endpoint.'}), 400
+
+        # Outputs are date-filtered above; restrict outputs to the current page's stocks
+        page_stock_ids = [s.id for s in filtered_stocks]
+        if page_stock_ids:
+            filtered_outputs = outputs_query.filter(CassiteriteOutput.stock_id.in_(page_stock_ids)).all()
+        else:
+            filtered_outputs = []
 
         # Build common stock filters for DB-side aggregates
         stock_filters = []
@@ -413,12 +429,21 @@ def cassiterite_filter_stocks():
             # Implemented in SQL as SUM(balance_to_pay * local_balance / input_kg)
             # and restricted to positive input_kg to avoid division-by-zero.
         remaining_value_filters = list(remaining_filters) + [CassiteriteStock.input_kg > 0]
-        inventory_value = db.session.query(
+        import time
+        timings = {}
+        try:
+            t_inv = time.perf_counter()
+            inventory_value = db.session.query(
                 func.coalesce(
                     func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
                     0,
                 )
             ).filter(*remaining_value_filters).scalar() or 0
+            timings['inventory_value'] = time.perf_counter() - t_inv
+        except Exception:
+            logger.exception('cassiterite.filter_stocks: inventory_value aggregate failed')
+            inventory_value = 0
+            timings['inventory_value'] = None
 
             # Supplier outstanding (liability) is based on the original supplier
             # obligation minus all payments recorded for these lots.
@@ -431,6 +456,13 @@ def cassiterite_filter_stocks():
         total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
 
         # Serialize stocks
+        # Build a per-stock outputs sum to compute remaining without N+1 DB calls
+        from collections import defaultdict
+        outputs_sums = defaultdict(float)
+        for o in filtered_outputs:
+            if o and o.stock_id:
+                outputs_sums[o.stock_id] += float(o.output_kg or 0)
+
         stocks_data = []
         for s in filtered_stocks:
             stocks_data.append({
@@ -459,7 +491,7 @@ def cassiterite_filter_stocks():
                 'local_balance': round(s.local_balance or 0, 2),
                 'balance_to_pay': round(s.balance_to_pay or 0, 2),
                 'total_balance': round(s.total_balance or 0, 2),
-                'remaining': round(s.remaining_stock() or 0, 2),
+                'remaining': round(((s.input_kg or 0) - outputs_sums.get(s.id, 0)) or 0, 2),
             })
 
         # Serialize outputs for chart
@@ -474,6 +506,7 @@ def cassiterite_filter_stocks():
         # output row cost = output_kg * (stock.balance_to_pay / NULLIF(stock.input_kg,0)).
         # This ensures COGS counts only goods actually sold in the window.
         try:
+            t_cogs = time.perf_counter()
             cogs_q = db.session.query(
                 func.coalesce(
                     func.sum(
@@ -488,13 +521,20 @@ def cassiterite_filter_stocks():
                     cogs_q = cogs_q.filter(f)
 
             cost_of_stock_sold = float(cogs_q.scalar() or 0.0)
+            timings['cogs_aggregate'] = time.perf_counter() - t_cogs
         except Exception:
             logger.exception("cassiterite.filter_stocks: failed computing COGS from outputs; falling back")
             cost_of_stock_sold = (total_supplier_obligation or 0) - (inventory_value or 0)
-        logger.info("cassiterite.filter_stocks: completed stocks=%d outputs=%d", len(filtered_stocks), len(filtered_outputs))
+            timings['cogs_aggregate'] = None
+        logger.info("cassiterite.filter_stocks: completed stocks=%d outputs=%d page=%d", len(filtered_stocks), len(filtered_outputs), page)
+        logger.info('cassiterite.filter_stocks timings: %s', timings)
         return jsonify({
             'stocks': stocks_data,
             'outputs': outputs_data,
+            'page': page,
+            'per_page': per_page,
+            'pages': stocks_pagination.pages if 'stocks_pagination' in locals() else 1,
+            'total': stocks_pagination.total if 'stocks_pagination' in locals() else len(stocks_data),
             'total_input': round(total_input, 2),
             'total_output': round(total_output, 2),
             'total_debt': round(total_debt, 2),

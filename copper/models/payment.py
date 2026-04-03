@@ -16,7 +16,8 @@ class SupplierPayment(db.Model):
     stock_id = db.Column(
         db.Integer,
         db.ForeignKey('copper_stock.id'),
-        nullable=False
+        nullable=False,
+        index=True,
     )
     
     amount = db.Column(db.Float, nullable=False)

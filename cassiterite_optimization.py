@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @trace_time
-def select_stocks_for_average_quality(target_moyenne=None):
+def select_stocks_for_average_quality(target_moyenne=None, minimize_quantity=False):
     """
     Binary selection: Select stocks to achieve target average quality.
     Each stock is either selected (1) or not (0) - takes ALL available if selected.
@@ -54,14 +54,26 @@ def select_stocks_for_average_quality(target_moyenne=None):
     )
     
     # Objective: minimize error from target moyenne
-    if target_moyenne:
+    objective_terms = []
+    if target_moyenne is not None:
         error = LpVariable("error_moyenne", lowBound=0)
         prob += error >= total_unit - (target_moyenne * total_qty)
         prob += error >= -(total_unit - (target_moyenne * total_qty))
-        prob += error
+        objective_terms.append(error)
     else:
-        # If no target, just maximize quality
-        prob += total_unit
+        # If no target, prefer smaller total_qty (minimize quantity) or prefer higher quality?
+        # Default behavior: minimize total_qty to keep selection compact.
+        objective_terms.append(total_qty)
+
+    # If requested, prefer smaller total quantity as tie-breaker
+    if minimize_quantity:
+        try:
+            small_weight = 1e-3
+            objective_terms.append(small_weight * total_qty)
+        except Exception:
+            objective_terms.append(total_qty)
+
+    prob += lpSum(objective_terms)
     
     # At least one stock must be selected
     prob += lpSum(stock_vars[s.id] for s in remaining_stocks) >= 1
@@ -87,7 +99,7 @@ def select_stocks_for_average_quality(target_moyenne=None):
     total_unit_val = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.id.in_(selected_ids)).scalar() or 0
     total_qty_val = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.id.in_(selected_ids)).scalar() or 0
     achieved_moyenne = (total_unit_val / total_qty_val) if total_qty_val > 0 else 0
-    return selected_stocks, achieved_moyenne
+    return selected_stocks, achieved_moyenne, float(total_qty_val)
 
 
 def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minimum_quantities=None):
@@ -151,7 +163,7 @@ def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minim
     )
     
     # Objective: minimize error from target moyenne
-    if target_moyenne:
+    if target_moyenne is not None:
         error = LpVariable("error_moyenne", lowBound=0)
         prob += error >= total_unit - (target_moyenne * total_qty)
         prob += error >= -(total_unit - (target_moyenne * total_qty))

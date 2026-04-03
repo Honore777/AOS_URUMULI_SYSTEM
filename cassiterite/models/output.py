@@ -15,9 +15,9 @@ class CassiteriteOutput(db.Model):
     __tablename__ = 'cassiterite_output'
 
     id = db.Column(db.Integer, primary_key=True)
-    stock_id = db.Column(db.Integer, db.ForeignKey('cassiterite_stock.id'), nullable=False)
+    stock_id = db.Column(db.Integer, db.ForeignKey('cassiterite_stock.id'), nullable=False, index=True)
 
-    date = db.Column(db.Date, nullable=False, default=datetime.utcnow)
+    date = db.Column(db.Date, nullable=False, default=datetime.utcnow, index=True)
     output_kg = db.Column(db.Float, nullable=False)
     batch_id = db.Column(db.String(100), nullable=True, index=True)
     customer = db.Column(db.String(100))

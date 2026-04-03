@@ -152,7 +152,7 @@
 
             </div>
 
-            {% if remaining_stocks %}
+            {% if remaining_stocks_count %}
                 <div class="overflow-x-auto rounded-lg shadow-md">
                     <table class="w-full border-collapse">
                         <thead class="bg-blue-600 text-white sticky top-0">
@@ -243,7 +243,7 @@
                     </table>
                 </div>
                 <!-- Pagination Controls -->
-                <div class="flex justify-center mt-6">
+                <div id="server-pagination" class="flex justify-center mt-6">
                     <nav class="inline-flex rounded-md shadow-sm" aria-label="Pagination">
                         {% if stocks_pagination.has_prev %}
                             <a href="{{ url_for('copper.dashboard', page=stocks_pagination.prev_num) }}" class="px-4 py-2 border border-gray-300 bg-white text-gray-700 hover:bg-blue-100 rounded-l-md">Previous</a>
@@ -403,22 +403,8 @@
             document.getElementById('card-moyenne').textContent = formatNumber(moyenneValue, 4);
             document.getElementById('card-moyenne-nb').textContent = formatNumber(moyenneNbValue, 4);
             
-            // Fetch initial data and initialize table/cards
-            fetch('{{ url_for("copper.filter_stocks") }}', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ start_date: '', end_date: '' })
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log('Initialized dashboard data:', data);
-                window.currentFilteredData = data;
-                updateTable(data.stocks || []);
-                updateAllCards(data || {});
-            })
-            .catch(error => {
-                console.error('Error initializing dashboard data:', error);
-            });
+            // Fetch initial data (page 1) and initialize table/cards
+            fetchPage(1);
         }
 
         // Charts removed: keep compatibility no-op
@@ -437,8 +423,10 @@
             const startDate = document.getElementById('filter-start-date').value;
             const endDate = document.getElementById('filter-end-date').value;
             const voucherNo = document.getElementById('filter-voucher').value;
+            const page = 1;
+            const per_page = 20;
 
-            // Send to backend
+            // Use paged fetch to avoid large payloads
             fetch('{{ url_for("copper.filter_stocks") }}', {
                 method: 'POST',
                 headers: {
@@ -447,7 +435,10 @@
                 body: JSON.stringify({
                     start_date: startDate,
                     end_date: endDate,
-                    voucher_no: voucherNo
+                    voucher_no: voucherNo,
+                    page: page,
+                    per_page: per_page,
+                    include_all: false
                 })
             })
             .then(response => response.json())
@@ -456,6 +447,7 @@
                 window.currentFilteredData = data;
                 updateTable(data.stocks);
                 updateAllCards(data);
+                renderPaginationControls(data.page || 1, data.pages || 1);
             })
             .catch(error => console.error('Error:', error));
         }
@@ -581,12 +573,79 @@
             }
         }
 
+        // Fetch a specific page of filtered stocks
+        function fetchPage(page = 1, per_page = 20) {
+            const startDate = document.getElementById('filter-start-date').value;
+            const endDate = document.getElementById('filter-end-date').value;
+            const voucherNo = document.getElementById('filter-voucher').value;
+
+            fetch('{{ url_for("copper.filter_stocks") }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ start_date: startDate, end_date: endDate, voucher_no: voucherNo, page: page, per_page: per_page, include_all: false })
+            })
+            .then(r => r.json())
+            .then(data => {
+                window.currentFilteredData = data;
+                updateTable(data.stocks || []);
+                updateAllCards(data || {});
+                renderPaginationControls(data.page || 1, data.pages || 1);
+            })
+            .catch(e => console.error('fetchPage error', e));
+        }
+
+        // Render simple pagination controls (Prev / Next)
+        function renderPaginationControls(currentPage, totalPages) {
+            // Hide the server-rendered pagination when client-side (AJAX) pagination is active
+            const serverNav = document.getElementById('server-pagination');
+            if (serverNav) serverNav.style.display = 'none';
+
+            let container = document.getElementById('pagination-controls');
+            if (!container) {
+                // create container below the table
+                container = document.createElement('div');
+                container.id = 'pagination-controls';
+                container.className = 'flex items-center gap-2 mt-4';
+                const tableWrapper = document.querySelector('.mb-10');
+                if (tableWrapper && tableWrapper.parentNode) tableWrapper.parentNode.appendChild(container);
+            }
+            container.innerHTML = '';
+
+            const prevBtn = document.createElement('button');
+            prevBtn.textContent = '◀ Prev';
+            prevBtn.className = 'px-3 py-1 bg-gray-200 rounded';
+            prevBtn.disabled = currentPage <= 1;
+            prevBtn.onclick = () => { if (currentPage > 1) fetchPage(currentPage - 1); };
+
+            const nextBtn = document.createElement('button');
+            nextBtn.textContent = 'Next ▶';
+            nextBtn.className = 'px-3 py-1 bg-gray-200 rounded';
+            nextBtn.disabled = currentPage >= totalPages;
+            nextBtn.onclick = () => { if (currentPage < totalPages) fetchPage(currentPage + 1); };
+
+            const info = document.createElement('span');
+            info.className = 'text-sm text-gray-600';
+            info.textContent = `Page ${currentPage} of ${totalPages}`;
+
+            container.appendChild(prevBtn);
+            container.appendChild(info);
+            container.appendChild(nextBtn);
+        }
+
         // Reset filter and reload page
         function resetFilter(event) {
             event.preventDefault();
             document.getElementById('filter-start-date').value = '';
             document.getElementById('filter-end-date').value = '';
-            location.reload();
+            // Use paged fetch to reset to page 1 instead of reloading and returning all rows
+            fetch('{{ url_for("copper.filter_stocks") }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ start_date: '', end_date: '', voucher_no: '', page: 1, per_page: 20, include_all: false })
+            })
+            .then(r => r.json())
+            .then(data => { window.currentFilteredData = data; updateTable(data.stocks); updateAllCards(data); renderPaginationControls(data.page || 1, data.pages || 1); })
+            .catch(e => console.error('reset error', e));
         }
 
         // ---- Edit/Delete Copper Stocks (modal) ----
