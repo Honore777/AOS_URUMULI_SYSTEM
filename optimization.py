@@ -148,10 +148,20 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
         prob += error_moyenne_nb >= -(total_t_unity - target_moyenne_nb * total_balance)
         objective_terms.append(error_moyenne_nb)
 
-    # Minimize quantity error when a target_total_quantity is provided
+    # Minimize quantity error when a target_total_quantity is provided.
+    # Also enforce a clamped lower bound on total_balance to avoid the solver
+    # trivially minimizing the absolute quality error by selecting tiny totals.
     if target_total_quantity is not None:
         try:
             tgt_q = float(target_total_quantity)
+            # Clamp requested target to the total available stock so we never
+            # create an impossible hard constraint that the model cannot satisfy.
+            avail_total = sum(s.local_balance for s in remaining_stocks)
+            req_q = min(tgt_q, avail_total)
+            # Require at least the requested (clamped) quantity. This prevents
+            # the solver from returning a tiny total just to reduce absolute error.
+            prob += total_balance >= req_q
+
             error_total = LpVariable("error_total", lowBound=0)
             prob += error_total >= total_balance - tgt_q
             prob += error_total >= -(total_balance - tgt_q)
@@ -224,51 +234,16 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
 
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
 
-    # If the solver failed to produce a selection (or returned infeasible),
-    # fall back to a lightweight greedy heuristic so the UI can show a
-    # reasonable recommendation instead of an empty result. This keeps the
-    # interactive flow usable when the chosen LP solver is not available
-    # or when the model is not solvable by the exact solver within limits.
+    # If the solver produced no selection, do NOT apply a greedy heuristic
+    # fallback. Return empty results so callers can detect solver failure and
+    # avoid being presented with misleading heuristic recommendations.
     if not selected_ids:
         try:
-            logger.info("select_stocks_for_moyenne: solver produced no selection; using greedy fallback")
-            # Sort by per-kg quality (unit_percent per local_balance) desc
-            sorted_stocks = sorted(remaining_stocks, key=lambda s: (s.unit_percent / s.local_balance) if s.local_balance > 0 else 0, reverse=True)
-            sel_ids = []
-            sum_unit = 0.0
-            sum_balance = 0.0
-            tgt_m = None
-            try:
-                tgt_m = float(target_moyenne) if target_moyenne is not None else None
-            except Exception:
-                tgt_m = None
-            tgt_q = None
-            try:
-                tgt_q = float(target_total_quantity) if target_total_quantity is not None else None
-            except Exception:
-                tgt_q = None
-
-            for s in sorted_stocks:
-                sel_ids.append(s.id)
-                sum_unit += s.unit_percent
-                sum_balance += s.local_balance
-                achieved = (sum_unit / sum_balance) if sum_balance else 0
-                # stop if we reached target moyenne (if provided)
-                if tgt_m is not None and achieved >= tgt_m:
-                    break
-                # or stop if we reached target total quantity (if provided)
-                if tgt_q is not None and sum_balance >= tgt_q:
-                    break
-
-            # ensure at least one stock selected
-            if not sel_ids and remaining_stocks:
-                sel_ids = [remaining_stocks[0].id]
-
-            selected_ids = sel_ids
+            solver_status = LpStatus[prob.status] if prob.status is not None else 'Unknown'
         except Exception:
-            # fallback failed — return safe empty values
-            logger.exception("select_stocks_for_moyenne: greedy fallback failed")
-            return [], 0, 0, 0.0
+            solver_status = str(prob.status)
+        logger.warning("select_stocks_for_moyenne: solver status=%s; no selection produced; not applying greedy fallback", solver_status)
+        return [], 0, 0, 0.0
 
     # Rehydrate selected stocks ORM objects (for display) but compute aggregates using DB
     selected_stocks = CopperStock.query.filter(CopperStock.id.in_(selected_ids)).all()
@@ -469,29 +444,17 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
             return elapsed
 
     try:
-        if HAS_HIGHS and HiGHS_CMD is not None:
-            highs_exec = _find_highs_executable()
-            if highs_exec:
-                solver_path = highs_exec
-                solver_name = 'HiGHS'
-                logger.info("select_stocks_with_minimum_quantities: using HiGHS at %s", highs_exec)
-                try:
-                    elapsed = _run_solver_and_time(lambda: prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit)), 'HiGHS')
-                    if elapsed > max(1.0, time_limit * 1.05):
-                        logger.warning("select_stocks_with_minimum_quantities: HiGHS exceeded time_limit (requested=%ss, elapsed=%.3fs)", time_limit, elapsed)
-                except Exception as e:
-                    logger.warning("select_stocks_with_minimum_quantities: HiGHS execution failed (%s), falling back to CBC", e)
-                    _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
-            else:
-                logger.info("select_stocks_with_minimum_quantities: HiGHS detected in pulp but highs executable not found; using CBC")
-                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
-        else:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
-    except TypeError:
+        # Force CBC-only solving. Do not attempt to use HiGHS.
         try:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
-        except Exception:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+        except TypeError:
+            try:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
+            except Exception:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
+    except Exception as e:
+        logger.exception("select_stocks_with_minimum_quantities: CBC solver failed (%s)", e)
+        return [], 0, 0, {}
     logger.info("select_stocks_with_minimum_quantities: solver used=%s path=%s", solver_name, solver_path)
     from pulp import LpStatus, value
     try:

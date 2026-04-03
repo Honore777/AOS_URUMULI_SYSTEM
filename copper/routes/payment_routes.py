@@ -274,7 +274,7 @@ def pay_worker():
                     user_id=boss_user.id,
                     type_='PAYMENT_EXECUTED',
                     message=f"Hasabwe kwemeza: Kwishyura umukozi  - {form.worker_name.data}, Amafaranga: {form.amount.data} RWF.",
-                    related_type='\kwishyura umukozi',
+                    related_type='kwishyura umukozi',
                     related_id=payment.id,
                 )
             # Persist in-app notification before attempting email
