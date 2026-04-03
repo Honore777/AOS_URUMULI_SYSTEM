@@ -48,6 +48,12 @@ from utils import trace_time
 
 logger = logging.getLogger(__name__)
 
+# Toggle to allow falling back to CBC when HiGHS executable is missing.
+# Default is disabled to avoid silent, misleading fallbacks in deployed
+# environments. Set OPTIMIZER_ALLOW_FALLBACK_TO_CBC=1 to re-enable.
+import os
+ALLOW_FALLBACK_CBC = os.environ.get('OPTIMIZER_ALLOW_FALLBACK_TO_CBC', '0').lower() in ('1', 'true', 'yes')
+
 # Simple in-process cache for optimizer results to avoid repeated solves
 # Keyed by function name + parameters. Stores lightweight serializable
 # results (ids, numeric aggregates) and rehydrates ORM objects on hit.
@@ -210,11 +216,21 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
                     if elapsed > max(1.0, time_limit * 1.05):
                         logger.warning("select_stocks_for_moyenne: HiGHS exceeded time_limit (requested=%ss, elapsed=%.3fs)", time_limit, elapsed)
                 except Exception as e:
-                    logger.warning("select_stocks_for_moyenne: HiGHS execution failed (%s), falling back to CBC", e)
-                    _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+                    logger.exception("select_stocks_for_moyenne: HiGHS execution failed (%s)", e)
+                    if ALLOW_FALLBACK_CBC:
+                        logger.info("select_stocks_for_moyenne: HiGHS failed; falling back to CBC because OPTIMIZER_ALLOW_FALLBACK_TO_CBC is enabled")
+                        _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+                    else:
+                        logger.error("select_stocks_for_moyenne: HiGHS failed and CBC fallback is disabled. Install HiGHS or set OPTIMIZER_ALLOW_FALLBACK_TO_CBC=1 to enable fallback.")
+                        return [], 0, 0, 0.0
             else:
-                logger.info("select_stocks_for_moyenne: HiGHS detected in pulp but highs executable not found; using CBC")
-                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+                # HiGHS is available in pulp but executable not found on PATH
+                if ALLOW_FALLBACK_CBC:
+                    logger.info("select_stocks_for_moyenne: HiGHS detected in pulp but highs executable not found; falling back to CBC because OPTIMIZER_ALLOW_FALLBACK_TO_CBC is enabled")
+                    _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+                else:
+                    logger.error("select_stocks_for_moyenne: HiGHS detected in pulp but highs executable not found and CBC fallback is disabled. Install HiGHS or set OPTIMIZER_ALLOW_FALLBACK_TO_CBC=1 to enable fallback.")
+                    return [], 0, 0, 0.0
         else:
             _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
     except TypeError:
