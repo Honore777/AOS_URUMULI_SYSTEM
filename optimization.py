@@ -231,8 +231,51 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
 
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
 
+    # If the solver failed to produce a selection (or returned infeasible),
+    # fall back to a lightweight greedy heuristic so the UI can show a
+    # reasonable recommendation instead of an empty result. This keeps the
+    # interactive flow usable when the chosen LP solver is not available
+    # or when the model is not solvable by the exact solver within limits.
     if not selected_ids:
-        return [], 0, 0, 0.0
+        try:
+            logger.info("select_stocks_for_moyenne: solver produced no selection; using greedy fallback")
+            # Sort by per-kg quality (unit_percent per local_balance) desc
+            sorted_stocks = sorted(remaining_stocks, key=lambda s: (s.unit_percent / s.local_balance) if s.local_balance > 0 else 0, reverse=True)
+            sel_ids = []
+            sum_unit = 0.0
+            sum_balance = 0.0
+            tgt_m = None
+            try:
+                tgt_m = float(target_moyenne) if target_moyenne is not None else None
+            except Exception:
+                tgt_m = None
+            tgt_q = None
+            try:
+                tgt_q = float(target_total_quantity) if target_total_quantity is not None else None
+            except Exception:
+                tgt_q = None
+
+            for s in sorted_stocks:
+                sel_ids.append(s.id)
+                sum_unit += s.unit_percent
+                sum_balance += s.local_balance
+                achieved = (sum_unit / sum_balance) if sum_balance else 0
+                # stop if we reached target moyenne (if provided)
+                if tgt_m is not None and achieved >= tgt_m:
+                    break
+                # or stop if we reached target total quantity (if provided)
+                if tgt_q is not None and sum_balance >= tgt_q:
+                    break
+
+            # ensure at least one stock selected
+            if not sel_ids and remaining_stocks:
+                sel_ids = [remaining_stocks[0].id]
+
+            selected_ids = sel_ids
+        except Exception:
+            # fallback failed — return safe empty values
+            logger.exception("select_stocks_for_moyenne: greedy fallback failed")
+            return [], 0, 0, 0.0
 
     # Rehydrate selected stocks ORM objects (for display) but compute aggregates using DB
     selected_stocks = CopperStock.query.filter(CopperStock.id.in_(selected_ids)).all()

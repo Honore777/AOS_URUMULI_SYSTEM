@@ -555,6 +555,24 @@ def filter_stocks():
             if o and o.stock_id:
                 outputs_sums[o.stock_id] += float(o.output_kg or 0)
 
+        # Default aggregate values to avoid UnboundLocalError if computation fails
+        total_input = 0
+        total_stocks = stocks_pagination.total
+        total_output = 0
+        total_debt = 0
+        total_sales = 0
+        total_supplier_obligation = 0
+        total_payments = 0
+        inventory_value = 0
+        cost_of_stock_sold = 0
+        gross_profit = 0
+        supplier_outstanding = 0
+        total_unit_percent = 0
+        total_remaining_balance = 0
+        moyenne = 0
+        total_t_unity = 0
+        moyenne_nb = 0
+
         # Start timing for DB aggregates
         if include_aggregates:
             # If caller requested the global dashboard aggregates (no date/voucher filters)
