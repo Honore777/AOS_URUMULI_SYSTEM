@@ -186,12 +186,10 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
     # gap_rel: relative optimality gap (e.g., 0.01 = 1%)
     time_limit = 12
     gap_rel = 0.01
-    # Choose solver and log decision for diagnostics
+    # We will use CBC exclusively in this deployment (HiGHS disabled)
     solver_name = 'CBC'
     solver_path = None
-    # Wrap solver invocation to measure elapsed time and log it. If HiGHS
-    # takes longer than the requested time_limit, we log a warning so
-    # operators can decide whether to prefer CBC in deployments.
+
     def _run_solver_and_time(solver_callable, label):
         start = time.perf_counter()
         try:
@@ -205,39 +203,18 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
             return elapsed
 
     try:
-        if HAS_HIGHS and HiGHS_CMD is not None:
-            highs_exec = _find_highs_executable()
-            if highs_exec:
-                solver_path = highs_exec
-                solver_name = 'HiGHS'
-                logger.info("select_stocks_for_moyenne: using HiGHS at %s", highs_exec)
-                try:
-                    elapsed = _run_solver_and_time(lambda: prob.solve(HiGHS_CMD(path=highs_exec, msg=0, timeLimit=time_limit)), 'HiGHS')
-                    if elapsed > max(1.0, time_limit * 1.05):
-                        logger.warning("select_stocks_for_moyenne: HiGHS exceeded time_limit (requested=%ss, elapsed=%.3fs)", time_limit, elapsed)
-                except Exception as e:
-                    logger.exception("select_stocks_for_moyenne: HiGHS execution failed (%s)", e)
-                    if ALLOW_FALLBACK_CBC:
-                        logger.info("select_stocks_for_moyenne: HiGHS failed; falling back to CBC because OPTIMIZER_ALLOW_FALLBACK_TO_CBC is enabled")
-                        _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
-                    else:
-                        logger.error("select_stocks_for_moyenne: HiGHS failed and CBC fallback is disabled. Install HiGHS or set OPTIMIZER_ALLOW_FALLBACK_TO_CBC=1 to enable fallback.")
-                        return [], 0, 0, 0.0
-            else:
-                # HiGHS is available in pulp but executable not found on PATH
-                if ALLOW_FALLBACK_CBC:
-                    logger.info("select_stocks_for_moyenne: HiGHS detected in pulp but highs executable not found; falling back to CBC because OPTIMIZER_ALLOW_FALLBACK_TO_CBC is enabled")
-                    _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
-                else:
-                    logger.error("select_stocks_for_moyenne: HiGHS detected in pulp but highs executable not found and CBC fallback is disabled. Install HiGHS or set OPTIMIZER_ALLOW_FALLBACK_TO_CBC=1 to enable fallback.")
-                    return [], 0, 0, 0.0
-        else:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
-    except TypeError:
+        # Run CBC only. Try the modern `fracGap` parameter first, fall back to
+        # `ratioGap` for older PuLP, then to no-gap argument.
         try:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
-        except Exception:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+        except TypeError:
+            try:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
+            except Exception:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
+    except Exception as e:
+        logger.exception("select_stocks_for_moyenne: CBC solver failed (%s)", e)
+        return [], 0, 0, 0.0
     from pulp import LpStatus, value
     try:
         logger.info("select_stocks_for_moyenne: solver used=%s path=%s status=%s objective=%s",
