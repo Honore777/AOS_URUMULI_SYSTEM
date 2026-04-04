@@ -6,6 +6,8 @@ from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpBinary, LpContinuou
 from cassiterite.models import CassiteriteStock
 from types import SimpleNamespace
 from config import db
+import os
+import time
 import logging
 from utils import trace_time
 from sqlalchemy import func
@@ -79,20 +81,69 @@ def select_stocks_for_average_quality(target_moyenne=None, minimize_quantity=Fal
     prob += lpSum(stock_vars[s.id] for s in remaining_stocks) >= 1
     
     # Solve with time limit and relative gap to avoid long blocking calls
-    time_limit = 12
+    time_limit = 10
     gap_rel = 0.01
-    try:
-        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
-    except TypeError:
+    solver_name = 'CBC'
+    cbc_msg = int(os.environ.get('OPTIMIZER_CBC_MSG', '0') or 0)
+
+    def _run_solver_and_time(solver_callable, label):
+        start = time.perf_counter()
         try:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+            solver_callable()
         except Exception:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
-    
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_for_average_quality: solver %s elapsed=%.4f seconds (failed)", label, elapsed)
+            except Exception:
+                pass
+            raise
+        else:
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_for_average_quality: solver %s elapsed=%.4f seconds", label, elapsed)
+            except Exception:
+                pass
+            return elapsed
+
+    # Log debug info about the constructed model before solving
+    try:
+        try:
+            avail_total = sum(s.local_balance for s in remaining_stocks)
+        except Exception:
+            avail_total = None
+    except Exception:
+        avail_total = None
+    try:
+        logger.info("select_stocks_for_average_quality: dbg rows=%d avail_total=%s vars=%d constraints=%d", len(remaining_stocks), avail_total, len(prob.variables()), len(prob.constraints))
+    except Exception:
+        pass
+
+    try:
+        base_args = {'msg': cbc_msg, 'timeLimit': time_limit}
+        try:
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'fracGap': gap_rel})), 'CBC')
+        except TypeError:
+            try:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'ratioGap': gap_rel})), 'CBC')
+            except Exception:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**base_args)), 'CBC')
+    except Exception as e:
+        logger.exception("select_stocks_for_average_quality: CBC solver failed (%s)", e)
+        return [], 0
+
+    from pulp import LpStatus, value
+    try:
+        logger.info("select_stocks_for_average_quality: solver used=%s status=%s objective=%s", solver_name, LpStatus[prob.status], value(prob.objective) if prob.status is not None else None)
+    except Exception:
+        logger.info("select_stocks_for_average_quality: solver used=%s (could not read status/objective)", solver_name)
+
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
     if not selected_ids:
-        return [], 0
-    if not selected_ids:
+        try:
+            solver_status = LpStatus[prob.status] if prob.status is not None else 'Unknown'
+        except Exception:
+            solver_status = str(getattr(prob, 'status', 'Unknown'))
+        logger.warning("select_stocks_for_average_quality: solver status=%s; no selection produced", solver_status)
         return [], 0
 
     selected_stocks = CassiteriteStock.query.filter(CassiteriteStock.id.in_(selected_ids)).all()
@@ -102,6 +153,7 @@ def select_stocks_for_average_quality(target_moyenne=None, minimize_quantity=Fal
     return selected_stocks, achieved_moyenne, float(total_qty_val)
 
 
+@trace_time
 def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minimum_quantities=None):
     """
     Hybrid selection: BINARY for unrestricted stocks, CONTINUOUS for user-specified quantities.
@@ -175,18 +227,59 @@ def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minim
     prob += total_qty >= 1
     
     # Solve with time limit and relative gap to prevent long blocking solves
-    time_limit = 12
+    time_limit = 10
     gap_rel = 0.01
-    try:
-        prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel))
-    except TypeError:
+    solver_name = 'CBC'
+    cbc_msg = int(os.environ.get('OPTIMIZER_CBC_MSG', '0') or 0)
+
+    def _run_solver_and_time(solver_callable, label):
+        start = time.perf_counter()
         try:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel))
+            solver_callable()
         except Exception:
-            prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit))
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_with_minimum_quantities_cassiterite: solver %s elapsed=%.4f seconds (failed)", label, elapsed)
+            except Exception:
+                pass
+            raise
+        else:
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_with_minimum_quantities_cassiterite: solver %s elapsed=%.4f seconds", label, elapsed)
+            except Exception:
+                pass
+            return elapsed
+
+    # Debug info about the model
+    try:
+        try:
+            avail_total = sum(s.local_balance for s in remaining_stocks)
+        except Exception:
+            avail_total = None
+    except Exception:
+        avail_total = None
+    try:
+        logger.info("select_stocks_with_minimum_quantities_cassiterite: dbg rows=%d avail_total=%s vars=%d constraints=%d", len(remaining_stocks), avail_total, len(prob.variables()), len(prob.constraints))
+    except Exception:
+        pass
+
+    try:
+        base_args = {'msg': cbc_msg, 'timeLimit': time_limit}
+        try:
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'fracGap': gap_rel})), 'CBC')
+        except TypeError:
+            try:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'ratioGap': gap_rel})), 'CBC')
+            except Exception:
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**base_args)), 'CBC')
+    except Exception as e:
+        logger.exception("select_stocks_with_minimum_quantities_cassiterite: CBC solver failed (%s)", e)
+        return [], 0, {}
+
     from pulp import LpStatus, value
     try:
-        logger.info("select_stocks_with_minimum_quantities_cassiterite: solver status=%s objective=%s", LpStatus[prob.status], value(prob.objective))
+        logger.info("select_stocks_with_minimum_quantities_cassiterite: solver used=%s status=%s objective=%s", solver_name, LpStatus[prob.status], value(prob.objective))
     except Exception:
         logger.info("select_stocks_with_minimum_quantities_cassiterite: solver finished (could not read status/objective)")
     
