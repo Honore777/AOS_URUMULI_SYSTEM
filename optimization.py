@@ -1,11 +1,6 @@
 from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpBinary, LpContinuous, PULP_CBC_CMD
 # Prefer HiGHS solver if available; fall back to CBC via PULP_CBC_CMD
-try:
-    from pulp import HiGHS_CMD
-    HAS_HIGHS = True
-except Exception:
-    HiGHS_CMD = None
-    HAS_HIGHS = False
+
 
 import shutil, os, sys
 import time
@@ -192,19 +187,27 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
     # be achieved with binary-only choices.
 
     # Solve with a time limit and relative gap to avoid long blocking calls
-    # time_limit: seconds solver will run (10-12s suggested)
+    # time_limit: seconds solver will run (10s suggested)
     # gap_rel: relative optimality gap (e.g., 0.01 = 1%)
-    time_limit = 12
+    time_limit = 10
     gap_rel = 0.01
     # We will use CBC exclusively in this deployment (HiGHS disabled)
     solver_name = 'CBC'
-    solver_path = None
+    # Keep solver invocation simple: use PuLP's bundled CBC (no explicit path)
+    cbc_msg = int(os.environ.get('OPTIMIZER_CBC_MSG', '0') or 0)
 
     def _run_solver_and_time(solver_callable, label):
         start = time.perf_counter()
         try:
             solver_callable()
-        finally:
+        except Exception:
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_for_moyenne: solver %s elapsed=%.4f seconds (failed)", label, elapsed)
+            except Exception:
+                pass
+            raise
+        else:
             elapsed = time.perf_counter() - start
             try:
                 logger.info("select_stocks_for_moyenne: solver %s elapsed=%.4f seconds", label, elapsed)
@@ -212,25 +215,40 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
                 pass
             return elapsed
 
+    # Log some debug info about the constructed model before solving
+    try:
+        try:
+            avail_total = sum(s.local_balance for s in remaining_stocks)
+        except Exception:
+            avail_total = None
+    except Exception:
+        avail_total = None
+    try:
+        logger.info("select_stocks_for_moyenne: dbg rows=%d avail_total=%s vars=%d constraints=%d", len(remaining_stocks), avail_total, len(prob.variables()), len(prob.constraints))
+    except Exception:
+        pass
+
     try:
         # Run CBC only. Try the modern `fracGap` parameter first, fall back to
-        # `ratioGap` for older PuLP, then to no-gap argument.
+        # `ratioGap` for older PuLP, then to no-gap argument. Pass detected
+        # `path` when available and respect OPTIMIZER_CBC_MSG for verbosity.
+        base_args = {'msg': cbc_msg, 'timeLimit': time_limit}
         try:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'fracGap': gap_rel})), 'CBC')
         except TypeError:
             try:
-                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'ratioGap': gap_rel})), 'CBC')
             except Exception:
-                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**base_args)), 'CBC')
     except Exception as e:
         logger.exception("select_stocks_for_moyenne: CBC solver failed (%s)", e)
         return [], 0, 0, 0.0
     from pulp import LpStatus, value
     try:
-        logger.info("select_stocks_for_moyenne: solver used=%s path=%s status=%s objective=%s",
-                    solver_name, solver_path, LpStatus[prob.status], value(prob.objective) if prob.status is not None else None)
+        logger.info("select_stocks_for_moyenne: solver used=%s status=%s objective=%s",
+                    solver_name, LpStatus[prob.status], value(prob.objective) if prob.status is not None else None)
     except Exception:
-        logger.info("select_stocks_for_moyenne: solver used=%s path=%s (could not read status/objective)", solver_name, solver_path)
+        logger.info("select_stocks_for_moyenne: solver used=%s (could not read status/objective)", solver_name)
 
     selected_ids = [s_id for s_id, var in stock_vars.items() if var.value() == 1]
 
@@ -426,16 +444,24 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
         prob += total_balance
     
     # Solve with time limit and relative gap to prevent long blocking solves
-    time_limit = 12
+    time_limit = 10
     gap_rel = 0.01
     # Choose solver and log decision for diagnostics
     solver_name = 'CBC'
-    solver_path = None
+    # Choose CBC via PuLP's default invocation (no explicit path)
+    cbc_msg = int(os.environ.get('OPTIMIZER_CBC_MSG', '0') or 0)
     def _run_solver_and_time(solver_callable, label):
         start = time.perf_counter()
         try:
             solver_callable()
-        finally:
+        except Exception:
+            elapsed = time.perf_counter() - start
+            try:
+                logger.info("select_stocks_with_minimum_quantities: solver %s elapsed=%.4f seconds (failed)", label, elapsed)
+            except Exception:
+                pass
+            raise
+        else:
             elapsed = time.perf_counter() - start
             try:
                 logger.info("select_stocks_with_minimum_quantities: solver %s elapsed=%.4f seconds", label, elapsed)
@@ -444,18 +470,20 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
             return elapsed
 
     try:
-        # Force CBC-only solving. Do not attempt to use HiGHS.
+        # Force CBC-only solving. Do not attempt to use HiGHS. Keep invocation
+        # simple and rely on PuLP's bundled CBC executable.
+        base_args = {'msg': cbc_msg, 'timeLimit': time_limit}
         try:
-            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, fracGap=gap_rel)), 'CBC')
+            _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'fracGap': gap_rel})), 'CBC')
         except TypeError:
             try:
-                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit, ratioGap=gap_rel)), 'CBC')
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**{**base_args, 'ratioGap': gap_rel})), 'CBC')
             except Exception:
-                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(msg=0, timeLimit=time_limit)), 'CBC')
+                _run_solver_and_time(lambda: prob.solve(PULP_CBC_CMD(**base_args)), 'CBC')
     except Exception as e:
         logger.exception("select_stocks_with_minimum_quantities: CBC solver failed (%s)", e)
         return [], 0, 0, {}
-    logger.info("select_stocks_with_minimum_quantities: solver used=%s path=%s", solver_name, solver_path)
+    logger.info("select_stocks_with_minimum_quantities: solver used=%s", solver_name)
     from pulp import LpStatus, value
     try:
         logger.info("select_stocks_with_minimum_quantities: solver status=%s objective=%s", LpStatus[prob.status], value(prob.objective))
