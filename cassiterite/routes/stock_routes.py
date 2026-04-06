@@ -57,6 +57,15 @@ def add_stock():
 
             try:
                 db.session.add(stock)
+                db.session.flush()
+
+                # Apply delta to global aggregate (add new stock's contribution)
+                try:
+                    q, wp, t = CassiteriteStock.contribution(stock)
+                    CassiteriteStock.apply_aggregate_delta(q, wp, t)
+                except Exception:
+                    logger.exception("cassiterite.add_stock: failed to apply aggregate delta")
+
                 db.session.commit()
                 logger.info("cassiterite.add_stock: completed voucher=%s id=%s", stock.voucher_no, getattr(stock, 'id', None))
                 flash(f"Cassiterite stock {stock.voucher_no} added successfully!", "success")
@@ -85,7 +94,24 @@ def delete_stock(stock_id):
         stock = CassiteriteStock.query.get_or_404(stock_id)
         voucher = stock.voucher_no
         try:
+            # Compute and remove this stock's contribution from the aggregate
+            try:
+                contrib_q, contrib_wp, contrib_t = CassiteriteStock.contribution(stock)
+            except Exception:
+                contrib_q = contrib_wp = contrib_t = 0.0
+
             db.session.delete(stock)
+            # Ensure deletion is flushed so downstream reads see the change
+            try:
+                db.session.flush()
+            except Exception:
+                pass
+
+            # Apply delta to the single-row aggregate (remove contribution)
+            try:
+                CassiteriteStock.apply_aggregate_delta(-contrib_q, -contrib_wp, -contrib_t)
+            except Exception:
+                logger.exception("cassiterite.delete_stock: failed to apply aggregate delta after delete")
 
             # Notify all bosses (ids only)
             boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
@@ -150,6 +176,12 @@ def edit_stock(stock_id):
                 flash(f"Lot/voucher number {voucher} already exists.", "error")
                 return redirect(url_for('cassiterite.dashboard'))
 
+        # Capture old contribution before mutating
+        try:
+            old_q, old_wp, old_t = CassiteriteStock.contribution(stock)
+        except Exception:
+            old_q = old_wp = old_t = 0.0
+
         # Update base fields
         stock.date = date_val
         stock.voucher_no = voucher
@@ -166,6 +198,16 @@ def edit_stock(stock_id):
         # Recompute derived values using DB-side aggregates
         try:
             stock.update_calculations()
+
+            # Compute new contribution and apply delta to aggregate
+            try:
+                new_q, new_wp, new_t = CassiteriteStock.contribution(stock)
+                delta_q = new_q - (old_q or 0.0)
+                delta_wp = new_wp - (old_wp or 0.0)
+                delta_t = new_t - (old_t or 0.0)
+                CassiteriteStock.apply_aggregate_delta(delta_q, delta_wp, delta_t)
+            except Exception:
+                logger.exception("cassiterite.edit_stock: failed to apply aggregate delta")
 
             # Notify all bosses (ids only)
             boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()

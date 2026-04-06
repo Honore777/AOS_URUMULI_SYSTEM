@@ -1,50 +1,49 @@
 """
 Cassiterite Stock Model
-Represents each cassiterite stock entry from supplier.
-Similar to copper but without moyenne_nb, with additional LME fields.
+Lightweight, per-row calculations are kept here. Global aggregates are
+maintained via a single-row `StockAggregate` and delta updates to keep
+add/edit/delete/output operations O(1).
 """
 from datetime import datetime
 from config import db
 from sqlalchemy import func, or_
 from utils import calculate_unit_percentage, calculate_net_balance, trace_time, logger
+from core.models import StockAggregate
+import os
 
 
 class CassiteriteStock(db.Model):
-    """
-    Represents cassiterite stocks.
-    Stores quantities, suppliers, and derived calculations.
-    """
     __tablename__ = 'cassiterite_stock'
 
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False, default=datetime.utcnow)
     voucher_no = db.Column(db.String(100), unique=True, nullable=False)
     supplier = db.Column(db.String(100), nullable=False)
-    
+
     # Input & Basic Calculations
     input_kg = db.Column(db.Float)
     percentage = db.Column(db.Float)
     u = db.Column(db.Float)
-    
-    # Cassiterite-Specific Fields
-    lme = db.Column(db.Float)  # London Metal Exchange reference price
-    m_lme = db.Column(db.Float)  # LME markup/margin
-    sec = db.Column(db.Float)  # Security fee
-    tc = db.Column(db.Float)  # Transport cost
-    
+
+    # Cassiterite-specific
+    lme = db.Column(db.Float)
+    m_lme = db.Column(db.Float)
+    sec = db.Column(db.Float)
+    tc = db.Column(db.Float)
+
     # Pricing
-    u_price = db.Column(db.Float)  # = LME + M_LME
+    u_price = db.Column(db.Float)
     exchange = db.Column(db.Float)
     transport_tag = db.Column(db.Float)
-    
+
     # Calculations
-    amount = db.Column(db.Float)  # = input_kg × u_price
-    amount_with_taxes = db.Column(db.Float)  # Total after deductions
-    tot_amount_tag = db.Column(db.Float)  # = input_kg × transport_tag
+    amount = db.Column(db.Float)
+    amount_with_taxes = db.Column(db.Float)
+    tot_amount_tag = db.Column(db.Float)
     rma = db.Column(db.Float)
     inkomane = db.Column(db.Float)
     rra_3_percent = db.Column(db.Float)
-    
+
     # Balances & Averages
     local_balance = db.Column(db.Float, default=0)
     total_local_balance = db.Column(db.Float)
@@ -52,88 +51,68 @@ class CassiteriteStock(db.Model):
     t_unity = db.Column(db.Float)
     net_balance = db.Column(db.Float)
     total_balance = db.Column(db.Float)
-    balance_to_pay = db.Column(db.Float)  # Net amount to pay supplier
-    moyenne = db.Column(db.Float, default=0)  # Average purity (NO moyenne_nb)
+    balance_to_pay = db.Column(db.Float)
+    moyenne = db.Column(db.Float, default=0)
 
-    # Relationships
-    outputs = db.relationship('CassiteriteOutput', 
-                             back_populates='stock', 
-                             foreign_keys='CassiteriteOutput.stock_id',
-                             lazy=True, 
-                             cascade="all, delete-orphan")
-    
-    supplier_payments = db.relationship('CassiteriteSupplierPayment',
-                                       foreign_keys='CassiteriteSupplierPayment.stock_id',
-                                       lazy=True,
-                                       cascade="all, delete-orphan")
+    # Relationships are defined elsewhere (outputs, payments)
+    # Define lightweight relationships for convenience and back_populates
+    outputs = db.relationship(
+        'CassiteriteOutput',
+        back_populates='stock',
+        foreign_keys='CassiteriteOutput.stock_id',
+        lazy=True,
+        cascade='all, delete-orphan',
+    )
+
+    payments = db.relationship(
+        'CassiteriteSupplierPayment',
+        backref='stock',
+        lazy=True,
+        cascade='all, delete-orphan',
+    )
 
     def __repr__(self):
         return f"<CassiteriteStock {self.voucher_no} - {self.supplier}>"
 
     def remaining_stock(self):
-        """Calculate remaining stock after outputs"""
-        # DB-side aggregate to avoid loading all outputs into Python
         from .output import CassiteriteOutput
         outputs_total = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).filter(CassiteriteOutput.stock_id == self.id).scalar() or 0
         return (self.input_kg or 0) - outputs_total
 
     def remaining_to_pay(self):
-        """Calculate remaining amount to pay supplier"""
-        # DB-side aggregate to avoid loading supplier payment rows into Python
         from .payment import CassiteriteSupplierPayment
         total_paid = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).filter(CassiteriteSupplierPayment.stock_id == self.id).scalar() or 0
         return (self.balance_to_pay or 0) - total_paid
 
     @trace_time
     def update_calculations(self):
-        """
-        Recalculate all computed fields for this cassiterite stock.
-        Called after stock entry or output changes.
-        Formulas match CSV calculations exactly.
+        """Recompute per-row derived fields only.
+
+        This method intentionally avoids performing a full-table SUM
+        or writing the global aggregate. Global state is maintained by
+        delta updates through `apply_aggregate_delta` in the routes.
         """
         try:
-            # Step 1: ensure defaults
             for field in ['input_kg', 'tot_amount_tag', 'rma', 'inkomane', 'percentage', 'lme', 'sec', 'tc', 'transport_tag', 'exchange']:
                 setattr(self, field, getattr(self, field) or 0.0)
 
-            # Step 2: calculate local_balance (remaining stock after outputs)
+            # per-row fields
             self.local_balance = self.remaining_stock()
-
-            # Step 3: calculate unit_percent using remaining local balance (consistent with copper)
-            # Use percentage * local_balance so unit_percent decreases as stock is consumed
             self.unit_percent = calculate_unit_percentage(self.local_balance, self.percentage)
-
-            # Step 4: t_unity should be the per-stock contribution for optimization
-            # (not a cumulative rolling value). This matches copper's per-stock t_unity usage.
             self.t_unity = self.unit_percent
-
-            # Step 5: calculate u_price = (lme - sec) × percentage / 100
             self.u_price = ((self.lme or 0) - (self.sec or 0)) * (self.percentage or 0) / 100
-
-            # Step 6: calculate amount (total_amount_per_kg) = (u_price - tc) / 1000
             self.amount = ((self.u_price or 0) - (self.tc or 0)) / 1000
-
-            # Step 7: calculate amount_with_taxes = amount × exchange × input_kg
             self.amount_with_taxes = (self.amount or 0) * (self.exchange or 0) * (self.input_kg or 0)
-
-            # Step 8: calculate tot_amount_tag = transport_tag × input_kg
             self.tot_amount_tag = (self.transport_tag or 0) * (self.input_kg or 0)
-
-            # Step 9: calculate rra_3_percent = ((((lme × percentage / 100) - 500) / 1000) × exchange × input_kg × 3) / 100
             rra_base = (((self.lme or 0) * (self.percentage or 0) / 100) - 500) / 1000
             self.rra_3_percent = (rra_base * (self.exchange or 0) * (self.input_kg or 0) * 3) / 100
-
-            # Step 10: calculate balance_to_pay = amount_with_taxes - tot_amount_tag - rma - inkomane - rra_3_percent
             self.balance_to_pay = (self.amount_with_taxes or 0) - (self.tot_amount_tag or 0) - (self.rma or 0) - (self.inkomane or 0) - (self.rra_3_percent or 0)
-
-            # Step 11: net_balance (same as balance_to_pay for cassiterite)
             self.net_balance = self.balance_to_pay
 
-            # Step 12: rolling total balance = DB-side SUM of prior net_balance (only remaining stocks)
+            # rolling cumulative values (DB-side SUM of prior rows)
             prev_balance_q = db.session.query(func.coalesce(func.sum(CassiteriteStock.net_balance), 0)).filter(
                 or_(
                     CassiteriteStock.date < self.date,
-                    # include same-date rows that are "before" this one by id when id exists
                     (CassiteriteStock.date == self.date) & (CassiteriteStock.id < (self.id or 0))
                 ),
                 CassiteriteStock.local_balance > 0
@@ -141,7 +120,6 @@ class CassiteriteStock(db.Model):
             previous_total_balance = prev_balance_q.scalar() or 0
             self.total_balance = previous_total_balance + (self.net_balance or 0)
 
-            # Step 13: total local balance (DB-side SUM of prior local_balance)
             prev_local_q = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(
                 or_(
                     CassiteriteStock.date < self.date,
@@ -152,8 +130,18 @@ class CassiteriteStock(db.Model):
             previous_total_local = prev_local_q.scalar() or 0
             self.total_local_balance = previous_total_local + (self.local_balance or 0)
 
-            # Step 14: update global moyenne
-            CassiteriteStock.update_global_moyennes()
+            # Read-only: set the instance moyenne from the lightweight aggregate
+            try:
+                agg = StockAggregate.get('cassiterite')
+                if agg and agg.total_quantity:
+                    self.moyenne = float(agg.total_weighted_percent or 0.0) / float(agg.total_quantity or 1.0)
+                else:
+                    self.moyenne = self.moyenne or 0
+            except Exception:
+                try:
+                    logger.exception("update_calculations: failed to read StockAggregate")
+                except Exception:
+                    pass
         except Exception:
             try:
                 logger.exception("update_calculations failed for CassiteriteStock id=%s", getattr(self, 'id', None))
@@ -163,16 +151,104 @@ class CassiteriteStock(db.Model):
 
     @staticmethod
     def update_global_moyennes():
-        """Recalculate MOYENNE across all remaining cassiterite stocks."""
-        # Compute aggregates in the DB for remaining stocks to avoid loading
-        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar()
-        total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar()
+        """Recompute and write the single-row aggregate for cassiterite.
+
+        This method is intended for backfills/repairs or when you explicitly
+        want to force a full recalculation. Normal add/edit/delete/output
+        flows should use delta updates instead.
+        """
+        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+        total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+        total_t_unity = db.session.query(func.coalesce(func.sum(CassiteriteStock.t_unity), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+
+        total_unit_percent = float(total_unit_percent or 0.0)
+        total_remaining_balance = float(total_remaining_balance or 0.0)
+        total_t_unity = float(total_t_unity or 0.0)
+
         if not total_remaining_balance:
             moyenne = 0
         else:
             moyenne = total_unit_percent / total_remaining_balance
 
-        # Bulk-update all rows with the new moyenne (no commit here)
-        db.session.query(CassiteriteStock).update({
-            CassiteriteStock.moyenne: moyenne,
-        }, synchronize_session=False)
+        try:
+            agg = db.session.query(StockAggregate).filter_by(mineral_type='cassiterite').with_for_update().first()
+            if not agg:
+                agg = StockAggregate(mineral_type='cassiterite', total_quantity=total_remaining_balance, total_weighted_percent=total_unit_percent, total_t_unity=total_t_unity)
+                db.session.add(agg)
+            else:
+                agg.total_quantity = total_remaining_balance
+                agg.total_weighted_percent = total_unit_percent
+                agg.total_t_unity = total_t_unity
+
+            if os.environ.get('UPDATE_PER_ROW_MOYENNE', '0').lower() in ('1', 'true', 'yes'):
+                db.session.query(CassiteriteStock).update({
+                    CassiteriteStock.moyenne: moyenne,
+                }, synchronize_session=False)
+        except Exception:
+            try:
+                db.session.query(CassiteriteStock).update({
+                    CassiteriteStock.moyenne: moyenne,
+                }, synchronize_session=False)
+            except Exception:
+                logger.exception("update_global_moyennes: failed to update moyenne")
+
+    @staticmethod
+    def contribution(stock_obj) -> tuple:
+        """Return the per-stock contribution triple: (quantity, weighted_percent, t_unity)."""
+        return (
+            float(stock_obj.local_balance or 0.0),
+            float(stock_obj.unit_percent or 0.0),
+            float(stock_obj.t_unity or 0.0),
+        )
+
+    @staticmethod
+    def apply_aggregate_delta(delta_q: float, delta_wp: float, delta_t: float, mineral_type: str = 'cassiterite'):
+        """Apply a delta to the single-row StockAggregate within the current transaction.
+
+        Uses SELECT ... FOR UPDATE to serialize concurrent updates.
+        """
+        try:
+            agg = db.session.query(StockAggregate).filter_by(mineral_type=mineral_type).with_for_update().first()
+            if not agg:
+                agg = StockAggregate(mineral_type=mineral_type, total_quantity=0.0, total_weighted_percent=0.0, total_t_unity=0.0)
+                db.session.add(agg)
+                db.session.flush()
+
+            agg.total_quantity = float((agg.total_quantity or 0.0) + (delta_q or 0.0))
+            agg.total_weighted_percent = float((agg.total_weighted_percent or 0.0) + (delta_wp or 0.0))
+            agg.total_t_unity = float((agg.total_t_unity or 0.0) + (delta_t or 0.0))
+            db.session.flush()
+            return agg
+        except Exception:
+            try:
+                logger.exception("apply_aggregate_delta failed for %s", mineral_type)
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def rebuild_stock_aggregate():
+        """Full recompute of the stock aggregate (safety/repair)."""
+        try:
+            total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+            total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+            total_t_unity = db.session.query(func.coalesce(func.sum(CassiteriteStock.t_unity), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+
+            agg = db.session.query(StockAggregate).filter_by(mineral_type='cassiterite').with_for_update().first()
+            if not agg:
+                agg = StockAggregate(mineral_type='cassiterite', total_quantity=float(total_remaining_balance), total_weighted_percent=float(total_unit_percent), total_t_unity=float(total_t_unity))
+                db.session.add(agg)
+            else:
+                agg.total_quantity = float(total_remaining_balance)
+                agg.total_weighted_percent = float(total_unit_percent)
+                agg.total_t_unity = float(total_t_unity)
+            db.session.flush()
+            return agg
+        except Exception:
+            logger.exception("rebuild_stock_aggregate failed for cassiterite")
+            return None
+
+
+# Backwards-compatible module-level helper
+def rebuild_stock_aggregate():
+    return CassiteriteStock.rebuild_stock_aggregate()

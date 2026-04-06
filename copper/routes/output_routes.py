@@ -65,11 +65,22 @@ def record_output():
             # Flush so output is visible to DB-side aggregates (remaining_stock)
             db.session.flush()
 
-            # Recalculate the related stock's remaining local balance and aggregates
+            # Recalculate the related stock's remaining local balance and apply delta to aggregate
+            try:
+                old_q, old_wp, old_t = CopperStock.contribution(stock)
+            except Exception:
+                old_q = old_wp = old_t = 0.0
+
             stock.local_balance = stock.remaining_stock()
             stock.unit_percent = calculate_unit_percentage(stock.local_balance, stock.percentage)
-            from copper.models import CopperStock
-            CopperStock.update_global_moyennes()
+            stock.update_calculations()
+
+            try:
+                new_q, new_wp, new_t = CopperStock.contribution(stock)
+                CopperStock.apply_aggregate_delta(new_q - old_q, new_wp - old_wp, new_t - old_t)
+            except Exception:
+                import logging
+                logging.exception("record_output: failed to apply aggregate delta")
 
             db.session.commit()
 

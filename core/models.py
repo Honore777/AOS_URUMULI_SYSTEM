@@ -226,6 +226,40 @@ class BulkOutputPlan(db.Model):
         plan_json = db.Column(db.JSON, nullable=False)
 
 
+class StockAggregate(db.Model):
+        """Lightweight single-row aggregate for stock system state.
+
+        This table stores running totals so the application can avoid
+        expensive full-table updates or repeated SUM(...) queries.
+
+        We keep a `mineral_type` so we can track aggregates for different
+        minerals (e.g. 'copper', 'cassiterite') in the same table.
+        """
+
+        __tablename__ = "stock_aggregate"
+
+        id = db.Column(db.Integer, primary_key=True)
+        mineral_type = db.Column(db.String(32), nullable=False, unique=True)
+
+        total_quantity = db.Column(db.Float, nullable=False, default=0.0)
+        total_weighted_percent = db.Column(db.Float, nullable=False, default=0.0)
+        total_t_unity = db.Column(db.Float, nullable=False, default=0.0)
+
+        updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+        def __repr__(self) -> str:
+                return f"<StockAggregate {self.mineral_type}: qty={self.total_quantity} wp={self.total_weighted_percent}>"
+
+        @staticmethod
+        def get(mineral_type: str, create: bool = False):
+                agg = db.session.query(StockAggregate).filter_by(mineral_type=mineral_type).first()
+                if not agg and create:
+                        agg = StockAggregate(mineral_type=mineral_type, total_quantity=0.0, total_weighted_percent=0.0, total_t_unity=0.0)
+                        db.session.add(agg)
+                        db.session.flush()
+                return agg
+
+
 class PaymentReviewStatus(enum.Enum):
         """Review status for a payment executed by the accountant.
 

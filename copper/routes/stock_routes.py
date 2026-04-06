@@ -55,6 +55,31 @@ def _parse_date(s):
         return None
 
 
+def _compute_cumulative_map(remaining_filters, page_ids):
+    """Compute cumulative total_balance for the given page IDs using a
+    windowed SQL query. Returns a dict {stock_id: cumulative_total}.
+    """
+    if not page_ids:
+        return {}
+    try:
+        from sqlalchemy import select
+
+        base = select(
+            CopperStock.id.label('id'),
+            func.sum(CopperStock.net_balance).over(order_by=(CopperStock.date, CopperStock.id)).label('cumulative')
+        ).where(*remaining_filters).cte('ordered')
+
+        q = select(base.c.id, base.c.cumulative).where(base.c.id.in_(page_ids))
+        rows = db.session.execute(q).fetchall()
+        return {r.id: float(r.cumulative or 0) for r in rows}
+    except Exception:
+        try:
+            logger.exception("_compute_cumulative_map failed")
+        except Exception:
+            pass
+        return {}
+
+
 @copper_bp.route("/stock/<int:stock_id>/delete", methods=["POST"])
 @trace_time
 def delete_stock(stock_id):
@@ -64,7 +89,30 @@ def delete_stock(stock_id):
         stock = CopperStock.query.get_or_404(stock_id)
         voucher = stock.voucher_no
         try:
+            # Compute and remove this stock's contribution from the aggregate
+            try:
+                contrib_q, contrib_wp, contrib_t = CopperStock.contribution(stock)
+            except Exception:
+                contrib_q = contrib_wp = contrib_t = 0.0
+
             db.session.delete(stock)
+            # Ensure deletion is flushed so downstream reads see the change
+            try:
+                db.session.flush()
+            except Exception:
+                pass
+
+            # Apply delta to the single-row aggregate (remove contribution)
+            try:
+                CopperStock.apply_aggregate_delta(-contrib_q, -contrib_wp, -contrib_t)
+            except Exception:
+                logger.exception("delete_stock: failed to apply aggregate delta after delete")
+
+            # Invalidate dashboard cache so clients don't read stale aggregates
+            try:
+                _set_dashboard_aggregates(None, ttl=0)
+            except Exception:
+                pass
 
             # Notify all bosses (fetch ids only to avoid hydrating full User objects)
             boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
@@ -126,6 +174,12 @@ def edit_stock(stock_id):
                 logger.warning("edit_stock: duplicate voucher %s attempted by %s", voucher, getattr(current_user, "username", None))
                 return redirect(url_for("copper.dashboard"))
 
+        # Capture old contribution before mutating
+        try:
+            old_q, old_wp, old_t = CopperStock.contribution(stock)
+        except Exception:
+            old_q = old_wp = old_t = 0.0
+
         # Update base fields
         stock.date = date
         stock.voucher_no = voucher
@@ -147,6 +201,16 @@ def edit_stock(stock_id):
 
         try:
             stock.update_calculations()
+
+            # Compute new contribution and apply delta to aggregate
+            try:
+                new_q, new_wp, new_t = CopperStock.contribution(stock)
+                delta_q = new_q - (old_q or 0.0)
+                delta_wp = new_wp - (old_wp or 0.0)
+                delta_t = new_t - (old_t or 0.0)
+                CopperStock.apply_aggregate_delta(delta_q, delta_wp, delta_t)
+            except Exception:
+                logger.exception("edit_stock: failed to apply aggregate delta")
 
             # Notify all bosses (fetch ids only to avoid hydrating full User objects)
             boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
@@ -208,11 +272,11 @@ def add_stock():
             rra_3_percent = (rra_3_percent_default * exchange * percentage * input_kg) * 3 / 100
             net_balance = (amount or 0) - (tot_amount_tag or 0) - (rma or 0) - (inkomane or 0) - (rra_3_percent or 0)
 
-            # Compute rolling total using a SQL aggregate (faster than pulling all rows into Python)
-            previous_total_balance = db.session.query(
-                func.coalesce(func.sum(CopperStock.net_balance), 0)
-            ).filter(CopperStock.date <= date).scalar()
-            total_balance = previous_total_balance + net_balance
+            # For production we maintain `total_balance` at read-time using a
+            # windowed query. Avoid doing a full SUM(...) here — store the
+            # per-row net_balance and compute cumulative totals when the
+            # frontend requests paged results.
+            total_balance = net_balance
 
             # Check for duplicate voucher
             existing = CopperStock.query.filter_by(voucher_no=voucher).first()
@@ -245,6 +309,13 @@ def add_stock():
                 db.session.flush()
 
                 s.update_calculations()
+
+                # Apply delta: add this stock's contribution to the single-row aggregate
+                try:
+                    q, wp, t = CopperStock.contribution(s)
+                    CopperStock.apply_aggregate_delta(q, wp, t)
+                except Exception:
+                    logger.exception("add_stock: failed to apply aggregate delta")
 
                 db.session.commit()
                 logger.info("add_stock: completed voucher=%s", voucher)
@@ -358,6 +429,15 @@ def dashboard():
                 'moyenne_nb': moyenne_nb,
             }, ttl=10)
 
+        # Ensure server-rendered rows display the global moyenne values (don't rely
+        # on per-row stored fields which we may avoid updating on every insert).
+        try:
+            for s in stocks:
+                s.moyenne = moyenne
+                s.moyenne_nb = moyenne_nb
+        except Exception:
+            pass
+
     return render_template(
         'copper/dashboard.html',
         stocks=stocks,
@@ -397,6 +477,20 @@ def export_stocks():
     ]
     ws.append(headers)
     for s in stocks:
+        # Use the global aggregate for moyenne values (cheaper and consistent)
+        try:
+            from core.models import StockAggregate
+            agg = StockAggregate.get('copper')
+            if agg and agg.total_quantity:
+                moyenne_val = agg.total_weighted_percent / agg.total_quantity
+                moyenne_nb_val = agg.total_t_unity / agg.total_quantity
+            else:
+                moyenne_val = s.moyenne or 0
+                moyenne_nb_val = s.moyenne_nb or 0
+        except Exception:
+            moyenne_val = s.moyenne or 0
+            moyenne_nb_val = s.moyenne_nb or 0
+
         ws.append([
             s.date.strftime("%Y-%m-%d"),
             s.voucher_no,
@@ -405,9 +499,9 @@ def export_stocks():
             s.local_balance,
             s.total_local_balance,
             s.percentage,
-            s.moyenne,
+            moyenne_val,
             s.nb,
-            s.moyenne_nb,
+            moyenne_nb_val,
             s.net_balance,
             s.total_balance,
             s.rma,
@@ -767,6 +861,9 @@ def filter_stocks():
         # Defer final timing and logging until after we build the response payload
         
         # Build stocks data for table (measure time so we can see where the remainder is spent)
+        # Compute page cumulative totals using a windowed query so we don't
+        # persist expensive per-insert updates for `total_balance`.
+        cumulative_map = _compute_cumulative_map(remaining_filters, page_stock_ids)
         t_build = time.perf_counter()
         stocks_data = []
         for stock in filtered_stocks:
@@ -789,11 +886,11 @@ def filter_stocks():
                 't_unity': round(stock.t_unity or 0, 2),
                 'rra_3_percent': round(stock.rra_3_percent or 0, 4),
                 'net_balance': round(stock.net_balance or 0, 2),
-                'total_balance': round(stock.total_balance or 0, 2),
+                'total_balance': round(cumulative_map.get(stock.id, stock.total_balance or 0), 2),
                 # Use pre-aggregated outputs per-stock to compute remaining
                 'remaining': round(((stock.input_kg or 0) - outputs_sums.get(stock.id, 0)) or 0, 2),
-                'moyenne': round(stock.moyenne or 0, 4),
-                'moyenne_nb': round(stock.moyenne_nb or 0, 4)
+                'moyenne': round(moyenne or 0, 4),
+                'moyenne_nb': round(moyenne_nb or 0, 4)
             })
         build_rows_time = time.perf_counter() - t_build
 

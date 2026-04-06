@@ -6,7 +6,12 @@ Stores quantities, suppliers, and derived calculations.
 from datetime import datetime
 from config import db
 from sqlalchemy import func
-from utils import calculate_unit_percentage, calculate_net_balance, calculate_moyenne
+from utils import calculate_unit_percentage, calculate_net_balance, calculate_moyenne, logger
+import os
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "False").lower() in ("1", "true", "yes")
 
 
 class CopperStock(db.Model):
@@ -102,43 +107,127 @@ class CopperStock(db.Model):
         # Step 5: net balance
         self.net_balance = calculate_net_balance(self)
 
-        # Step 6: rolling total balance (DB-side aggregate over prior stocks)
-        prev_total_q = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).filter(
-            CopperStock.date <= self.date,
-            CopperStock.id != self.id,
-            CopperStock.local_balance > 0
-        )
-        previous_total_balance = prev_total_q.scalar() or 0
-        self.total_balance = previous_total_balance + (self.net_balance or 0)
+        # NOTE: We no longer perform full-table SUM(...) queries here.
+        # This method now only computes per-row derived fields (local_balance,
+        # unit_percent, t_unity, net_balance). Global aggregates (moyenne)
+        # are maintained using delta-updates to the single-row
+        # `StockAggregate` in the routes that perform add/edit/delete/output
+        # operations. This avoids O(N) writes on each change.
 
-        # Step 7: total local balance (DB-side)
-        prev_local_q = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(
-            CopperStock.date <= self.date,
-            CopperStock.id != self.id,
-            CopperStock.local_balance > 0
-        )
-        previous_total_local = prev_local_q.scalar() or 0
-        self.total_local_balance = previous_total_local + (self.local_balance or 0)
+        # Clear cumulative fields used historically; they will be computed
+        # at read-time (windowed query) when needed.
+        self.total_balance = None
+        self.total_local_balance = None
 
-        # Step 8: update global moyenne and moyenne_nb
-        CopperStock.update_global_moyennes()
+        # Read-only: set current globale moyenne values from the lightweight
+        # StockAggregate so templates can display them immediately.
+        try:
+            from core.models import StockAggregate
+            agg = StockAggregate.get('copper')
+            if agg and agg.total_quantity:
+                self.moyenne = agg.total_weighted_percent / agg.total_quantity
+                self.moyenne_nb = agg.total_t_unity / agg.total_quantity
+            else:
+                self.moyenne = self.moyenne or 0
+                self.moyenne_nb = self.moyenne_nb or 0
+        except Exception:
+            # best-effort: preserve existing instance values on error
+            try:
+                logger.exception("update_calculations: failed to read StockAggregate")
+            except Exception:
+                pass
 
     @staticmethod
     def update_global_moyennes():
         """Recalculate MOYENNE and MOYENNE_NB across all remaining copper stocks."""
-        # Compute aggregates in the DB for remaining stocks to avoid loading
-        total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(CopperStock.local_balance > 0).scalar()
-        total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(CopperStock.local_balance > 0).scalar()
-        if not total_remaining_balance:
-            moyenne = 0
-            moyenne_nb = 0
-        else:
-            moyenne = total_unit_percent / total_remaining_balance
-            total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(CopperStock.local_balance > 0).scalar()
-            moyenne_nb = total_t_unity / total_remaining_balance
+        # New behaviour: do not compute SUM(...) here. Instead, read the
+        # lightweight single-row `StockAggregate` and return its derived
+        # moyenne values. For repairs or initial population call
+        # `rebuild_stock_aggregate()` which performs a full SUM.
+        try:
+            from core.models import StockAggregate
+            agg = StockAggregate.get('copper')
+            if not agg:
+                # no aggregate present — indicate zero averages
+                return 0, 0
+            if not agg.total_quantity:
+                return 0, 0
+            moyenne = float(agg.total_weighted_percent or 0.0) / float(agg.total_quantity or 1.0)
+            moyenne_nb = float(agg.total_t_unity or 0.0) / float(agg.total_quantity or 1.0)
+            return moyenne, moyenne_nb
+        except Exception:
+            try:
+                logger.exception("update_global_moyennes: failed to read aggregate")
+            except Exception:
+                pass
+            return 0, 0
 
-        # Bulk-update all rows with the new moyennes (no commit here)
-        db.session.query(CopperStock).update({
-            CopperStock.moyenne: moyenne,
-            CopperStock.moyenne_nb: moyenne_nb,
-        }, synchronize_session=False)
+    @staticmethod
+    def contribution(stock_obj) -> tuple:
+        """Return the stock's contribution triple used for aggregate deltas.
+
+        Returns (quantity, weighted_percent, t_unity) — these values are
+        already stored in `unit_percent` and `t_unity` fields (unit_percent
+        is local_balance * percentage).
+        """
+        return (
+            float(stock_obj.local_balance or 0.0),
+            float(stock_obj.unit_percent or 0.0),
+            float(stock_obj.t_unity or 0.0),
+        )
+
+    @staticmethod
+    def apply_aggregate_delta(delta_q: float, delta_wp: float, delta_t: float, mineral_type: str = 'copper'):
+        """Apply a delta to the single-row StockAggregate inside the
+        current transaction. Uses SELECT ... FOR UPDATE to avoid races.
+        """
+        try:
+            from core.models import StockAggregate
+
+            agg = db.session.query(StockAggregate).filter_by(mineral_type=mineral_type).with_for_update().first()
+            if not agg:
+                agg = StockAggregate(mineral_type=mineral_type, total_quantity=0.0, total_weighted_percent=0.0, total_t_unity=0.0)
+                db.session.add(agg)
+                db.session.flush()
+
+            agg.total_quantity = float((agg.total_quantity or 0.0) + (delta_q or 0.0))
+            agg.total_weighted_percent = float((agg.total_weighted_percent or 0.0) + (delta_wp or 0.0))
+            agg.total_t_unity = float((agg.total_t_unity or 0.0) + (delta_t or 0.0))
+            db.session.flush()
+            return agg
+        except Exception:
+            try:
+                logger.exception("apply_aggregate_delta failed for %s", mineral_type)
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def rebuild_stock_aggregate():
+        """Full recompute of the stock aggregate (safety/repair).
+
+        This executes SUM(...) queries and overwrites the single-row
+        `StockAggregate`. Use sparingly (backfill/repair).
+        """
+        try:
+            total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+            total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+            total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+
+            from core.models import StockAggregate
+            agg = db.session.query(StockAggregate).filter_by(mineral_type='copper').with_for_update().first()
+            if not agg:
+                agg = StockAggregate(mineral_type='copper', total_quantity=float(total_remaining_balance), total_weighted_percent=float(total_unit_percent), total_t_unity=float(total_t_unity))
+                db.session.add(agg)
+            else:
+                agg.total_quantity = float(total_remaining_balance)
+                agg.total_weighted_percent = float(total_unit_percent)
+                agg.total_t_unity = float(total_t_unity)
+            db.session.flush()
+            return agg
+        except Exception:
+            try:
+                logger.exception("rebuild_stock_aggregate failed for copper")
+            except Exception:
+                pass
+            return None

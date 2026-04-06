@@ -444,7 +444,7 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
         prob += total_balance
     
     # Solve with time limit and relative gap to prevent long blocking solves
-    time_limit = 10
+    time_limit = 14
     gap_rel = 0.01
     # Choose solver and log decision for diagnostics
     solver_name = 'CBC'

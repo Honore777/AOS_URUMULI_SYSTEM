@@ -15,6 +15,8 @@ from core.models import BulkOutputPlan, BulkPlanStatus, User, create_notificatio
 from datetime import datetime
 from uuid import uuid4
 from flask_login import current_user
+import logging
+logger = logging.getLogger(__name__)
 
 
 @cassiterite_bp.route('/record_output', methods=['GET', 'POST'])
@@ -54,14 +56,25 @@ def record_output():
 
         # Ensure debt_remaining is correctly calculated
         output.update_debt()
+
+        # Compute old contribution before mutation
+        try:
+            old_q, old_wp, old_t = CassiteriteStock.contribution(stock)
+        except Exception:
+            old_q = old_wp = old_t = 0.0
+
         db.session.add(output)
         db.session.flush()
-        
-        # Update stock local balance and recalculate
-        stock.local_balance = stock.remaining_stock()
-        stock.unit_percent = (stock.local_balance * stock.percentage) / 100 if stock.percentage else 0
-        CassiteriteStock.update_global_moyennes()
-        
+
+        # Recalculate stock and apply aggregate delta
+        stock.update_calculations()
+        try:
+            new_q, new_wp, new_t = CassiteriteStock.contribution(stock)
+            CassiteriteStock.apply_aggregate_delta(new_q - old_q, new_wp - old_wp, new_t - old_t)
+        except Exception:
+            import logging
+            logging.exception("record_output: failed to apply aggregate delta")
+
         db.session.commit()
 
         # --- IN-APP NOTIFICATION TO ALL ACTIVE STOREKEEPERS ---
@@ -564,13 +577,37 @@ def confirm_bulk_output():
             # Update stock
             stock.local_balance = stock.remaining_stock()
             stock.unit_percent = (stock.local_balance * stock.percentage) / 100 if stock.percentage else 0
-        
+
+            # Apply delta to the aggregate for this stock
+            try:
+                old_q, old_wp, old_t = CassiteriteStock.contribution(stock)
+            except Exception:
+                old_q = old_wp = old_t = 0.0
+
+            # Flush so the output is visible for remaining_stock calculations
+            try:
+                db.session.flush()
+            except Exception:
+                pass
+
+            # Recalculate stock fields and apply per-stock delta
+            stock.update_calculations()
+            try:
+                new_q, new_wp, new_t = CassiteriteStock.contribution(stock)
+                CassiteriteStock.apply_aggregate_delta(new_q - old_q, new_wp - old_wp, new_t - old_t)
+            except Exception:
+                try:
+                    logger.exception("confirm_bulk_output: failed to apply aggregate delta for stock %s", stock_id)
+                except Exception:
+                    import logging
+                    logging.exception("confirm_bulk_output: failed to apply aggregate delta for stock %s", stock_id)
+
         # Mark the bulk plan as executed and record who executed it
         plan.status = BulkPlanStatus.EXECUTED.value
         plan.executed_at = datetime.utcnow()
         plan.executed_by_id = getattr(current_user, "id", None)
 
-        CassiteriteStock.update_global_moyennes()
+        # Commit all outputs and per-stock aggregate deltas
         db.session.commit()
         
         # Clean session
