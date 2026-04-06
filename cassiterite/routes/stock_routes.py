@@ -7,12 +7,12 @@ This module handles:
 """
 from flask import render_template, request, redirect, url_for, flash, jsonify
 from config import db
-from cassiterite.models import CassiteriteStock
+from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment
 from sqlalchemy import func
 from cassiterite.forms import AddCassiteriteStockForm
 from cassiterite.routes import cassiterite_bp
 from core.auth import role_required
-from core.models import Notification, create_notification, User
+from core.models import Notification, create_notification, User, fetch_user_notifications
 from sqlalchemy.orm import joinedload, selectinload
 from flask_login import current_user
 from utils import trace_time
@@ -100,12 +100,19 @@ def delete_stock(stock_id):
             except Exception:
                 contrib_q = contrib_wp = contrib_t = 0.0
 
-            db.session.delete(stock)
-            # Ensure deletion is flushed so downstream reads see the change
+            # Bulk-delete child rows to avoid N separate DELETE statements
             try:
-                db.session.flush()
+                db.session.query(CassiteriteOutput).filter(CassiteriteOutput.stock_id == stock_id).delete(synchronize_session=False)
+                db.session.query(CassiteriteSupplierPayment).filter(CassiteriteSupplierPayment.stock_id == stock_id).delete(synchronize_session=False)
+                # Remove the parent in a single statement
+                db.session.query(CassiteriteStock).filter(CassiteriteStock.id == stock_id).delete(synchronize_session=False)
             except Exception:
-                pass
+                logger.exception("cassiterite.delete_stock: bulk-delete children failed; falling back to ORM delete")
+                db.session.delete(stock)
+                try:
+                    db.session.flush()
+                except Exception:
+                    pass
 
             # Apply delta to the single-row aggregate (remove contribution)
             try:
@@ -247,9 +254,21 @@ def dashboard():
         # Pagination parameters
         page = request.args.get('page', 1, type=int)
         per_page = 20
-        stocks_pagination = CassiteriteStock.query.options(selectinload(CassiteriteStock.supplier_payments)).order_by(CassiteriteStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
+        # load related supplier payments via the model relationship named `payments`
+        stocks_pagination = CassiteriteStock.query.options(selectinload(CassiteriteStock.payments)).order_by(CassiteriteStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
         stocks = stocks_pagination.items
         outputs = CassiteriteOutput.query.order_by(CassiteriteOutput.date.desc()).limit(10).all()
+
+        # Compute a small distinct list of voucher/lot choices to populate the
+        # filter dropdown without materializing large lists in the template.
+        try:
+            voucher_q = db.session.query(CassiteriteStock.voucher_no).filter(CassiteriteStock.local_balance > 0).distinct().order_by(CassiteriteStock.date.desc()).limit(200)
+            voucher_choices = [v for (v,) in voucher_q.all() if v]
+        except Exception:
+            try:
+                voucher_choices = [s.voucher_no for s in stocks if getattr(s, 'voucher_no', None)]
+            except Exception:
+                voucher_choices = []
 
         from sqlalchemy import func
         total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).scalar()
@@ -278,40 +297,37 @@ def dashboard():
         cash_position = gross_profit - customer_debt + supplier_debt
 
         user_notifications = []
+        unread = []
+        read = []
+        unread_count = 0
         if getattr(current_user, "is_authenticated", False):
             # Show all unread notifications and up to 10 already-read notifications
-            unread = (
-                Notification.query.options(joinedload(Notification.user))
-                .filter_by(user_id=current_user.id, read_at=None)
-                .order_by(Notification.created_at.desc())
-                .all()
-            )
-            read = (
-                Notification.query.options(joinedload(Notification.user))
-                .filter(Notification.user_id == current_user.id, Notification.read_at != None)
-                .order_by(Notification.created_at.desc())
-                .limit(10)
-                .all()
-            )
-            user_notifications = unread + read
+            # Avoid joining the `user` table here; fall back to an empty list
+            # and rollback on error so a permissions problem doesn't abort
+            # the whole request.
+            try:
+                user_notifications, unread_count = fetch_user_notifications(getattr(current_user, 'id', None), unread_limit=20, read_limit=10)
+            except Exception:
+                logger.exception("cassiterite.dashboard: fetch_user_notifications helper failed")
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+                user_notifications = []
+                unread_count = 0
 
         # Cassiterite moyenne is stored on each stock; compute global moyenne like copper
-        remaining_stocks = CassiteriteStock.query.filter(CassiteriteStock.local_balance > 0).order_by(CassiteriteStock.date.desc()).all()
+        # Avoid materializing all remaining stocks in memory — just compute the count.
         remaining_stocks_count = CassiteriteStock.query.filter(CassiteriteStock.local_balance > 0).count()
         total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
         total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
         moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
 
-        # unread count: prefer DB count or length of fetched unread list
-        unread_count = 0
-        if getattr(current_user, "is_authenticated", False):
-            unread_count = len(unread)
-
-            logger.info("cassiterite.dashboard: completed page=%s stocks_shown=%d", page, len(stocks))
-            return render_template(
+        logger.info("cassiterite.dashboard: completed page=%s stocks_shown=%d", page, len(stocks))
+        return render_template(
             'cassiterite/dashboard.html',
             stocks=stocks,
-            remaining_stocks=remaining_stocks,
+            voucher_choices=voucher_choices,
             outputs=outputs,
             total_input=total_input,
             total_output=total_output,
@@ -329,7 +345,7 @@ def dashboard():
             stocks_pagination=stocks_pagination,
             page=page,
             per_page=per_page,
-    )
+        )
     except Exception:
         logger.exception("cassiterite.dashboard failed page=%s", request.args.get('page'))
         raise
@@ -368,37 +384,129 @@ def cassiterite_filter_stocks():
         if lot_no:
             stocks_query = stocks_query.filter(CassiteriteStock.voucher_no == lot_no)
 
-        # Prefer a meaningful snapshot: only remaining stocks (local_balance > 0)
-        # Support pagination parameters from client to avoid returning all rows
+        # Build page using a single SQL round-trip returning paged stocks with
+        # per-stock outputs_sum and running cumulative totals to avoid ORM
+        # pagination + Python-level per-row aggregation (reduces DB RTTs).
         page = int(data.get('page', 1) or 1)
         per_page = int(data.get('per_page', 20) or 20)
+        if per_page < 5:
+            per_page = 5
+        if per_page > 100:
+            per_page = 100
         include_all = bool(data.get('include_all'))
 
-        stocks_local_q = stocks_query.filter(CassiteriteStock.local_balance > 0)
-        stocks_pagination = stocks_local_q.paginate(page=page, per_page=per_page, error_out=False)
-        filtered_stocks = stocks_pagination.items
+        offset = (page - 1) * per_page
 
-        # Safeguard large result sets
-        MAX_RETURN_ROWS = 2000
-        if include_all and stocks_pagination.total > MAX_RETURN_ROWS:
-            logger.warning("cassiterite.filter_stocks: include_all requested but total %d > max %d", stocks_pagination.total, MAX_RETURN_ROWS)
-            return jsonify({'error': 'Request would return too many rows; please narrow your filter or use the export endpoint.'}), 400
-
-        # Outputs are date-filtered above; restrict outputs to the current page's stocks
-        page_stock_ids = [s.id for s in filtered_stocks]
-        if page_stock_ids:
-            filtered_outputs = outputs_query.filter(CassiteriteOutput.stock_id.in_(page_stock_ids)).all()
-        else:
-            filtered_outputs = []
-
-        # Build common stock filters for DB-side aggregates
-        stock_filters = []
+        # Build SQL WHERE fragments for stocks and outputs based on filters
+        stock_where = '1=1'
+        output_where = '1=1'
+        params = {'per_page': per_page, 'offset': offset}
         if start_date:
-            stock_filters.append(CassiteriteStock.date >= start)
+            stock_where += ' AND s.date >= :start'
+            output_where += ' AND o.date >= :start'
+            params['start'] = start
         if end_date:
-            stock_filters.append(CassiteriteStock.date <= end)
+            stock_where += ' AND s.date <= :end'
+            output_where += ' AND o.date <= :end'
+            params['end'] = end
         if lot_no:
-            stock_filters.append(CassiteriteStock.voucher_no == lot_no)
+            stock_where += ' AND s.voucher_no = :lot_no'
+            params['lot_no'] = lot_no
+
+        from sqlalchemy import text
+        try:
+            page_sql = f"""
+WITH outputs_sum AS (
+  SELECT stock_id, COALESCE(SUM(output_kg),0) AS outputs_sum
+  FROM cassiterite_output o
+  WHERE {output_where}
+  GROUP BY stock_id
+), ordered AS (
+  SELECT
+    s.id,
+    s.date,
+    s.voucher_no,
+    s.supplier,
+    s.input_kg,
+    s.percentage,
+    s.unit_percent,
+    s.t_unity,
+    s.moyenne,
+    s.lme,
+    s.m_lme,
+    s.exchange,
+    s.sec,
+    s.tc,
+    s.u_price,
+    s.amount,
+    s.amount_with_taxes,
+    s.transport_tag,
+    s.tot_amount_tag,
+    s.rma,
+    s.inkomane,
+    s.rra_3_percent,
+    s.local_balance,
+    s.balance_to_pay,
+    s.total_balance,
+    s.net_balance,
+    COALESCE(os.outputs_sum,0) AS outputs_sum,
+    COALESCE(SUM(s.net_balance) OVER (ORDER BY s.date, s.id),0) AS cumulative
+  FROM cassiterite_stock s
+  LEFT JOIN outputs_sum os ON os.stock_id = s.id
+  WHERE s.local_balance > 0 AND {stock_where}
+)
+SELECT sub.*, (SELECT COALESCE(COUNT(1),0) FROM cassiterite_stock s WHERE s.local_balance > 0 AND {stock_where}) AS total_count
+FROM (
+  SELECT * FROM ordered
+  ORDER BY date DESC, id DESC
+  LIMIT :per_page OFFSET :offset
+) sub
+"""
+
+            rows = db.session.execute(text(page_sql), params).mappings().all()
+            total_count = int(rows[0]['total_count']) if rows else 0
+            page_stock_ids = [int(r['id']) for r in rows]
+            outputs_sums = {int(r['id']): float(r['outputs_sum'] or 0) for r in rows}
+            # fetch filtered_outputs for charting (small result set)
+            if page_stock_ids:
+                outputs_q = db.session.query(CassiteriteOutput.date, CassiteriteOutput.output_kg).filter(CassiteriteOutput.stock_id.in_(page_stock_ids))
+                if start_date:
+                    outputs_q = outputs_q.filter(CassiteriteOutput.date >= start)
+                if end_date:
+                    outputs_q = outputs_q.filter(CassiteriteOutput.date <= end)
+                outputs_q = outputs_q.order_by(CassiteriteOutput.date.desc())
+                filtered_outputs = outputs_q.all()
+            else:
+                filtered_outputs = []
+            # provide a small stocks_pagination fallback object for the payload
+            from types import SimpleNamespace
+            pages = (total_count + per_page - 1) // per_page if total_count else 1
+            stocks_pagination = SimpleNamespace(pages=pages, total=total_count)
+            timings = locals().get('timings', {})
+            timings['page_sql'] = 0.0
+        except Exception:
+            logger.exception('cassiterite.filter_stocks: page SQL failed; falling back to ORM paginate')
+            stocks_local_q = stocks_query.filter(CassiteriteStock.local_balance > 0)
+            stocks_pagination = stocks_local_q.paginate(page=page, per_page=per_page, error_out=False)
+            filtered_stocks = stocks_pagination.items
+            page_stock_ids = [s.id for s in filtered_stocks]
+            filtered_outputs = outputs_query.filter(CassiteriteOutput.stock_id.in_(page_stock_ids)).all() if page_stock_ids else []
+            from collections import defaultdict as _dd
+            outputs_sums = _dd(float)
+            if page_stock_ids:
+                try:
+                    rows = db.session.query(CassiteriteOutput.stock_id, func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).filter(CassiteriteOutput.stock_id.in_(page_stock_ids))
+                    if start_date:
+                        rows = rows.filter(CassiteriteOutput.date >= start)
+                    if end_date:
+                        rows = rows.filter(CassiteriteOutput.date <= end)
+                    rows = rows.group_by(CassiteriteOutput.stock_id).all()
+                    for sid, ssum in rows:
+                        outputs_sums[sid] = float(ssum or 0)
+                except Exception:
+                    for o in filtered_outputs:
+                        if o and o.stock_id:
+                            outputs_sums[o.stock_id] += float(o.output_kg or 0)
 
         # Aggregates from DB (faster and avoids loading full tables into Python)
         total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).filter(*stock_filters).scalar() or 0
@@ -447,9 +555,29 @@ def cassiterite_filter_stocks():
 
         # Remaining stocks aggregates (only local_balance > 0)
         remaining_filters = list(stock_filters) + [CassiteriteStock.local_balance > 0]
-        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
-        total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
-        moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+        # If no date/lot filters are provided, prefer the lightweight
+        # single-row StockAggregate to avoid expensive SUMs.
+        total_unit_percent = 0
+        total_remaining_balance = 0
+        moyenne = 0
+        if not (start_date or end_date or lot_no):
+            try:
+                from core.models import StockAggregate
+                agg = StockAggregate.get('cassiterite')
+                if agg:
+                    total_unit_percent = float(agg.total_weighted_percent or 0.0)
+                    total_remaining_balance = float(agg.total_quantity or 0.0)
+                    moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+                else:
+                    raise RuntimeError('no aggregate')
+            except Exception:
+                total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
+                total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
+                moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+        else:
+            total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
+            total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
+            moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
             # Total supplier obligation (balance_to_pay) respecting the same stock
             # filters. This is the original cost basis for these lots (what we
             # owe suppliers before any payments are deducted).
@@ -498,12 +626,23 @@ def cassiterite_filter_stocks():
         total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
 
         # Serialize stocks
-        # Build a per-stock outputs sum to compute remaining without N+1 DB calls
+        # Build a per-stock outputs sum using DB GROUP BY (avoid Python loops)
         from collections import defaultdict
         outputs_sums = defaultdict(float)
-        for o in filtered_outputs:
-            if o and o.stock_id:
-                outputs_sums[o.stock_id] += float(o.output_kg or 0)
+        if page_stock_ids:
+            try:
+                rows = db.session.query(CassiteriteOutput.stock_id, func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).filter(CassiteriteOutput.stock_id.in_(page_stock_ids))
+                if start_date:
+                    rows = rows.filter(CassiteriteOutput.date >= start)
+                if end_date:
+                    rows = rows.filter(CassiteriteOutput.date <= end)
+                rows = rows.group_by(CassiteriteOutput.stock_id).all()
+                for sid, ssum in rows:
+                    outputs_sums[sid] = float(ssum or 0)
+            except Exception:
+                for o in filtered_outputs:
+                    if o and o.stock_id:
+                        outputs_sums[o.stock_id] += float(o.output_kg or 0)
 
         stocks_data = []
         for s in filtered_stocks:

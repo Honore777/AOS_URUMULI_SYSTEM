@@ -17,6 +17,7 @@ from core.models import (
     User,
     create_notification,
     Notification,
+    fetch_user_notifications,
 )
 from . import core_bp
 from sqlalchemy import func
@@ -596,28 +597,27 @@ def store_dashboard():
     ).limit(50).all()
 
     user_notifications = []
+    unread = []
+    read = []
+    unread_count = 0
     if getattr(current_user, "is_authenticated", False):
-        # Show all unread notifications and up to 10 already-read notifications
-        unread = (
-            Notification.query.options(joinedload(Notification.user))
-            .filter_by(user_id=current_user.id, read_at=None)
-            .order_by(Notification.created_at.desc())
-            .all()
-        )
-        read = (
-            Notification.query.options(joinedload(Notification.user))
-            .filter(Notification.user_id == current_user.id, Notification.read_at != None)
-            .order_by(Notification.created_at.desc())
-            .limit(10)
-            .all()
-        )
-        user_notifications = unread + read
+        # Fetch notifications via centralized helper to get detailed logs
+        try:
+            user_notifications, unread_count = fetch_user_notifications(getattr(current_user, 'id', None), unread_limit=20, read_limit=10)
+        except Exception:
+            app.logger.exception("management.store_dashboard: fetch_user_notifications helper failed; rolling back")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            user_notifications = []
+            unread_count = 0
 
     return render_template(
         "store/dashboard.html",
         plans=plans,
         notifications=user_notifications,
-        unread_notifications_count=Notification.query.filter_by(user_id=current_user.id, read_at=None).count(),
+        unread_notifications_count=unread_count,
     )
 
 

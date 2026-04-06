@@ -94,7 +94,7 @@
                     <label class="block text-sm font-semibold text-gray-700 mb-2">Lot Number</label>
                     <select id="cass-filter-lot" class="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-teal-500">
                         <option value="">All Lots</option>
-                        {% for v in stocks|map(attribute='voucher_no')|unique %}
+                        {% for v in voucher_choices %}
                             <option value="{{ v }}">{{ v }}</option>
                         {% endfor %}
                     </select>
@@ -140,7 +140,7 @@
         <!-- Cassiterite Stocks Table -->
         <div class="mb-10">
             <h2 class="text-2xl font-bold text-gray-900 mb-6 border-b-4 border-teal-600 pb-2">Cassiterite Stocks</h2>
-            {% if remaining_stocks %}
+            {% if remaining_stocks_count %}
                 <div class="overflow-x-auto rounded-lg shadow-md">
                     <table class="w-full border-collapse">
                         <thead class="bg-teal-600 text-white sticky top-0">
@@ -174,47 +174,10 @@
                                 <th class="px-4 py-3 text-left font-semibold text-sm">Actions</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-200">
-                            {% for stock in stocks %}
-                                {% if stock.local_balance and stock.local_balance > 0 %}
-                                <tr class="hover:bg-gray-50 transition text-sm">
-                                    <td class="px-4 py-3 text-gray-700">{{ stock.date.strftime('%Y-%m-%d') }}</td>
-                                    <td class="px-4 py-3 text-gray-700 font-semibold">{{ stock.voucher_no }}</td>
-                                    <td class="px-4 py-3 text-gray-700">{{ stock.supplier }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-center">CASSIE</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.input_kg or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.percentage or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.4f}'.format(stock.unit_percent or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.t_unity or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.4f}'.format(stock.moyenne or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.lme or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.m_lme or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.exchange or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.sec or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.tc or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right bg-blue-50 font-semibold">{{ '{:,.2f}'.format(stock.u_price or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right bg-blue-50 font-semibold">{{ '{:,.2f}'.format(stock.amount or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.amount_with_taxes or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.transport_tag or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.tot_amount_tag or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.rma or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.inkomane or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.rra_3_percent or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.local_balance or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right font-semibold bg-red-50">{{ '{:,.2f}'.format(stock.balance_to_pay or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.total_balance or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.remaining_stock()) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">
-                                        <button type="button" class="text-xs font-semibold text-blue-600 hover:text-blue-800 mr-2 edit-cass-stock-btn" data-stock-id="{{ stock.id }}">
-                                            Edit
-                                        </button>
-                                        <button type="button" class="text-xs font-semibold text-red-600 hover:text-red-800 delete-cass-stock-btn" data-stock-id="{{ stock.id }}">
-                                            Delete
-                                        </button>
-                                    </td>
-                                </tr>
-                                {% endif %}
-                            {% endfor %}
+                        <tbody class="divide-y divide-gray-200" id="cass-stocks-tbody">
+                            <tr>
+                                <td colspan="27" class="text-center py-8 text-gray-500">Loading stocks…</td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>

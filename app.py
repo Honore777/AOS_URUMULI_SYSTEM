@@ -75,11 +75,26 @@ login_manager.login_view = "login"  # endpoint name below
 @login_manager.user_loader
 def load_user(user_id: str):  # pragma: no cover - tiny glue helper
     """Tell Flask-Login how to load a user from a stored ID."""
-
+    # Be defensive: ensure any prior aborted transaction is cleared
+    # before attempting to load the user. Also catch DB errors and
+    # rollback so a failing user load doesn't leave the request in
+    # an aborted state (which causes InFailedSqlTransaction cascades).
     try:
+        try:
+            db.session.rollback()
+        except Exception:
+            app.logger.debug('load_user: pre-rollback failed', exc_info=True)
+
         # Use SQLAlchemy 2.0 style Session.get to avoid deprecation warnings
         return db.session.get(User, int(user_id))
     except (TypeError, ValueError):
+        return None
+    except Exception:
+        app.logger.exception('load_user: DB error while loading user; rolling back')
+        try:
+            db.session.rollback()
+        except Exception:
+            app.logger.exception('load_user: rollback failed during exception handling')
         return None
 
 
@@ -372,6 +387,33 @@ def forbidden(error):
 # ============================================================
 # CONTEXT PROCESSORS
 # ============================================================
+
+
+# Ensure DB session is clean at the start of each request. This prevents
+# "current transaction is aborted" errors caused by leftover session state
+# from previous failures.
+@app.before_request
+def ensure_db_session_clean():
+    try:
+        db.session.rollback()
+    except Exception:
+        # Non-fatal: log at debug level and continue
+        app.logger.debug('ensure_db_session_clean: rollback failed', exc_info=True)
+
+
+# Teardown handler to rollback on exceptions and remove the session.
+@app.teardown_request
+def shutdown_session(exception=None):
+    if exception is not None:
+        try:
+            db.session.rollback()
+        except Exception:
+            app.logger.exception('shutdown_session: rollback failed')
+    try:
+        db.session.remove()
+    except Exception:
+        app.logger.exception('shutdown_session: session remove failed')
+
 
 @app.context_processor
 def inject_config():

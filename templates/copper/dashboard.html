@@ -99,7 +99,7 @@
             <label class="block text-sm font-semibold text-gray-700 mb-2">Voucher No</label>
             <select id="filter-voucher" class="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="">All Vouchers</option>
-                {% for v in stocks|map(attribute='voucher_no')|unique %}
+                {% for v in voucher_choices %}
                     <option value="{{ v }}">{{ v }}</option>
                 {% endfor %}
             </select>
@@ -181,64 +181,10 @@
                                 <th class="px-4 py-3 text-left font-semibold text-sm">Actions</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-200">
-                            {% for stock in stocks %}
-                                {% if stock.local_balance and stock.local_balance > 0 %}
-                                <tr class="hover:bg-gray-50 transition text-sm">
-                                    <td class="px-4 py-3 text-gray-700">{{ stock.date.strftime('%Y-%m-%d') }}</td>
-                                    <td class="px-4 py-3 text-gray-700 font-semibold">{{ stock.voucher_no }}</td>
-                                    <td class="px-4 py-3 text-gray-700">{{ stock.supplier }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.input_kg or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.percentage or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.nb or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right bg-blue-50">{{ '{:,.2f}'.format(stock.u_price or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right bg-blue-50">{{ '{:,.2f}'.format(stock.amount or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.exchange or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.transport_tag or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.rma or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.inkomane or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.local_balance or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.4f}'.format(stock.unit_percent or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.4f}'.format(stock.rra_3_percent or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.t_unity or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right font-semibold bg-yellow-50">{{ '{:,.2f}'.format(stock.net_balance or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.total_balance or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.2f}'.format(stock.remaining_stock()) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.4f}'.format(stock.moyenne or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">{{ '{:,.4f}'.format(stock.moyenne_nb or 0) }}</td>
-                                    <td class="px-4 py-3 text-gray-700 text-right">
-                                        <button type="button" class="text-xs font-semibold text-blue-600 hover:text-blue-800 mr-2 edit-copper-stock-btn"
-                                            data-stock-id="{{ stock.id }}"
-                                            data-date="{{ stock.date.strftime('%Y-%m-%d') if stock.date else '' }}"
-                                            data-voucher="{{ stock.voucher_no|e }}"
-                                            data-supplier="{{ stock.supplier|e }}"
-                                            data-input="{{ stock.input_kg or 0 }}"
-                                            data-percentage="{{ stock.percentage or 0 }}"
-                                            data-nb="{{ stock.nb or 0 }}"
-                                            data-u-price="{{ stock.u_price or 0 }}"
-                                            data-amount="{{ stock.amount or 0 }}"
-                                            data-exchange="{{ stock.exchange or 0 }}"
-                                            data-transport="{{ stock.transport_tag or 0 }}"
-                                            data-rma="{{ stock.rma or 0 }}"
-                                            data-inkomane="{{ stock.inkomane or 0 }}"
-                                            data-local-balance="{{ stock.local_balance or 0 }}"
-                                            data-unit-percent="{{ stock.unit_percent or 0 }}"
-                                            data-rra="{{ stock.rra_3_percent or 0 }}"
-                                            data-t-unity="{{ stock.t_unity or 0 }}"
-                                            data-net-balance="{{ stock.net_balance or 0 }}"
-                                            data-total-balance="{{ stock.total_balance or 0 }}"
-                                            data-remaining="{{ stock.remaining_stock() if stock.remaining_stock is defined else 0 }}"
-                                            data-moyenne="{{ stock.moyenne or 0 }}"
-                                            data-moyenne-nb="{{ stock.moyenne_nb or 0 }}">
-                                            Edit
-                                        </button>
-                                        <button type="button" class="text-xs font-semibold text-red-600 hover:text-red-800 delete-copper-stock-btn" data-stock-id="{{ stock.id }}">
-                                            Delete
-                                        </button>
-                                    </td>
-                                </tr>
-                                {% endif %}
-                            {% endfor %}
+                        <tbody class="divide-y divide-gray-200" id="stocks-tbody">
+                            <tr>
+                                <td colspan="23" class="text-center py-8 text-gray-500">Loading stocks…</td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -396,10 +342,9 @@
             document.getElementById('card-moyenne').textContent = formatNumber(moyenneValue, 4);
             document.getElementById('card-moyenne-nb').textContent = formatNumber(moyenneNbValue, 4);
             
-            // Fetch initial page and include aggregates so stat cards populate.
-            // We keep the page small but request aggregates asynchronously
-            // to avoid server-render blocking while ensuring cards show values.
-            fetchPage(1, 5, true);
+            // Fetch initial page without heavy aggregates; cards are already
+            // populated from server-rendered context to keep initial load fast.
+            fetchPage(1, 5, false);
         }
 
         // Charts removed: keep compatibility no-op
@@ -575,7 +520,7 @@
         // Fetch a specific page of filtered stocks
         // include_aggregates=false makes the API return only paged rows
         // and skip heavy aggregates (faster initial load).
-        function fetchPage(page = 1, per_page = 10, include_aggregates = true) {
+        function fetchPage(page = 1, per_page = 10, include_aggregates = false) {
             const startDate = document.getElementById('filter-start-date').value;
             const endDate = document.getElementById('filter-end-date').value;
             const voucherNo = document.getElementById('filter-voucher').value;
@@ -642,7 +587,7 @@
             fetch('{{ url_for("copper.filter_stocks") }}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ start_date: '', end_date: '', voucher_no: '', page: 1, per_page: 10, include_all: false, include_aggregates: true })
+                body: JSON.stringify({ start_date: '', end_date: '', voucher_no: '', page: 1, per_page: 10, include_all: false, include_aggregates: false })
             })
             .then(r => r.json())
             .then(data => { window.currentFilteredData = data; updateTable(data.stocks); updateAllCards(data); renderPaginationControls(data.page || 1, data.pages || 1); })

@@ -19,6 +19,8 @@ import enum
 
 from config import db
 from werkzeug.security import generate_password_hash, check_password_hash
+import logging
+from sqlalchemy import func
 
 
 class User(db.Model):
@@ -156,6 +158,74 @@ def create_notification(user_id: int,
                 related_id=related_id,
         )
         db.session.add(notif)
+
+
+def fetch_user_notifications(user_id: int, unread_limit: int = 20, read_limit: int = 10):
+        """Helper to fetch notifications for a user with step-by-step logging.
+
+        Returns a tuple: (notifications_list, unread_count)
+        """
+        logger = logging.getLogger(__name__)
+        try:
+                logger.debug("fetch_user_notifications: start user_id=%s unread_limit=%s read_limit=%s", user_id, unread_limit, read_limit)
+
+                # Best-effort: clear any previously aborted transaction so we can run read-only queries.
+                try:
+                        db.session.rollback()
+                        logger.debug("fetch_user_notifications: pre-rollback executed")
+                except Exception:
+                        logger.exception("fetch_user_notifications: pre-rollback failed")
+
+                # Prepare unread query
+                try:
+                        unread_q = db.session.query(Notification).filter(Notification.user_id == user_id, Notification.read_at == None).order_by(Notification.created_at.desc()).limit(unread_limit)
+                        logger.debug("fetch_user_notifications: unread_q prepared: %s", getattr(unread_q, 'statement', repr(unread_q)))
+                        unread = unread_q.all()
+                        logger.debug("fetch_user_notifications: unread fetched count=%s", len(unread) if unread is not None else 0)
+                except Exception:
+                        logger.exception("fetch_user_notifications: unread query failed")
+                        try:
+                                db.session.rollback()
+                        except Exception:
+                                logger.exception("fetch_user_notifications: rollback after unread query failed")
+                        unread = []
+
+                # Prepare read query
+                try:
+                        read_q = db.session.query(Notification).filter(Notification.user_id == user_id, Notification.read_at != None).order_by(Notification.created_at.desc()).limit(read_limit)
+                        logger.debug("fetch_user_notifications: read_q prepared: %s", getattr(read_q, 'statement', repr(read_q)))
+                        read = read_q.all()
+                        logger.debug("fetch_user_notifications: read fetched count=%s", len(read) if read is not None else 0)
+                except Exception:
+                        logger.exception("fetch_user_notifications: read query failed")
+                        try:
+                                db.session.rollback()
+                        except Exception:
+                                logger.exception("fetch_user_notifications: rollback after read query failed")
+                        read = []
+
+                # Compute unread count best-effort (may be approximated by len(unread))
+                try:
+                        unread_count = db.session.query(func.coalesce(func.count(Notification.id), 0)).filter(Notification.user_id == user_id, Notification.read_at == None).scalar()
+                        unread_count = int(unread_count or 0)
+                        logger.debug("fetch_user_notifications: unread_count=%s for user_id=%s", unread_count, user_id)
+                except Exception:
+                        logger.exception("fetch_user_notifications: unread_count query failed; falling back to len(unread)")
+                        try:
+                                db.session.rollback()
+                        except Exception:
+                                logger.exception("fetch_user_notifications: rollback after unread_count failed")
+                        unread_count = len(unread) if unread is not None else 0
+
+                notifications = (unread or []) + (read or [])
+                return notifications, int(unread_count or 0)
+        except Exception as e:
+                logger.exception("fetch_user_notifications: unexpected failure: %s", e)
+                try:
+                        db.session.rollback()
+                except Exception:
+                        logger.exception("fetch_user_notifications: rollback after unexpected failure failed")
+                return [], 0
 
 
 class BulkPlanStatus(enum.Enum):
