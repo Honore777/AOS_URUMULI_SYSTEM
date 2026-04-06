@@ -249,6 +249,15 @@ def edit_stock(stock_id):
 def dashboard():
     """Cassiterite dashboard"""
     try:
+        # Ensure a fresh session/connection to avoid InFailedSqlTransaction
+        # on pooled connections that previously errored.
+        try:
+            db.session.remove()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
         from cassiterite.models import CassiteriteOutput
         
         # Pagination parameters
@@ -271,18 +280,29 @@ def dashboard():
                 voucher_choices = []
 
         from sqlalchemy import func
-        total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).scalar()
-        total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).scalar()
-        total_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
-        total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar()
-        total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
-        # Inventory Value (current cost of remaining Cassiterite stock)
-        cass_inventory_value = db.session.query(
-            func.coalesce(
-                func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
-                0,
-            )
-        ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0).scalar() or 0
+        try:
+            total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).scalar()
+            total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).scalar()
+            total_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
+            total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar()
+            total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
+            # Inventory Value (current cost of remaining Cassiterite stock)
+            cass_inventory_value = db.session.query(
+                func.coalesce(
+                    func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
+                    0,
+                )
+            ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0).scalar() or 0
+        except Exception:
+            logger.exception("cassiterite.dashboard: aggregate queries failed; resetting session and falling back to safe defaults")
+            try:
+                db.session.remove()
+            except Exception:
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+            total_input = total_output = total_debt = total_sales = total_supplier_obligation = cass_inventory_value = 0
 
         # COGS = purchases - closing stock value; gross profit = sales - COGS
         cass_cost_of_stock_sold = (total_supplier_obligation or 0) - (cass_inventory_value or 0)
@@ -360,6 +380,15 @@ def cassiterite_filter_stocks():
     try:
         from cassiterite.models import CassiteriteOutput
         logger.info("cassiterite.filter_stocks: start params=%s", request.get_json() or {})
+            # Reset session to avoid reusing an aborted connection from the pool
+        try:
+                db.session.remove()
+        except Exception:
+                
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
         data = request.get_json() or {}
         start_date = data.get('start_date')
         end_date = data.get('end_date')
@@ -482,6 +511,9 @@ FROM (
             from types import SimpleNamespace
             pages = (total_count + per_page - 1) // per_page if total_count else 1
             stocks_pagination = SimpleNamespace(pages=pages, total=total_count)
+            # Build lightweight objects for serialization so the rest of the
+            # handler can treat `filtered_stocks` like ORM objects.
+            filtered_stocks = [SimpleNamespace(**r) for r in rows] if rows else []
             timings = locals().get('timings', {})
             timings['page_sql'] = 0.0
         except Exception:
@@ -508,10 +540,7 @@ FROM (
                         if o and o.stock_id:
                             outputs_sums[o.stock_id] += float(o.output_kg or 0)
 
-        # Aggregates from DB (faster and avoids loading full tables into Python)
-        total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).filter(*stock_filters).scalar() or 0
-        total_stocks = db.session.query(func.coalesce(func.count(CassiteriteStock.id), 0)).filter(*stock_filters).scalar() or 0
-            # Build common stock filters for DB-side aggregates
+        # Build common stock filters for DB-side aggregates
         stock_filters = []
         if start_date:
                 
