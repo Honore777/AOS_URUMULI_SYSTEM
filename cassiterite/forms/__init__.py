@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, FloatField, DateField, SubmitField, SelectField, TextAreaField
+from wtforms import StringField, FloatField, DateField, SubmitField, SelectField, TextAreaField, SelectMultipleField
 from wtforms.validators import DataRequired, InputRequired, Length, Optional, ValidationError, NumberRange
 
 class CassiteriteWorkerPaymentForm(FlaskForm):
@@ -23,6 +23,10 @@ class CassiteriteWorkerPaymentForm(FlaskForm):
     reference = StringField(
         'Payment Reference',
         validators=[Optional()]
+    )
+    cashier_name = StringField(
+        'Cashier Name',
+        validators=[Optional(), Length(max=120)]
     )
     note = TextAreaField(
         'Note / Reason',
@@ -75,6 +79,7 @@ class AddCassiteriteStockForm(FlaskForm):
     transport_tag = FloatField('Transport/Tag Per Kg', validators=[Optional()])
     rma = FloatField('RMA', validators=[Optional()])
     inkomane = FloatField('Inkomane', validators=[Optional()])
+    advance_payment_ids = SelectMultipleField('Use supplier advances', choices=[], coerce=int, validators=[Optional()])
     submit = SubmitField('Add Cassiterite Stock')
 
 
@@ -85,9 +90,26 @@ class RecordCassiteriteOutputForm(FlaskForm):
     date = DateField('Date', validators=[DataRequired()], format='%Y-%m-%d')
     stock_id = SelectField('Stock (Voucher)', coerce=int, validators=[DataRequired()])
     output_kg = FloatField('Output (kg)', validators=[InputRequired()])
-    customer = StringField('Customer', validators=[DataRequired(), Length(min=2, max=100)])
-    output_amount = FloatField('Output Amount', validators=[InputRequired()])
-    amount_paid = FloatField('Cash paid', validators=[InputRequired()])
+    customer = StringField('Customer', validators=[Optional(), Length(min=2, max=100)])
+    output_amount = FloatField('Output Amount', validators=[Optional()])
+    amount_paid = FloatField('Cash paid', validators=[Optional()])
+    currency = SelectField(
+        'Currency',
+        choices=[('RWF', 'RWF'), ('USD', 'USD')],
+        validators=[DataRequired()],
+        default='RWF'
+    )
+    exchange_rate = FloatField(
+        'Exchange Rate (RWF per currency unit)',
+        validators=[Optional(), NumberRange(min=0.0001)],
+        default=1.0
+    )
+    payment_stage = SelectField(
+        'Payment Stage',
+        choices=[('advance', 'Advance'), ('final_settlement', 'Final Settlement'), ('full_settlement', 'Full Settlement')],
+        validators=[DataRequired()],
+        default='full_settlement'
+    )
     note = TextAreaField('Note', validators=[Optional()])
     submit = SubmitField('Record Output')
 
@@ -98,6 +120,17 @@ class RecordCassiteritePaymentForm(FlaskForm):
     """Form to record customer payment (uses dropdown of owing customers)."""
     customer = SelectField('Customer', validators=[DataRequired()])
     payment_amount = FloatField('Payment Amount', validators=[InputRequired()])
+    currency = SelectField(
+        'Currency',
+        choices=[('RWF', 'RWF'), ('USD', 'USD')],
+        validators=[DataRequired()],
+        default='RWF'
+    )
+    exchange_rate = FloatField(
+        'Exchange Rate (RWF per currency unit)',
+        validators=[Optional(), NumberRange(min=0.0001)],
+        default=1.0
+    )
     submit = SubmitField('Record Payment')
 
 
@@ -109,8 +142,27 @@ class OptimizeCassiteriteForm(FlaskForm):
 
 class CassiteriteSupplierPaymentForm(FlaskForm):
     """Form to record supplier payment for cassiterite"""
-    stock_id = SelectField('Stock (Lot Number)', coerce=int, validators=[DataRequired()])
+    payment_kind = SelectField(
+        'Payment Type',
+        choices=[('settlement', 'Settle Existing Supplier Debt'), ('advance', 'Pay Supplier Advance')],
+        validators=[DataRequired()],
+        default='settlement'
+    )
+    existing_supplier = SelectField('Existing Supplier (for advance)', choices=[], validators=[Optional()])
+    new_supplier = StringField('Or New Supplier Name (for advance)', validators=[Optional(), Length(max=100)])
+    stock_id = SelectField('Stock (Lot Number)', coerce=int, validators=[Optional()])
     amount = FloatField('Payment Amount', validators=[DataRequired()])
+    currency = SelectField(
+        'Currency',
+        choices=[('RWF', 'RWF'), ('USD', 'USD')],
+        validators=[DataRequired()],
+        default='RWF'
+    )
+    exchange_rate = FloatField(
+        'Exchange Rate (RWF per currency unit)',
+        validators=[Optional(), NumberRange(min=0.0001)],
+        default=1.0
+    )
     method = SelectField('Payment Method', 
                         choices=[('cash', 'Cash'), ('bank', 'Bank Transfer'), ('momo', 'Mobile Money')],
                         validators=[DataRequired()])

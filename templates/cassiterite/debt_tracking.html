@@ -9,16 +9,16 @@
 <body class="bg-gray-50 min-h-screen p-6">
     <div class="max-w-6xl mx-auto">
         <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold text-gray-800">Cassiterite Debt Tracking</h1>
-            {%if current_user.role in ['accountant','admin']%}
+            <h1 class="text-2xl font-bold text-gray-800">Cassiterite Debt Tracking (Negotiator-led)</h1>
+            {% if current_user.role in ['negotiator', 'admin'] %}
                 <a href="{{ url_for('cassiterite.dashboard') }}" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">
                     Back to Dashboard
                 </a>
-                {%else%}
+            {% else %}
                 <a href="{{ url_for('core.boss_dashboard') }}" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">
                     Back to Boss Dashboard
                 </a>
-                {%endif%}
+            {% endif %}
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -33,6 +33,12 @@
         {% endif %}
         {% endwith %}
 
+        {% if current_user.role not in ['negotiator', 'admin'] %}
+        <div class="mb-4 rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Read-only mode: negotiator records debt payments while boss/admin monitor balances and ledgers.
+        </div>
+        {% endif %}
+
         <!-- Form -->
         <div class="bg-white p-6 rounded-lg shadow-md mb-8">
             <form method="POST" action="{{ url_for('cassiterite.update_payment') }}" class="space-y-4">
@@ -46,6 +52,17 @@
                 <div>
                     <label class="block text-gray-700 font-medium mb-1">{{ form.payment_amount.label }}</label>
                     {{ form.payment_amount(class="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500") }}
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.currency.label }}</label>
+                        {{ form.currency(class="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500") }}
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.exchange_rate.label }}</label>
+                        {{ form.exchange_rate(class="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500", placeholder="Required for USD") }}
+                    </div>
                 </div>
 
                 <div>

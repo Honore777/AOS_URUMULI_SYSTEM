@@ -35,6 +35,7 @@
 
         <div class="p-6">
             <p class="font-semibold text-lg mb-2">Supplier: {{ supplier_name }}</p>
+            <p class="text-sm text-gray-600 mb-3">Transaction Type: {{ 'Advance Payment' if is_advance else 'Settlement Payment' }}</p>
 
             <!-- Details table -->
             <table class="receipt-table mt-2 mb-4 text-sm">
@@ -47,7 +48,7 @@
 
                 <tr>
                     <th>Stock ID</th>
-                    <td>{{ payment.stock_id }}</td>
+                    <td>{{ payment.stock_id or 'N/A' }}</td>
                     <th>Method</th>
                     <td>{{ payment.method }}</td>
                 </tr>
@@ -60,7 +61,7 @@
                 </tr>
                 <tr>
                     <th>Paid Amount</th>
-                    <td colspan="3">{{ '{:,.2f}'.format(payment.amount) }} RWF</td>
+                    <td colspan="3">{{ '{:,.2f}'.format(payment.amount_rwf or payment.amount or 0) }} RWF{% if payment.currency and payment.currency != 'RWF' %} ({{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} {{ payment.currency }}){% endif %}</td>
                 </tr>
 
                 <tr>

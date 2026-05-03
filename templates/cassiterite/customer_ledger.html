@@ -56,50 +56,53 @@
                 </thead>
                 <tbody class="divide-y divide-gray-200">
                     {% for entry in ledger %}
-                    <tr class="{% if entry.debit > 0 %}bg-red-50{% elif entry.credit > 0 %}bg-green-50{% else %}bg-gray-50{% endif %} hover:bg-opacity-75">
+                    {% set debit_amount = entry.get('debit', 0) %}
+                    {% set credit_amount = entry.get('credit', 0) %}
+                    {% set balance_amount = entry.get('balance', 0) %}
+                    <tr class="{% if debit_amount > 0 %}bg-red-50{% elif credit_amount > 0 %}bg-green-50{% else %}bg-gray-50{% endif %} hover:bg-opacity-75">
                         <td class="px-4 py-3 font-semibold text-gray-900">
-                            {{ entry.date.strftime('%Y-%m-%d') }}
+                            {{ entry.get('date').strftime('%Y-%m-%d') if entry.get('date') else '-' }}
                         </td>
                         <td class="px-4 py-3 text-gray-700">
-                            {{ entry.description }}
-                            {% if entry.output_kg %}
-                            <span class="text-sm text-gray-500">({{ entry.output_kg }} kg)</span>
+                            {{ entry.get('description') }}
+                            {% if entry.get('output_kg') %}
+                            <span class="text-sm text-gray-500">({{ entry.get('output_kg') }} kg)</span>
                             {% endif %}
-                            {% if entry.batch_id %}
-                            <div class="text-xs text-gray-500">Batch: {{ entry.batch_id }}</div>
+                            {% if entry.get('batch_id') %}
+                            <div class="text-xs text-gray-500">Batch: {{ entry.get('batch_id') }}</div>
                             {% endif %}
-                            {% if entry.voucher_no %}
-                            <div class="text-xs text-gray-500">Voucher: {{ entry.voucher_no }}</div>
+                            {% if entry.get('voucher_no') %}
+                            <div class="text-xs text-gray-500">Voucher: {{ entry.get('voucher_no') }}</div>
                             {% endif %}
                         </td>
                         <td class="px-4 py-3 text-right font-semibold">
-                            {% if entry.debit > 0 %}
-                            <span class="text-red-600">${{ '{:,.2f}'.format(entry.debit or 0) }}</span>
+                            {% if debit_amount > 0 %}
+                            <span class="text-red-600">${{ '{:,.2f}'.format(debit_amount or 0) }}</span>
                             {% else %}
                             -
                             {% endif %}
                         </td>
                         <td class="px-4 py-3 text-right font-semibold">
-                            {% if entry.credit > 0 %}
-                            <span class="text-green-600">{{ '{:,.2f}'.format(entry.credit or 0) }}</span>
+                            {% if credit_amount > 0 %}
+                            <span class="text-green-600">{{ '{:,.2f}'.format(credit_amount or 0) }}</span>
                             {% else %}
                             -
                             {% endif %}
                         </td>
                         <td class="px-4 py-3 text-right font-bold text-lg">
-                            {% if entry.balance > 0 %}
-                            <span class="text-red-600">{{ '{:,.2f}'.format(entry.balance or 0) }}</span>
-                            {% elif entry.balance < 0 %}
-                            <span class="text-green-600">{{ '{:,.2f}'.format(entry.balance or 0) }}</span>
+                            {% if balance_amount > 0 %}
+                            <span class="text-red-600">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
+                            {% elif balance_amount < 0 %}
+                            <span class="text-green-600">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
                             {% else %}
-                            <span class="text-gray-900">{{ '{:,.2f}'.format(entry.balance or 0) }}</span>
+                            <span class="text-gray-900">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
                             {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
                 <tfoot class="bg-gray-100 border-t-2 border-gray-300">
-                    {% set final_balance = ledger[-1].balance if ledger else 0 %}
+                    {% set final_balance = ledger[-1].get('balance', 0) if ledger else 0 %}
                     <tr>
                         <td colspan="4" class="px-4 py-3 text-right font-bold text-lg">Total Balance:</td>
                         <td class="px-4 py-3 text-right font-bold text-lg">

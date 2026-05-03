@@ -11,7 +11,7 @@ db = SQLAlchemy()
 
 class Config:
     # Application
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'change-me')
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'urumulismartsystem')
 
     # Database
     SQLALCHEMY_DATABASE_URI = os.environ.get(

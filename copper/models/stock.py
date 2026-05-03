@@ -6,6 +6,7 @@ Stores quantities, suppliers, and derived calculations.
 from datetime import datetime
 from config import db
 from sqlalchemy import func
+from sqlalchemy.orm import backref
 from utils import calculate_unit_percentage, calculate_net_balance, calculate_moyenne, logger
 import os
 
@@ -54,6 +55,12 @@ class CopperStock(db.Model):
     moyenne = db.Column(db.Float, default=0)
     moyenne_nb = db.Column(db.Float, default=0)
 
+    # Soft delete fields for auditability
+    is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    deleted_by_id = db.Column(db.Integer, nullable=True)
+    delete_reason = db.Column(db.Text, nullable=True)
+
     # Relationships
     outputs = db.relationship('CopperOutput', 
                              back_populates='stock', 
@@ -62,7 +69,15 @@ class CopperStock(db.Model):
                              cascade="all, delete-orphan")
     supplier_payments = db.relationship(
         'SupplierPayment',
+        backref=backref('stock', lazy=True, foreign_keys='SupplierPayment.stock_id'),
+        foreign_keys='SupplierPayment.stock_id',
+        lazy=True,
+        cascade="all, delete-orphan"
+    )
+    advance_allocations = db.relationship(
+        'CopperAdvanceAllocation',
         backref='stock',
+        foreign_keys='CopperAdvanceAllocation.stock_id',
         lazy=True,
         cascade="all, delete-orphan"
     )
@@ -79,10 +94,16 @@ class CopperStock(db.Model):
 
     def remaining_to_pay(self):
         """Calculate remaining amount to pay supplier"""
-        # Use a DB-side aggregate to avoid loading payment rows into Python
-        from .payment import SupplierPayment
-        total_paid = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).filter(SupplierPayment.stock_id == self.id).scalar() or 0
-        return (self.net_balance or 0) - total_paid
+        # Use DB-side aggregates to avoid loading payment rows into Python.
+        from .payment import SupplierPayment, CopperAdvanceAllocation
+        total_paid = db.session.query(func.coalesce(func.sum(SupplierPayment.amount_rwf), 0)).filter(
+            SupplierPayment.stock_id == self.id,
+            SupplierPayment.is_deleted.is_(False),
+        ).scalar() or 0
+        advance_applied = db.session.query(func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0)).filter(
+            CopperAdvanceAllocation.stock_id == self.id,
+        ).scalar() or 0
+        return max((self.net_balance or 0) - total_paid - float(advance_applied or 0.0), 0)
 
     def update_calculations(self):
         """

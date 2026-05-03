@@ -30,6 +30,17 @@
             {% endif %}
             {% endwith %}
 
+            {% if pending_reviews is defined and pending_reviews %}
+            <div class="mb-4 p-4 rounded bg-amber-50 text-amber-900 border border-amber-200">
+                <p class="font-semibold">Pending requests waiting boss approval: {{ pending_reviews|length }}</p>
+                <ul class="mt-2 text-sm list-disc list-inside">
+                    {% for r in pending_reviews[:5] %}
+                    <li>{{ r.customer }} - {{ '{:,.2f}'.format(r.amount or 0) }} {{ r.currency }} ({{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else 'N/A' }})</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
             <form method="POST" action="{{ url_for('copper.pay_worker') }}" class="space-y-4 print:hidden">
                 {{ form.hidden_tag() }}
                 <div>
@@ -105,7 +116,7 @@
                             <td class="px-4 py-3 text-gray-700">{{ payment.note }}</td>
                             <td class="px-4 py-3 text-gray-700">
                                 <a href="{{ url_for('copper.worker_receipt', payment_id=payment.id) }}" target="_blank" class="inline-block bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition">Receipt</a>
-                                <button onclick="printReceipt('{{ url_for('copper.worker_receipt', payment_id=payment.id) }}')" class="inline-block bg-indigo-600 text-white px-3 py-1 rounded text-sm hover:bg-indigo-700 transition ml-2 print:hidden">Print</button>
+                                <button data-url="{{ url_for('copper.worker_receipt', payment_id=payment.id) }}" onclick="printReceipt(this.dataset.url)" class="inline-block bg-indigo-600 text-white px-3 py-1 rounded text-sm hover:bg-indigo-700 transition ml-2 print:hidden">Print</button>
                                 <a href="{{ url_for('copper.edit_worker_payment', payment_id=payment.id) }}" class="inline-block bg-indigo-700 text-white px-3 py-1 rounded text-sm hover:bg-indigo-800 transition ml-2">Edit</a>
                                 <form method="post" action="{{ url_for('copper.delete_worker_payment', payment_id=payment.id) }}" style="display:inline" onsubmit="return confirm('Delete this payment?');">
                                     <button type="submit" class="inline-block bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 ml-2">Delete</button>

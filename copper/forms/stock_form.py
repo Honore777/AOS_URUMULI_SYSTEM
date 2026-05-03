@@ -3,8 +3,8 @@ Copper Stock Form
 For adding new copper stock entries
 """
 from flask_wtf import FlaskForm
-from wtforms import StringField, DecimalField, SubmitField, DateField
-from wtforms.validators import DataRequired, InputRequired, NumberRange
+from wtforms import StringField, DecimalField, SubmitField, DateField, SelectMultipleField
+from wtforms.validators import DataRequired, InputRequired, NumberRange, Optional
 
 
 class CopperStockForm(FlaskForm):
@@ -21,4 +21,5 @@ class CopperStockForm(FlaskForm):
     rma_default = DecimalField('RMA default', default=125, validators=[NumberRange(min=0)])
     rra_3_percent_default = DecimalField('RRA 3 Percent Default', default=5, validators=[NumberRange(min=0)])
     inkomane_default = DecimalField('Inkomane default', default=40, validators=[NumberRange(min=0)])
+    advance_payment_ids = SelectMultipleField('Use supplier advances', choices=[], coerce=int, validators=[Optional()])
     submit = SubmitField('Add Stock')

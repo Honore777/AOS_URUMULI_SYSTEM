@@ -9,13 +9,14 @@ Main Flask application factory. This file wires together:
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from flask_migrate import Migrate
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from datetime import datetime, date, time, timedelta
 
 from config import Config, db
 import logging
 import os
 from logging.handlers import RotatingFileHandler
 from utils import trace_time
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from core.models import User
 
 app = Flask(__name__)
@@ -129,8 +130,20 @@ def translate_mineral(mineral_value):
     }
     return mapping.get(mineral_value, mineral_value)
 
+
+def rwanda_datetime(value, fmt='%Y-%m-%d %H:%M'):
+    if not value:
+        return 'N/A'
+    try:
+        if isinstance(value, datetime):
+            return (value + timedelta(hours=2)).strftime(fmt)
+        return value.strftime(fmt)
+    except Exception:
+        return value
+
 app.add_template_filter(translate_review_type, name='translate_review_type')
 app.add_template_filter(translate_mineral, name='translate_mineral')
+app.add_template_filter(rwanda_datetime, name='rwanda_datetime')
 
 # ============================================================
 # ROUTES
@@ -173,9 +186,13 @@ def login():
             return redirect(url_for("core.boss_dashboard"))
         if user.role == "store_keeper":
             return redirect(url_for("core.store_dashboard"))
+        if user.role == "cashier":
+            return redirect(url_for("core.cashier_dashboard"))
         if user.role == "accountant":
             # Accountants mainly work on operations; send to copper dashboard
             return redirect(url_for("copper.dashboard"))
+        if user.role == "negotiator":
+            return redirect(url_for("core.customer_receipts"))
 
         # Fallback: generic entry selector
         return redirect(url_for("entry_point"))
@@ -212,8 +229,12 @@ def landing():
             return redirect(url_for("core.boss_dashboard"))
         if getattr(user, 'role', None) == "store_keeper":
             return redirect(url_for("core.store_dashboard"))
+        if getattr(user, 'role', None) == "cashier":
+            return redirect(url_for("core.cashier_dashboard"))
         if getattr(user, 'role', None) == "accountant":
             return redirect(url_for("copper.dashboard"))
+        if getattr(user, 'role', None) == "negotiator":
+            return redirect(url_for("core.customer_receipts"))
 
         
 
@@ -243,12 +264,32 @@ def entry_point():
 def api_dashboard_data():
     """API endpoint for dashboard data"""
     from copper.models import CopperStock, CopperOutput
+    from core.models import BulkOutputPlan, BulkPlanStatus, CustomerReceipt
     try:
         app.logger.info("api_dashboard_data: starting")
         # Use DB-side aggregates to avoid loading full tables
         total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).scalar()
         total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).scalar()
-        total_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).scalar()
+
+        # Single source of truth: customer outstanding = plans - receipts
+        total_expected = (
+            db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+            .filter(
+                BulkOutputPlan.mineral_type.in_(['copper', 'coltan']),
+                BulkOutputPlan.total_expected_amount.isnot(None),
+                BulkOutputPlan.total_expected_amount > 0,
+                BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+            )
+            .scalar()
+            or 0.0
+        )
+        total_paid = (
+            db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+            .filter(CustomerReceipt.mineral_type.in_(['copper', 'coltan']))
+            .scalar()
+            or 0.0
+        )
+        total_debt = float(total_expected or 0.0) - float(total_paid or 0.0)
         stock_count = db.session.query(func.count(CopperStock.id)).scalar()
         output_count = db.session.query(func.count(CopperOutput.id)).scalar()
 
@@ -268,64 +309,153 @@ def api_dashboard_data():
 @app.route('/supplier/<supplier>/ledger')
 def supplier_ledger(supplier):
     """View supplier transaction ledger"""
-    from copper.models import CopperStock, SupplierPayment
+    from copper.models import CopperStock, SupplierPayment, CopperSupplier, CopperAdvanceAllocation
     try:
         app.logger.info("supplier_ledger: generating ledger for %s", supplier)
+        supplier_row = None
+        try:
+            supplier_id = int(supplier)
+        except Exception:
+            supplier_id = None
+        if supplier_id is not None:
+            supplier_row = CopperSupplier.query.get(supplier_id)
+        if supplier_row is None:
+            supplier_row = CopperSupplier.query.filter(CopperSupplier.name == supplier).first()
+        supplier_name = supplier_row.name if supplier_row else supplier
         # Fetch only required stock columns and batch-load payments to avoid N+1
         stock_rows = db.session.query(
             CopperStock.id,
             CopperStock.date,
             CopperStock.voucher_no,
             CopperStock.net_balance,
-        ).filter(CopperStock.supplier == supplier).order_by(CopperStock.date).all()
+        ).filter(CopperStock.supplier == supplier_name).order_by(CopperStock.date).all()
 
         stock_ids = [r.id for r in stock_rows]
-        payments = []
+        allocation_map = {}
         if stock_ids:
-            payments = db.session.query(
-                SupplierPayment
-            ).filter(SupplierPayment.stock_id.in_(stock_ids)).order_by(SupplierPayment.paid_at).all()
+            allocation_rows = (
+                db.session.query(
+                    CopperAdvanceAllocation.stock_id,
+                    func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('applied'),
+                )
+                .filter(CopperAdvanceAllocation.stock_id.in_(stock_ids))
+                .group_by(CopperAdvanceAllocation.stock_id)
+                .all()
+            )
+            allocation_map = {row.stock_id: float(row.applied or 0) for row in allocation_rows}
 
-        payments_map = {}
-        for p in payments:
-            payments_map.setdefault(p.stock_id, []).append(p)
+        payments = []
+        advance_payments = []
+        payment_amounts_total = 0.0
 
-        # Build ledger entries in chronological order by iterating stocks and their payments
-        ledger = []
-        running_balance = 0
+        payment_filters = [SupplierPayment.is_deleted.is_(False)]
+        supplier_conditions = [
+            SupplierPayment.supplier_id == getattr(supplier_row, 'id', None),
+            SupplierPayment.supplier_name == supplier_name,
+        ]
+        if stock_ids:
+            supplier_conditions.append(SupplierPayment.stock_id.in_(stock_ids))
+
+        payment_rows = (
+            db.session.query(SupplierPayment)
+            .filter(*payment_filters)
+            .filter(or_(*supplier_conditions))
+            .order_by(SupplierPayment.paid_at)
+            .all()
+        )
+        for payment in payment_rows:
+            payment_amount = float(payment.amount_rwf or payment.amount or 0)
+            payment_amounts_total += payment_amount
+            if payment.stock_id:
+                payments.append(payment)
+            else:
+                advance_payments.append(payment)
+
+        # Build a single chronological event stream.
+        # Advances are real credits. Stocks are real debits.
+        ledger_events = []
+
         for r in stock_rows:
-            running_balance += (r.net_balance or 0)
-            ledger.append({
+            applied = allocation_map.get(r.id, 0.0)
+            ledger_events.append({
                 'date': r.date,
-                'description': f"Stock {r.voucher_no}",
-                'debit': r.net_balance,
-                'credit': 0,
-                'balance': running_balance
+                'kind': 'stock',
+                'sort_key': 1,
+                'description': f"Stock {r.voucher_no}" + (f" (advance linked: {applied:,.2f} RWF)" if applied > 0 else ""),
+                'debit': float(r.net_balance or 0),
+                'credit': 0.0,
+                'advance_amount': 0.0,
             })
 
-            for payment in payments_map.get(r.id, []):
-                running_balance -= payment.amount
-                ledger.append({
-                    'date': payment.paid_at,
-                    'description': f"Payment (Ref: {payment.reference})",
-                    'debit': 0,
-                    'credit': payment.amount,
-                    'balance': running_balance
-                })
+        for payment in advance_payments:
+            payment_amount = float(payment.amount_rwf or payment.amount or 0)
+            remaining = float(payment.advance_remaining or 0)
+            allocated_amt = payment_amount - remaining
+            ledger_events.append({
+                'date': payment.paid_at,
+                'kind': 'advance',
+                'sort_key': 0,
+                'description': f"Advance Payment (Ref: {payment.reference}) [Advance] | Allocated: {allocated_amt:,.2f} RWF, Remaining: {remaining:,.2f} RWF",
+                'debit': 0.0,
+                'credit': payment_amount,
+                'advance_amount': payment_amount,
+            })
 
-        # Totals for the ledger computed via DB aggregates to avoid re-summing
-        total_owed = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).filter(CopperStock.supplier == supplier).scalar()
-        total_paid = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(CopperStock, CopperStock.id == SupplierPayment.stock_id).filter(CopperStock.supplier == supplier).scalar()
-        balance = (total_owed or 0) - (total_paid or 0)
+        for payment in payments:
+            payment_amount = float(payment.amount_rwf or payment.amount or 0)
+            ledger_events.append({
+                'date': payment.paid_at,
+                'kind': 'settlement',
+                'sort_key': 2,
+                'description': f"Settlement Payment (Ref: {payment.reference})",
+                'debit': 0.0,
+                'credit': payment_amount,
+                'advance_amount': 0.0,
+            })
+
+        def _ledger_sort_value(value):
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, date):
+                return datetime.combine(value, time.min)
+            return datetime.min
+
+        ledger_events.sort(key=lambda item: (_ledger_sort_value(item['date']), item['sort_key']))
+
+        ledger = []
+        running_balance = 0.0
+        for event in ledger_events:
+            running_balance += float(event['debit']) - float(event['credit'])
+            ledger.append({
+                'date': event['date'],
+                'description': event['description'],
+                'debit': event['debit'],
+                'credit': event['credit'],
+                'advance_amount': event.get('advance_amount', 0.0),
+                'balance': running_balance,
+            })
+
+        # Summary cards (Model B):
+        # - Total owed is the sum of stock net balances.
+        # - Total paid includes ALL supplier payments (advances + settlements).
+        # - Balance can be negative (supplier credit).
+        total_owed = sum(float(r.net_balance or 0.0) for r in stock_rows)
+        total_paid_settlements = sum(float(p.amount_rwf or p.amount or 0.0) for p in payments)
+        total_advances = sum(float(p.amount_rwf or p.amount or 0.0) for p in advance_payments)
+        total_paid = float(total_paid_settlements + total_advances)
+        total_advance_applied = sum(float(v or 0.0) for v in allocation_map.values())
+        balance = float((total_owed or 0.0) - (total_paid or 0.0))
 
         app.logger.info("supplier_ledger: completed for %s (owed=%s paid=%s)", supplier, total_owed, total_paid)
 
         return render_template(
             'copper/supplier_ledger.html',
-            supplier=supplier,
+            supplier=supplier_name,
             ledger=ledger,
             total_owed=total_owed,
             total_paid=total_paid,
+            total_advances=total_advances,
+            total_advance_applied=total_advance_applied,
             balance=balance,
             user_role=getattr(current_user, 'role', None),
         )
@@ -452,6 +582,6 @@ def enable_profiling():
 
 
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
+    # Schema changes are managed by Alembic migrations.
+    # Avoid db.create_all() here because the runtime DB user may not have DDL privileges.
     app.run(debug=True, host='0.0.0.0', port=5000)

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Debts - Batch {{ plan.batch_id }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-slate-800">Track Debts — Batch {{ plan.batch_id }}</h1>
+            <a href="{{ url_for('core.customer_receipts') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Back</a>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <aside class="lg:col-span-3 rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator</h2>
+                <nav class="space-y-2">
+                    <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Update Debts</a>
+                    <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Ledgers</a>
+                </nav>
+            </aside>
+
+            <div class="lg:col-span-9 space-y-6">
+                <div class="rounded-xl bg-white p-6 shadow-lg">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <p class="text-sm text-slate-600">Mineral</p>
+                            <p class="font-bold text-slate-900">{{ plan.mineral_type }}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-slate-600">Customer</p>
+                            <p class="font-bold text-slate-900">{{ plan.customer or '-' }}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-slate-600">Quantity (kg)</p>
+                            <p class="font-bold text-slate-900">{{ '%.2f'|format(summary.total_qty or 0) }}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-slate-600">Moyenne</p>
+                            <p class="font-bold text-slate-900">{{ '%.2f'|format(summary.moyenne or 0) }}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-slate-600">Total Expected</p>
+                            <p class="font-bold text-slate-900">{{ '{:,.0f}'.format(plan.total_expected_amount or 0) }}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-slate-600">Outstanding (RWF)</p>
+                            <p class="font-bold text-slate-900">{{ '{:,.0f}'.format(outstanding or 0) }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-xl bg-white p-6 shadow-lg">
+                    <h2 class="text-lg font-bold mb-4">Record Payment</h2>
+                    {% if not can_record %}
+                    <div class="mb-4 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">Read-only mode: only negotiator records payments.</div>
+                    {% endif %}
+                    <form method="post" action="{{ url_for('core.track_debts', plan_id=plan.id) }}" class="space-y-4">
+                        <div>
+                            <label class="text-sm font-semibold">Customer</label>
+                            <input type="text" name="customer" value="{{ plan.customer or '' }}" class="w-full rounded border px-3 py-2" required />
+                        </div>
+                        <div class="grid grid-cols-3 gap-4">
+                            <div>
+                                <label class="text-sm font-semibold">Amount</label>
+                                <input type="number" name="amount_input" step="0.01" min="0" class="w-full rounded border px-3 py-2" required />
+                            </div>
+                            <div>
+                                <label class="text-sm font-semibold">Currency</label>
+                                <select name="currency" class="w-full rounded border px-3 py-2">
+                                    <option value="RWF">RWF</option>
+                                    <option value="USD">USD</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-sm font-semibold">Exchange Rate</label>
+                                <input type="number" name="exchange_rate" step="0.01" min="0" class="w-full rounded border px-3 py-2" placeholder="Only if USD" />
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-sm font-semibold">Receipt Type</label>
+                                <select name="receipt_type" class="w-full rounded border px-3 py-2">
+                                    <option value="ADVANCE">Advance</option>
+                                    <option value="INSTALLMENT">Installment</option>
+                                    <option value="FINAL_SETTLEMENT">Final Settlement</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-sm font-semibold">Payment Channel</label>
+                                <select name="payment_channel" class="w-full rounded border px-3 py-2">
+                                    <option value="CASH">Cash</option>
+                                    <option value="BANK">Bank Transfer</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-sm font-semibold">Note</label>
+                            <textarea name="note" rows="2" class="w-full rounded border px-3 py-2"></textarea>
+                        </div>
+                        <div>
+                            <button type="submit" class="rounded bg-emerald-600 text-white px-4 py-2">Record Payment</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="rounded-xl bg-white p-6 shadow-lg">
+                    <h2 class="text-lg font-bold mb-4">Receipts for this Batch</h2>
+                    {% if receipts %}
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-800 text-white">
+                            <tr>
+                                <th class="px-2 py-2 text-left">Date</th>
+                                <th class="px-2 py-2 text-left">Type</th>
+                                <th class="px-2 py-2 text-left">Customer</th>
+                                <th class="px-2 py-2 text-right">Amount (RWF)</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            {% for r in receipts %}
+                            <tr>
+                                <td class="px-2 py-2">{{ r.received_at.strftime('%Y-%m-%d %H:%M') if r.received_at else '-' }}</td>
+                                <td class="px-2 py-2">{{ r.receipt_type }}</td>
+                                <td class="px-2 py-2">{{ r.customer }}</td>
+                                <td class="px-2 py-2 text-right">{{ '{:,.0f}'.format(r.amount_rwf or 0) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p class="text-sm text-slate-500">No receipts recorded yet for this batch.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

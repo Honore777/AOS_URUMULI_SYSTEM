@@ -13,6 +13,20 @@ from utils import calculate_unit_percentage
 from flask import request
 
 
+def _normalize_amount_to_rwf(amount, currency, exchange_rate):
+    currency_code = (currency or 'RWF').upper()
+    input_amount = float(amount or 0)
+    rate = float(exchange_rate or 0)
+
+    if currency_code == 'RWF':
+        return input_amount, 1.0
+    if currency_code == 'USD':
+        if rate <= 0:
+            raise ValueError('Exchange rate is required and must be greater than 0 for USD transactions.')
+        return input_amount * rate, rate
+    raise ValueError(f'Unsupported currency: {currency_code}')
+
+
 @copper_bp.route("/outputs", methods=["GET", "POST"])
 @role_required("accountant")
 def record_output():
@@ -40,7 +54,17 @@ def record_output():
             customer = request.form.get("customer")
             output_amount = float(request.form.get('output_amount') or 0)
             amount_paid = float(request.form.get('amount_paid') or 0)
+            currency = (request.form.get('currency') or 'RWF').upper()
+            exchange_rate_input = request.form.get('exchange_rate')
+            payment_stage = (request.form.get('payment_stage') or 'full_settlement').strip().lower()
             note = request.form.get("note")
+
+            try:
+                output_amount_rwf, exchange_rate = _normalize_amount_to_rwf(output_amount, currency, exchange_rate_input)
+                amount_paid_rwf, _ = _normalize_amount_to_rwf(amount_paid, currency, exchange_rate_input)
+            except ValueError as exc:
+                flash(str(exc), "danger")
+                return redirect(url_for('copper.record_output'))
 
             # Use the already-fetched `stock` object instead of a second DB call
             available_balance = stock.local_balance or 0
@@ -55,7 +79,12 @@ def record_output():
                 date=date,
                 output_kg=output_kg,
                 output_amount=output_amount,
+                output_amount_rwf=output_amount_rwf,
                 amount_paid=amount_paid,
+                amount_paid_rwf=amount_paid_rwf,
+                currency=currency,
+                exchange_rate=exchange_rate,
+                payment_stage=payment_stage,
                 customer=customer,
                 note=note
             )
@@ -106,7 +135,7 @@ def record_output():
             from flask import current_app
             from flask_login import current_user
             from utils import send_brevo_email_async
-            output_details = f"Stock: {stock.voucher_no}, Supplier: {stock.supplier}, Output: {output_kg} kg, Customer: {customer}, Note: {note}"
+            output_details = f"Stock: {stock.voucher_no}, Supplier: {stock.supplier}, Output: {output_kg} kg, Note: {note}"
             subject = "Stock Output Request"
             html_content = (
                 "<p>Dear Storekeeper,</p>"
@@ -125,10 +154,9 @@ def record_output():
             
 
 
-            flash(f"Output recorded ({output_kg} kg) for {stock.voucher_no}. Moyenne and Moyenne NB updated.", "success")
+            flash(f"Output recorded ({output_kg} kg) for {stock.voucher_no}. Customer and amount will be added later by the negotiator.", "success")
             return redirect(url_for("copper.record_output"))
 
-        # Server-side filters (via GET): customer, from, to
         customer_filter = request.args.get('customer') or ''
         date_from = request.args.get('from') or ''
         date_to = request.args.get('to') or ''

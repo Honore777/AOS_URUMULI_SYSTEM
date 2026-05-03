@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if review.type and ('mukozi' in review.type|lower or 'worker' in review.type|lower) %}Expense Tracking Approval Form{% else %}Payment Request Form{% endif %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <style>
+        @media print {
+            @page { size: A4 portrait; margin: 10mm; }
+            .no-print { display: none !important; }
+            body { background: white; margin: 0; }
+        }
+        .line { border-top: 1px solid #6b7280; width: 12rem; }
+    </style>
+</head>
+<body class="bg-white p-6">
+    <div class="max-w-4xl mx-auto border border-gray-300 shadow-lg rounded-lg p-6">
+        <div class="flex items-center justify-between border-b pb-4 mb-4">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">{% if review.type and ('mukozi' in review.type|lower or 'worker' in review.type|lower) %}Expense Tracking / Approval Form{% else %}Payment Request / Approval Form{% endif %}</h1>
+                <p class="text-sm text-gray-600">Supplier, worker, or expense request for boss approval</p>
+            </div>
+            <div class="text-right text-sm text-gray-600">
+                <div><strong>Ref:</strong> {{ review.id }}</div>
+                <div><strong>Date:</strong> {{ review.created_at.strftime('%Y-%m-%d %H:%M') if review.created_at else '-' }}</div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm mb-4">
+            <div><strong>Mineral:</strong> {{ review.mineral_type or '-' }}</div>
+            <div><strong>Request Type:</strong> {{ review.type or '-' }}</div>
+            <div><strong>Beneficiary:</strong> {{ review.customer or '-' }}</div>
+            <div>
+                <strong>Amount:</strong>
+                {% if (payload.get('currency') or review.currency or 'RWF')|upper == 'USD' %}
+                    {{ amount_breakdown.primary if amount_breakdown else ('{:,.2f}'.format(payload.get('amount_input') or 0) ~ ' USD') }}
+                    <div class="text-xs text-gray-500">{{ amount_breakdown.note if amount_breakdown else ('{:,.2f}'.format(payload.get('amount_rwf') or review.amount or 0) ~ ' RWF') }}</div>
+                {% else %}
+                    {{ '{:,.2f}'.format(review.amount or 0) }} {{ review.currency or 'RWF' }}
+                {% endif %}
+            </div>
+            <div><strong>Requested By (Accountant):</strong> {{ accountant_name or (requested_by.username if requested_by else '-') }}</div>
+            <div><strong>Cashier:</strong> {{ cashier_name or '-' }}</div>
+        </div>
+
+        <div class="mb-4">
+            <h2 class="font-semibold text-gray-800 mb-2">Request Details</h2>
+            <div class="rounded border bg-gray-50 p-3 text-sm text-gray-700">
+                <div><strong>Comment:</strong> {{ review.boss_comment or '-' }}</div>
+                <div><strong>Payment Kind:</strong> {{ payload.get('payment_kind') or '-' }}</div>
+                <div><strong>Method:</strong> {{ payload.get('method') or '-' }}</div>
+                <div><strong>Reference:</strong> {{ payload.get('reference') or '-' }}</div>
+                <div><strong>Note:</strong> {{ payload.get('note') or '-' }}</div>
+                <div><strong>Currency:</strong> {{ payload.get('currency') or review.currency or 'RWF' }}</div>
+                <div><strong>Exchange Rate:</strong> {{ '{:,.2f}'.format(payload.get('exchange_rate') or 1) }}</div>
+                {% if (payload.get('currency') or review.currency or 'RWF')|upper == 'USD' %}
+                <div><strong>Original USD Amount:</strong> {{ '{:,.2f}'.format(payload.get('amount_input') or 0) }} USD</div>
+                <div><strong>Converted Amount:</strong> {{ '{:,.2f}'.format(payload.get('amount_rwf') or review.amount or 0) }} RWF</div>
+                {% endif %}
+                <div><strong>Supplier ID:</strong> {{ payload.get('supplier_id') or '-' }}</div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-10">
+            <div class="text-center">
+                <div class="line mx-auto mb-2"></div>
+                <div class="text-sm font-semibold">Assigned By Accountant (Name/Signature)</div>
+                <div class="text-xs text-gray-500">{{ accountant_name or '-' }}</div>
+            </div>
+            <div class="text-center">
+                <div class="line mx-auto mb-2"></div>
+                <div class="text-sm font-semibold">Cashier (Name/Signature)</div>
+                <div class="text-xs text-gray-500">{{ cashier_name or '-' }}</div>
+            </div>
+            <div class="text-center">
+                <div class="line mx-auto mb-2"></div>
+                <div class="text-sm font-semibold">Final Approver - Boss (Name/Signature)</div>
+                <div class="text-xs text-gray-500">{{ boss_name or 'Pending approval' }}</div>
+            </div>
+        </div>
+
+        <div class="mt-6 no-print text-center">
+            <button onclick="window.print()" class="px-4 py-2 bg-slate-800 text-white rounded">Print</button>
+        </div>
+    </div>
+</body>
+</html>

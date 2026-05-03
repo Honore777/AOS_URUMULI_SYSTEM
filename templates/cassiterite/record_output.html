@@ -72,41 +72,8 @@
                         {% endif %}
                 </div>
 
-                <div>
-                    <label class="block text-gray-700 font-medium mb-1">{{ form.customer.label }}</label>
-                    
-                    {{ form.customer(placeholder="Enter customer name", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
-                        {% if form.customer.errors %}
-                        <div class="text-red-500 text-sm mt-1">
-                            {% for error in form.customer.errors %}
-                            <p>• {{ error }}</p>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
-                </div>
-
-                <div>
-                    <label class="block text-gray-700 font-medium mb-1">{{ form.output_amount.label }}</label>
-                    {{ form.output_amount(placeholder="Enter output amount ($)", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
-                        {% if form.output_amount.errors %}
-                        <div class="text-red-500 text-sm mt-1">
-                            {% for error in form.output_amount.errors %}
-                            <p>• {{ error }}</p>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
-                </div>
-
-                <div>
-                    <label class="block text-gray-700 font-medium mb-1">{{ form.amount_paid.label }}</label>
-                    {{ form.amount_paid(placeholder="Enter amount paid ($)", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
-                        {% if form.amount_paid.errors %}
-                        <div class="text-red-500 text-sm mt-1">
-                            {% for error in form.amount_paid.errors %}
-                            <p>• {{ error }}</p>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
+                <div class="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Accountant records only the output quantity. Customer details and negotiated money fields are captured later by the negotiator.
                 </div>
 
                 <div>
@@ -120,9 +87,7 @@
             <ul class="text-sm text-blue-800 space-y-1">
                 <li><strong>Stock:</strong> Select the cassiterite stock to deduct from</li>
                 <li><strong>Output (kg):</strong> Quantity in kilograms extracted or processed</li>
-                <li><strong>Customer:</strong> Name of the customer receiving this output</li>
-                <li><strong>Output Amount:</strong> Total value of the output</li>
-                <li><strong>Amount Paid:</strong> Payment received from customer</li>
+                <li><strong>Negotiator step:</strong> customer, amount, and payment stage are entered later after store confirmation</li>
             </ul>
         </div>
     </div>

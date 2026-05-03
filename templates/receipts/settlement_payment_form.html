@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Settlement Payment Form — Supplier Debt</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <style>
+        @media print {
+            @page { size: A4 portrait; margin: 10mm; }
+            .no-print { display: none !important; }
+            body { background: white; margin: 0; }
+            .form-wrapper { width: 100%; margin: 0; padding: 0; }
+        }
+        .form-wrapper { max-width: 800px; margin: 0 auto; padding: 20px; }
+        .header-band { background: linear-gradient(90deg, #e11d48 0%, #1e293b 100%); padding: 1rem; display: flex; align-items: center; }
+        .header-band img { height: 3rem; margin-right: 1rem; }
+        .header-text h2 { color: white; font-size: 1.125rem; font-weight: bold; }
+        .header-text p { color: white; font-size: 0.75rem; }
+        .form-table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        .form-table th { background-color: #f3f4f6; text-align: left; padding: 0.6rem; border: 1px solid #d1d5db; font-weight: 600; }
+        .form-table td { padding: 0.6rem; border: 1px solid #d1d5db; }
+        .form-table tr:nth-child(even) { background-color: #fafafa; }
+        .section-title { font-weight: 600; font-size: 0.95rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: #1f2937; border-bottom: 2px solid #e11d48; padding-bottom: 0.5rem; }
+        .signature-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2rem; margin-top: 3rem; }
+        .signature-box { text-align: center; }
+        .signature-line { border-top: 1px solid #374151; width: 100%; margin-bottom: 0.5rem; }
+        .signature-label { font-size: 0.875rem; font-weight: 600; color: #374151; }
+        .signature-date { font-size: 0.75rem; color: #6b7280; }
+        .detail-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+        .detail-item { }
+        .detail-label { font-size: 0.85rem; font-weight: 600; color: #6b7280; }
+        .detail-value { font-size: 0.95rem; color: #1f2937; }
+        .alert-settlement { padding: 1rem; background-color: #dbeafe; border-left: 4px solid #0284c7; font-size: 0.9rem; color: #0c4a6e; margin-bottom: 1rem; }
+    </style>
+</head>
+<body class="bg-white">
+    <div class="form-wrapper shadow-lg border border-gray-300">
+        <!-- Professional Header -->
+        <div class="header-band">
+            <img src="/static/logo.png" alt="Company Logo" />
+            <div class="header-text">
+                <h2>SETTLEMENT PAYMENT FORM</h2>
+                <p>Supplier Debt Settlement Authorization</p>
+            </div>
+        </div>
+
+        <!-- Document Info -->
+        <div style="padding: 1.5rem; background-color: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+            <div class="detail-row">
+                <div class="detail-item">
+                    <div class="detail-label">Document Reference:</div>
+                    <div class="detail-value">{{ payment.reference or payment.id }}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Payment Date:</div>
+                    <div class="detail-value">{{ payment.paid_at.strftime('%d %B %Y') if payment.paid_at else 'N/A' }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settlement Alert -->
+        <div style="padding: 1.5rem;">
+            <div class="alert-settlement">
+                ⚠ This payment is a settlement for outstanding supplier debt. Amount paid reduces the outstanding balance owed to the supplier.
+            </div>
+
+            <!-- Supplier Information -->
+            <div class="section-title">SUPPLIER INFORMATION</div>
+            <table class="form-table">
+                <tr>
+                    <th>Supplier Name</th>
+                    <td>{{ supplier_name }}</td>
+                    <th>Stock / Item</th>
+                    <td>{{ payment.stock_id or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <th>Payment Method</th>
+                    <td>{{ payment.method }}</td>
+                    <th>Payment Currency</th>
+                    <td>{{ payment.currency or 'RWF' }}</td>
+                </tr>
+            </table>
+
+            <!-- Settlement Details -->
+            <div class="section-title">DEBT SETTLEMENT DETAILS</div>
+            <table class="form-table">
+                <tr>
+                    <th>Outstanding Balance Before Payment</th>
+                    <td style="text-align: right; font-weight: 600; color: #dc2626;">{{ '{:,.2f}'.format(remaining_before or 0) }} RWF</td>
+                    <th>Settlement Amount Paid</th>
+                    <td style="text-align: right; font-weight: 600; color: #059669;">
+                        {% if (payment.currency or 'RWF')|upper == 'USD' %}
+                            <div>{{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} USD</div>
+                            <div style="font-size: 0.78rem; color: #6b7280;">{{ '{:,.2f}'.format(payment.amount_rwf or 0) }} RWF @ {{ '{:,.2f}'.format(payment.exchange_rate or 0) }} RWF/USD</div>
+                        {% else %}
+                            {{ '{:,.2f}'.format(payment.amount_rwf or payment.amount or 0) }} RWF
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <th>Outstanding Balance After Payment</th>
+                    <td style="text-align: right; font-weight: 600; color: #0284c7;">{{ '{:,.2f}'.format(remaining_after or 0) }} RWF</td>
+                    <th>Payment Reference</th>
+                    <td>{{ payment.reference or '-' }}</td>
+                </tr>
+                {% if (payment.currency or 'RWF')|upper == 'USD' %}
+                <tr>
+                    <th>Original Currency / Audit Trail</th>
+                    <td style="text-align: right; font-weight: 600; color: #1d4ed8;">{{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} USD</td>
+                    <th>Exchange Rate Used</th>
+                    <td style="text-align: right; font-weight: 600; color: #7c3aed;">{{ '{:,.2f}'.format(payment.exchange_rate or 0) }} RWF/USD</td>
+                </tr>
+                {% endif %}
+            </table>
+
+            <!-- Notes Section -->
+            {% if payment.note %}
+            <div class="section-title">PAYMENT NOTES / REMARKS</div>
+            <div style="padding: 1rem; background-color: #fef3c7; border-left: 4px solid #f59e0b; font-size: 0.9rem; color: #92400e;">
+                {{ payment.note }}
+            </div>
+            {% endif %}
+
+            <!-- Approval Signatures -->
+            <div class="signature-row">
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Accountant / Submitted By</div>
+                    <div class="signature-date">Date: ______________</div>
+                </div>
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Cashier / Verified By</div>
+                    <div class="signature-date">Date: ______________</div>
+                </div>
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Boss / Final Approval</div>
+                    <div class="signature-date">Date: ______________</div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; text-align: center; font-size: 0.8rem; color: #6b7280;">
+                <p>This document authorizes payment for outstanding supplier debt. Keep for audit and reconciliation records.</p>
+                <button onclick="window.print()" class="no-print mt-4 px-4 py-2 bg-slate-800 text-white rounded hover:bg-slate-900 transition text-sm">Print Form</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

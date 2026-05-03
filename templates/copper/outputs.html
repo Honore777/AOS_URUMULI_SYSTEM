@@ -32,44 +32,12 @@
     </div>
   {% endif %}
 {% endwith %}
-
-
-<div class="container mx-auto p-6">
-    <div class="flex justify-between items-center mb-6">
-    <h1 class="text-2xl font-bold text-gray-800">Record Coltan Output</h1>
-    <a href="{{ url_for('copper.dashboard') }}" 
-       class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">
-        Back to Dashboard
-    </a>
-</div>
-
-
-
-    <form method="POST" class="bg-white shadow rounded p-6 space-y-4">
-        {{ form.hidden_tag() }}
-        <div>
-            {{ form.stock_id.label(class_="block mb-1 font-semibold") }}
-            {{ form.stock_id(class_="w-full border px-3 py-2 rounded") }}
+        <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+          Customer, amount, currency, and settlement stage are recorded later by the negotiator after store confirmation.
         </div>
-        <div>
-            {{ form.date.label(class_="block mb-1 font-semibold") }}
-            {{ form.date(class_="w-full border px-3 py-2 rounded") }}
         </div>
-        <div>
-            {{ form.output_kg.label(class_="block mb-1 font-semibold") }}
-            {{ form.output_kg(class_="w-full border px-3 py-2 rounded") }}
-        </div>
-        <div>
-            {{ form.customer.label(class_="block mb-1 font-semibold") }}
-            {{ form.customer(class_="w-full border px-3 py-2 rounded") }}
-        </div>
-        <div>
-            {{ form.output_amount.label(class_="block mb-1 font-semibold") }}
-            {{ form.output_amount(class_="w-full border px-3 py-2 rounded") }}
-        </div>
-        <div>
-            {{ form.amount_paid.label(class_="block mb-1 font-semibold") }}
-            {{ form.amount_paid(class_="w-full border px-3 py-2 rounded") }}
+        <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Accountant records quantity only. Customer, negotiated amount, and payment stage are completed later by the negotiator.
         </div>
         
         <div>
@@ -115,6 +83,8 @@
                 <th class="px-4 py-2">Output(kg)</th>
                 <th class="px-4 py-2">output_amount</th>
                 <th class="px-4 py-2">amount_paid</th>
+                <th class="px-4 py-2">currency</th>
+                <th class="px-4 py-2">payment_stage</th>
                 <th class="px-4 py-2">debt_remaining</th>
                 <th class="px-4 py-2">Note</th>
             </tr>
@@ -126,8 +96,10 @@
                     <td class="px-4 py-2">{{ out.stock.voucher_no }}</td>
                     <td class="px-4 py-2">{{ out.customer }}</td>
                     <td class="px-4 py-2">{{ out.output_kg }}</td>
-                    <td class="px-4 py-2">{{ out.output_amount }}</td>
-                    <td class="px-4 py-2">{{ out.amount_paid }}</td>
+                    <td class="px-4 py-2">{{ out.output_amount_rwf or out.output_amount }}</td>
+                    <td class="px-4 py-2">{{ out.amount_paid_rwf or out.amount_paid }}</td>
+                    <td class="px-4 py-2">{{ out.currency }}</td>
+                    <td class="px-4 py-2">{{ out.payment_stage }}</td>
                     <td class="px-4 py-2">{{ out.debt_remaining }}</td>
                     <td class="px-4 py-2">{{ out.note }}</td>
                 </tr>

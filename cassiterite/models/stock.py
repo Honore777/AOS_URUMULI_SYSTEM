@@ -54,6 +54,12 @@ class CassiteriteStock(db.Model):
     balance_to_pay = db.Column(db.Float)
     moyenne = db.Column(db.Float, default=0)
 
+    # Soft delete fields for auditability
+    is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    deleted_by_id = db.Column(db.Integer, nullable=True)
+    delete_reason = db.Column(db.Text, nullable=True)
+
     # Relationships are defined elsewhere (outputs, payments)
     # Define lightweight relationships for convenience and back_populates
     outputs = db.relationship(
@@ -71,6 +77,14 @@ class CassiteriteStock(db.Model):
         cascade='all, delete-orphan',
     )
 
+    advance_allocations = db.relationship(
+        'CassiteriteAdvanceAllocation',
+        backref='stock',
+        foreign_keys='CassiteriteAdvanceAllocation.stock_id',
+        lazy=True,
+        cascade='all, delete-orphan',
+    )
+
     def __repr__(self):
         return f"<CassiteriteStock {self.voucher_no} - {self.supplier}>"
 
@@ -80,9 +94,40 @@ class CassiteriteStock(db.Model):
         return (self.input_kg or 0) - outputs_total
 
     def remaining_to_pay(self):
-        from .payment import CassiteriteSupplierPayment
-        total_paid = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).filter(CassiteriteSupplierPayment.stock_id == self.id).scalar() or 0
-        return (self.balance_to_pay or 0) - total_paid
+        from .payment import CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
+        total_paid = (
+            db.session.query(
+                func.coalesce(
+                    func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)),
+                    0,
+                )
+            )
+            .filter(
+                CassiteriteSupplierPayment.stock_id == self.id,
+                CassiteriteSupplierPayment.is_deleted.is_(False),
+            )
+            .scalar()
+            or 0
+        )
+
+        advance_applied = 0.0
+        try:
+            # Best-effort: if the allocation table is not migrated yet, Postgres will
+            # abort the transaction; we MUST rollback so the rest of the page can load.
+            advance_applied = (
+                db.session.query(func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0))
+                .filter(CassiteriteAdvanceAllocation.stock_id == self.id)
+                .scalar()
+                or 0
+            )
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            advance_applied = 0.0
+
+        return (self.balance_to_pay or 0) - float(total_paid or 0.0) - float(advance_applied or 0.0)
 
     @trace_time
     def update_calculations(self):

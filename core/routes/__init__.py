@@ -14,3 +14,5 @@ core_bp = Blueprint("core", __name__)
 
 # Import route modules so their view functions are registered
 from . import management  # noqa: F401
+from . import cashier_routes  # noqa: F401
+from . import inventory_api  # noqa: F401

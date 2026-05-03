@@ -19,6 +19,24 @@
                 </a>
             </div>
         <h1 class="text-3xl font-extrabold text-center text-gray-900 mb-8">🏬 Store Keeper Dashboard</h1>
+        <!-- KPI Cards: Remaining Stock -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+            <div class="bg-gradient-to-br from-indigo-600 to-indigo-800 text-white p-6 rounded-lg shadow-lg">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Coltan Remaining</h3>
+                <div class="text-4xl font-bold mb-2" id="store-card-coltan-remaining">0.00</div>
+                <div class="text-sm opacity-80">kg</div>
+            </div>
+            <div class="bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-lg shadow-lg">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Cassiterite Remaining</h3>
+                <div class="text-4xl font-bold mb-2" id="store-card-cassiterite-remaining">0.00</div>
+                <div class="text-sm opacity-80">kg</div>
+            </div>
+            <div class="bg-gradient-to-br from-teal-600 to-teal-800 text-white p-6 rounded-lg shadow-lg">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Total Remaining</h3>
+                <div class="text-4xl font-bold mb-2" id="store-card-total-remaining">0.00</div>
+                <div class="text-sm opacity-80">kg</div>
+            </div>
+        </div>
 
         <!-- Bulk Output Plans -->
         <section class="mb-10">
@@ -34,6 +52,7 @@
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Batch</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Planned Lines</th>
+                                <th class="px-4 py-3 text-left text-sm font-semibold">Action</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-200 text-sm">
@@ -71,6 +90,19 @@
                                             </details>
                                         {% else %}
                                             <span class="text-gray-400">No plan data</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="px-4 py-3 text-gray-700">
+                                        {% if plan.status == 'SENT_TO_STORE' %}
+                                        <form method="post" action="{{ url_for('core.store_execute_bulk_plan', plan_id=plan.id) }}">
+                                            <button type="submit" class="inline-flex items-center rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                                                Confirm Stock & Execute
+                                            </button>
+                                        </form>
+                                        {% elif plan.status == 'STOCK_CONFIRMED' %}
+                                        <span class="inline-flex items-center rounded bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-700">Executed (Awaiting Receipts)</span>
+                                        {% else %}
+                                        <span class="inline-flex items-center rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{{ plan.status }}</span>
                                         {% endif %}
                                     </td>
                                 </tr>
@@ -126,5 +158,30 @@
             {% endif %}
         </section>
     </div>
+    </div>
+    <script>
+        function formatNumber(n, decimals = 2) {
+            if (n === null || n === undefined || isNaN(n)) {
+                return Number(0).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+            }
+            return Number(n).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+        }
+
+        function fetchRemainingStock() {
+            fetch('{{ url_for("core.api_remaining_stock") }}')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('store-card-coltan-remaining').textContent = formatNumber(data.copper_remaining_kg, 2);
+                    document.getElementById('store-card-cassiterite-remaining').textContent = formatNumber(data.cassiterite_remaining_kg, 2);
+                    document.getElementById('store-card-total-remaining').textContent = formatNumber(data.total_remaining_kg, 2);
+                })
+                .catch(error => console.error('Error fetching remaining stock:', error));
+        }
+
+        // Initialize remaining stock cards on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            fetchRemainingStock();
+        });
+    </script>
 </body>
 </html>

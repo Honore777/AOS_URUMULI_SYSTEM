@@ -5,7 +5,11 @@ single mineral module. They live under the `core` blueprint so that
 `app.py` stays thin and focused on wiring, not logic.
 """
 
-from flask import render_template, request, redirect, url_for, flash, abort, jsonify
+import json
+import logging
+from datetime import datetime, time
+
+from flask import render_template, request, redirect, url_for, flash, abort, jsonify, current_app as app
 from flask_login import current_user
 
 from config import db
@@ -17,11 +21,79 @@ from core.models import (
     User,
     create_notification,
     Notification,
+    BulkPlanStatus,
+    CustomerReceipt,
+    CustomerReceiptType,
+    CustomerReceiptChannel,
     fetch_user_notifications,
 )
 from . import core_bp
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 from sqlalchemy.orm import joinedload
+
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_payload(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _review_details(review: PaymentReview) -> str:
+    payload = _safe_payload(getattr(review, "request_payload", None))
+    if not payload:
+        # Backward compatibility for old rows where payload was stored in boss_comment.
+        payload = _safe_payload(review.boss_comment)
+
+    if payload:
+        payment_kind = (payload.get("payment_kind") or "").strip().lower()
+        if payment_kind == "advance":
+            return "kwishyura advance"
+        review_type = (review.type or "").strip().lower()
+        if "mukozi" in review_type or "worker" in review_type:
+            return "kwishyura umukozi"
+        if "supplier" in review_type or "utanga" in review_type:
+            return "kwishyura supplier"
+
+    if review.boss_comment:
+        return review.boss_comment
+    return "-"
+
+
+def _review_amount_breakdown(review: PaymentReview) -> dict:
+    payload = _safe_payload(getattr(review, "request_payload", None))
+    if not payload:
+        payload = _safe_payload(review.boss_comment)
+
+    currency = (payload.get("currency") or review.currency or "RWF").upper()
+    amount_rwf = float(payload.get("amount_rwf") or review.amount or 0)
+    amount_input = float(payload.get("amount_input") or review.amount or 0)
+    exchange_rate = float(payload.get("exchange_rate") or 0)
+
+    if currency == "USD":
+        note = f"{amount_rwf:,.2f} RWF"
+        if exchange_rate:
+            note = f"{amount_rwf:,.2f} RWF @ {exchange_rate:,.2f} RWF/USD"
+        details = f"Original USD payment: {amount_input:,.2f} USD"
+        if exchange_rate:
+            details += f" | Exchange rate: {exchange_rate:,.2f} RWF/USD"
+        return {
+            "primary": f"{amount_input:,.2f} USD",
+            "note": note,
+            "details": details,
+        }
+
+    return {
+        "primary": f"{amount_rwf:,.2f} RWF",
+        "note": "",
+        "details": "",
+    }
 
 
 @core_bp.route('/profile', methods=['GET', 'POST'])
@@ -69,7 +141,229 @@ def profile():
 # Central place to list the roles that make sense in this system.
 # We add an explicit "admin" role so that one user can manage
 # other users (create, edit, deactivate, delete).
-ALLOWED_ROLES = ["admin", "boss", "accountant", "store_keeper"]
+ALLOWED_ROLES = ["admin", "boss", "accountant", "store_keeper", "negotiator", "cashier"]
+
+
+def _normalize_amount_to_rwf(amount, currency, exchange_rate):
+    currency_code = (currency or "RWF").upper()
+    input_amount = float(amount or 0)
+    rate = float(exchange_rate or 0)
+
+    if currency_code == "RWF":
+        return input_amount, 1.0
+    if currency_code == "USD":
+        if rate <= 0:
+            raise ValueError("Exchange rate is required and must be greater than 0 for USD transactions.")
+        return input_amount * rate, rate
+    raise ValueError(f"Unsupported currency: {currency_code}")
+
+
+def _flash_and_notify(message: str, category: str = 'info') -> None:
+    """Flash a message and persist it as a Notification for the current user.
+
+    This ensures important UI flashes are also queryable from dedicated
+    notification pages and persisted across redirects.
+    """
+    try:
+        flash(message, category)
+        if getattr(current_user, 'is_authenticated', False):
+            try:
+                create_notification(getattr(current_user, 'id', None), 'flash', message)
+                db.session.commit()
+            except Exception:
+                try:
+                    db.session.rollback()
+                except Exception:
+                    logger.exception("_flash_and_notify: rollback failed")
+                logger.exception("_flash_and_notify: failed to create notification")
+    except Exception:
+        logger.exception("_flash_and_notify: unexpected error while flashing/notifying")
+
+
+def _get_output_model(mineral_type: str):
+    m = _canonical_mineral_type(mineral_type)
+    if m == "copper":
+        from copper.models import CopperOutput
+        return CopperOutput
+    if m == "cassiterite":
+        from cassiterite.models import CassiteriteOutput
+        return CassiteriteOutput
+    return None
+
+
+def _get_stock_model(mineral_type: str):
+    m = _canonical_mineral_type(mineral_type)
+    if m == "copper":
+        from copper.models import CopperStock
+        return CopperStock
+    if m == "cassiterite":
+        from cassiterite.models import CassiteriteStock
+        return CassiteriteStock
+    return None
+
+
+def _canonical_mineral_type(mineral_type: str | None) -> str:
+    """Return a canonical mineral key used by shared ledger/receipt flows."""
+    m = (mineral_type or "").strip().lower()
+    if m in {"copper", "coltan"}:
+        return "copper"
+    if m == "cassiterite":
+        return "cassiterite"
+    return ""
+
+
+def _mineral_aliases(mineral_type: str | None) -> tuple[str, ...]:
+    """Map canonical mineral to accepted DB aliases for backward compatibility."""
+    canonical = _canonical_mineral_type(mineral_type)
+    if canonical == "copper":
+        return ("copper", "coltan")
+    if canonical == "cassiterite":
+        return ("cassiterite",)
+    return tuple()
+
+
+def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
+    """Calculate outstanding amount for a batch using SINGLE SOURCE OF TRUTH.
+    
+    ╔════════════════════════════════════════════════════════════════════╗
+    ║ SOURCE: BulkOutputPlan.total_expected_amount - sum(CustomerReceipt)║
+    ║ NO Output rows, NO debt_remaining tracking                         ║
+    ╚════════════════════════════════════════════════════════════════════╝
+    
+    Formula:
+        outstanding = total_expected_amount - sum(receipts.amount_rwf)
+    
+    Args:
+        mineral_type: 'copper'|'coltan'|'cassiterite'
+        batch_id: Batch identifier
+    
+    Returns:
+        float: Outstanding amount (>= 0)
+    
+    Used by:
+        - _batch_debt_options() - Populate dropdown options
+        - update_debts() - Show remaining for selected batch
+        - Payment form validation - Check if payment fits
+    
+    Data Queries:
+        1. BulkOutputPlan WHERE batch_id + mineral_type
+        2. SUM(CustomerReceipt) WHERE batch_id + mineral_type
+    """
+    aliases = _mineral_aliases(mineral_type)
+    if not aliases:
+        return 0.0
+
+    # Get all plans for this batch + mineral
+    plans = BulkOutputPlan.query.filter(
+        BulkOutputPlan.batch_id == batch_id,
+        BulkOutputPlan.mineral_type.in_(aliases),
+        BulkOutputPlan.total_expected_amount.isnot(None),
+        BulkOutputPlan.total_expected_amount > 0,
+    ).all()
+
+    if not plans:
+        return 0.0
+
+    # Total agreed amount
+    total_expected = float(sum(float(p.total_expected_amount or 0) for p in plans))
+    
+    # Total paid so far
+    total_paid = (
+        db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+        .filter(
+            CustomerReceipt.batch_id == batch_id,
+            CustomerReceipt.mineral_type.in_(aliases),
+        )
+        .scalar()
+        or 0
+    )
+
+    return float(max(total_expected - float(total_paid or 0), 0.0))
+
+
+def _apply_receipt_to_batch(mineral_type: str, batch_id: str, amount_rwf: float, stage: str) -> float:
+    """Validate and approve customer payment for batch using SINGLE SOURCE OF TRUTH.
+    
+    ╔════════════════════════════════════════════════════════════════════╗
+    ║ PAYMENT VALIDATION: Check if payment fits in agreed amount         ║
+    ║ NO OUTPUT ROW MODIFICATION - they track production only            ║
+    ║ IMMUTABLE AUDIT TRAIL: CustomerReceipt created by caller           ║
+    ╚════════════════════════════════════════════════════════════════════╝
+    
+    Purpose:
+        Validate that a new payment doesn't exceed the agreed amount.
+        Returns the validated amount so caller can create CustomerReceipt.
+    
+    Args:
+        mineral_type: 'copper'|'coltan'|'cassiterite'
+        batch_id: Batch identifier
+        amount_rwf: Payment amount in RWF
+        stage: 'ADVANCE'|'INSTALLMENT'|'FINAL_SETTLEMENT' (unused in validation)
+    
+    Returns:
+        float: amount_rwf if valid (will be used to create CustomerReceipt)
+               0.0 if invalid (exceeds plan or no plan found)
+    
+    Validation Logic:
+        1. Get BulkOutputPlan(s) for batch + mineral
+        2. Calculate: total_expected = SUM(all plans)
+        3. Calculate: total_paid = SUM(CustomerReceipt for same batch)
+        4. Check: (total_paid + amount_rwf) <= total_expected + tolerance(0.01)
+        5. Return amount_rwf if OK, 0.0 if exceeds
+    
+    Used by:
+        - update_debts() route [line 1846]
+        - Called after amount validated, before CustomerReceipt created
+    
+    Data Queries:
+        1. BulkOutputPlan WHERE batch_id + mineral_type
+        2. SUM(CustomerReceipt) WHERE batch_id + mineral_type
+    
+    Note:
+        - Does NOT modify any CopperOutput/CassiteriteOutput rows
+        - Does NOT create CustomerReceipt (caller does)
+        - Output rows stay as-is for production tracking
+    """
+    aliases = _mineral_aliases(mineral_type)
+    if not aliases:
+        return 0.0
+
+    amount = float(amount_rwf or 0)
+    if amount <= 0:
+        return 0.0
+
+    # Get all plans for this batch (may be multiple if split payments)
+    plans = BulkOutputPlan.query.filter(
+        BulkOutputPlan.batch_id == batch_id,
+        BulkOutputPlan.mineral_type.in_(aliases),
+        BulkOutputPlan.total_expected_amount.isnot(None),
+        BulkOutputPlan.total_expected_amount > 0,
+    ).all()
+
+    if not plans:
+        logger.warning(f"_apply_receipt_to_batch: no plans found for batch={batch_id} mineral={mineral_type}")
+        return 0.0
+
+    # Calculate total plan amount and what's already paid
+    total_plan_amount = float(sum(float(p.total_expected_amount or 0) for p in plans))
+    total_paid = (
+        db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+        .filter(
+            CustomerReceipt.batch_id == batch_id,
+            CustomerReceipt.mineral_type.in_(aliases),
+        )
+        .scalar()
+        or 0.0
+    )
+    total_paid = float(total_paid or 0)
+
+    # Check if payment would exceed total plan (tolerance: 0.01 RWF rounding)
+    if total_paid + amount > total_plan_amount + 0.01:
+        logger.warning(f"_apply_receipt_to_batch: payment {amount} would exceed plan {total_plan_amount} (already paid {total_paid})")
+        return 0.0
+
+    # Payment is valid - return the full amount (caller will create CustomerReceipt)
+    return amount
 
 
 @core_bp.route("/boss/dashboard")
@@ -85,42 +379,55 @@ def boss_dashboard():
     """
     from copper.models import CopperStock, CopperOutput, WorkerPayment, SupplierPayment
     from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment
+    # Force fresh data reads to avoid stale query results
+    db.session.expire_all()
 
-    # Copper metrics (use DB-side aggregates to avoid pulling full tables)
-    # 1) Sales from customers
-    copper_total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).scalar()
 
-    # 2) Original cost basis from suppliers (book cost of all purchased stock)
-    copper_cost_basis = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar() or 0
+    # Sales must follow the same source of truth as customer debt:
+    # BulkOutputPlan.total_expected_amount (confirmed/executed agreements).
+    # Output rows can exist with monetary fields missing/zero.
+    copper_total_sales = (
+        db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+        .filter(
+            BulkOutputPlan.mineral_type.in_(_mineral_aliases('copper')),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        .scalar()
+        or 0.0
+    )
+    copper_cost_basis = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).filter(
+        CopperStock.is_deleted.is_(False),
+    ).scalar() or 0
 
-    # 3) Inventory Value (current monetary value of remaining stock)
-    #    Sum over remaining lots: net_balance * (local_balance / input_kg)
-    #    This computes per-lot cost-per-kg * remaining kg so the KPI
-    #    consistently reports monetary value (RWF) rather than physical kg.
     try:
         copper_inventory_value = db.session.query(
             func.coalesce(
                 func.sum(CopperStock.net_balance * CopperStock.local_balance / func.nullif(CopperStock.input_kg, 0)),
                 0,
             )
-        ).filter(CopperStock.local_balance > 0, CopperStock.input_kg > 0).scalar() or 0
+        ).filter(
+            CopperStock.is_deleted.is_(False),
+            CopperStock.local_balance > 0,
+            CopperStock.input_kg > 0,
+        ).scalar() or 0
     except Exception:
-        # fallback to kg-sum in the unlikely event the DB expression fails
         copper_inventory_value = db.session.query(
             func.coalesce(func.sum(CopperStock.local_balance), 0)
-        ).filter(CopperStock.local_balance > 0).scalar() or 0
+        ).filter(
+            CopperStock.is_deleted.is_(False),
+            CopperStock.local_balance > 0,
+        ).scalar() or 0
 
-    # 4) Supplier payments already recorded against Coltan lots
-    copper_supplier_payments = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).scalar() or 0
+    copper_supplier_payments = db.session.query(
+        func.coalesce(func.sum(func.coalesce(SupplierPayment.amount_rwf, SupplierPayment.amount)), 0)
+    ).filter(SupplierPayment.is_deleted.is_(False)).scalar() or 0
 
-    # 5) Cost of stock sold (COGS) for copper: compute from recorded outputs
-    # linked to lots so we attribute cost to goods actually sold.
     try:
         copper_cost_of_stock_sold = db.session.query(
             func.coalesce(
-                func.sum(
-                    CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))
-                ),
+                func.sum(CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))),
                 0.0,
             )
         ).join(CopperStock, CopperOutput.stock_id == CopperStock.id).scalar() or 0
@@ -129,47 +436,75 @@ def boss_dashboard():
         copper_cost_of_stock_sold = (copper_cost_basis or 0) - (copper_inventory_value or 0)
     copper_gross_profit = (copper_total_sales or 0) - (copper_cost_of_stock_sold or 0)
 
-    # 6) Supplier outstanding for Coltan = original supplier cost - payments.
     copper_supplier_debt = copper_cost_basis - copper_supplier_payments
-    copper_customer_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).scalar()
-    # Subtract internal worker payments from cash position
-    copper_worker_payments = db.session.query(func.coalesce(func.sum(WorkerPayment.amount), 0)).scalar()
+    # Customer debt single source of truth: BulkOutputPlan (agreements) - CustomerReceipt (payments)
+    copper_aliases = _mineral_aliases('copper')
+    copper_expected = (
+        db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+        .filter(
+            BulkOutputPlan.mineral_type.in_(copper_aliases),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        .scalar()
+        or 0.0
+    )
+    copper_paid = (
+        db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+        .filter(CustomerReceipt.mineral_type.in_(copper_aliases))
+        .scalar()
+        or 0.0
+    )
+    copper_customer_debt = float(copper_expected or 0.0) - float(copper_paid or 0.0)
+    copper_worker_payments = db.session.query(func.coalesce(func.sum(WorkerPayment.amount), 0)).scalar() or 0
     from cassiterite.models.workers_payment import CassiteriteWorkerPayment
-    cass_worker_payments = db.session.query(func.coalesce(func.sum(CassiteriteWorkerPayment.amount), 0)).scalar()
+    cass_worker_payments = db.session.query(func.coalesce(func.sum(CassiteriteWorkerPayment.amount), 0)).scalar() or 0
     total_internal_worker_payments = copper_worker_payments + cass_worker_payments
-    # Cash position for copper: sales - customer debts
     copper_cash_position = copper_total_sales - copper_customer_debt
 
-    # Cassiterite metrics (use DB-side aggregates)
-    # 1) Sales from customers
-    cass_total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar()
+    cass_total_sales = (
+        db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+        .filter(
+            BulkOutputPlan.mineral_type.in_(_mineral_aliases('cassiterite')),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        .scalar()
+        or 0.0
+    )
+    cass_cost_basis = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(
+        CassiteriteStock.is_deleted.is_(False),
+    ).scalar() or 0
 
-    # 2) Original cost basis from suppliers (book cost of all purchased cassiterite)
-    cass_cost_basis = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar() or 0
-
-    # 3) Inventory Value (current monetary value of remaining cassiterite)
     try:
         cass_inventory_value = db.session.query(
             func.coalesce(
                 func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / func.nullif(CassiteriteStock.input_kg, 0)),
                 0,
             )
-        ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0).scalar() or 0
+        ).filter(
+            CassiteriteStock.is_deleted.is_(False),
+            CassiteriteStock.local_balance > 0,
+            CassiteriteStock.input_kg > 0,
+        ).scalar() or 0
     except Exception:
         cass_inventory_value = db.session.query(
             func.coalesce(func.sum(CassiteriteStock.local_balance), 0)
-        ).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+        ).filter(
+            CassiteriteStock.is_deleted.is_(False),
+            CassiteriteStock.local_balance > 0,
+        ).scalar() or 0
 
-    # 4) Supplier payments already recorded against Cassiterite lots
-    cass_supplier_payments = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).scalar() or 0
+    cass_supplier_payments = db.session.query(
+        func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)
+    ).filter(CassiteriteSupplierPayment.is_deleted.is_(False)).scalar() or 0
 
-    # 5) COGS for cassiterite computed from outputs linked to lots
     try:
         cass_cogs = db.session.query(
             func.coalesce(
-                func.sum(
-                    CassiteriteOutput.output_kg * (CassiteriteStock.balance_to_pay / func.nullif(CassiteriteStock.input_kg, 0))
-                ),
+                func.sum(CassiteriteOutput.output_kg * (CassiteriteStock.balance_to_pay / func.nullif(CassiteriteStock.input_kg, 0))),
                 0.0,
             )
         ).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).scalar() or 0
@@ -179,34 +514,48 @@ def boss_dashboard():
     cass_cost_of_stock_sold = cass_cogs
     cass_gross_profit = (cass_total_sales or 0) - (cass_cogs or 0)
 
-    # 6) Supplier outstanding for Cassiterite = original supplier cost - payments
     cass_supplier_debt = cass_cost_basis - cass_supplier_payments
-    cass_customer_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
-    # Cash position for cassiterite: sales - customer debts
+    cass_aliases = _mineral_aliases('cassiterite')
+    cass_expected = (
+        db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+        .filter(
+            BulkOutputPlan.mineral_type.in_(cass_aliases),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        .scalar()
+        or 0.0
+    )
+    cass_paid = (
+        db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+        .filter(CustomerReceipt.mineral_type.in_(cass_aliases))
+        .scalar()
+        or 0.0
+    )
+    cass_customer_debt = float(cass_expected or 0.0) - float(cass_paid or 0.0)
     cass_cash_position = cass_total_sales - cass_customer_debt
 
-    # Combined KPIs
     total_gross_profit = copper_gross_profit + cass_gross_profit
-    # Combined Inventory Value (current cost of remaining stock for both minerals)
     total_inventory_value = (copper_inventory_value or 0) + (cass_inventory_value or 0)
-    # Combined original cost basis and COGS
-    # Note: we prefer reporting Inventory Value and COGS; initial/purchased
-    # cost (total_initial_cost) is not used for gross profit reporting here.
     total_cost_of_stock_sold = (copper_cost_of_stock_sold or 0) + (cass_cost_of_stock_sold or 0)
-    # Combined supplier debt (remaining obligations to all suppliers).
     total_supplier_debt = copper_supplier_debt + cass_supplier_debt
     total_customer_debt = copper_customer_debt + cass_customer_debt
-    # Combined cash at hand: (total sales) - (customer debts) - (internal worker payments)
     total_sales = copper_total_sales + cass_total_sales
-    total_cash_at_hand = total_sales - total_customer_debt - total_internal_worker_payments
+    total_internal_expenses = total_internal_worker_payments
+    total_cash_at_hand = total_sales - total_customer_debt - total_internal_expenses
+    total_net_profit = total_gross_profit - total_internal_expenses
 
     pending_reviews = PaymentReview.query.filter_by(
         status=PaymentReviewStatus.PENDING_REVIEW.value
     ).order_by(PaymentReview.created_at.desc()).all()
+    for r in pending_reviews:
+        r.display_comment = _review_details(r)
+        amount_breakdown = _review_amount_breakdown(r)
+        r.display_amount = amount_breakdown["primary"]
+        r.display_amount_note = amount_breakdown["note"]
+        r.display_amount_details = amount_breakdown["details"]
 
-    # Recent approvals/rejections (exclude pending) - collapse multiple
-    # review records for the same payment into a single entry so that
-    # edits and their approvals appear as a single consolidated item.
     from datetime import datetime as _dt
     raw_reviews = (
         PaymentReview.query
@@ -215,12 +564,10 @@ def boss_dashboard():
         .limit(200)
         .all()
     )
-    # Keep the most recent review per payment_id (fallback to review.id)
     by_payment: dict = {}
     for r in raw_reviews:
         key = r.payment_id if r.payment_id is not None else f"rev-{r.id}"
         best = by_payment.get(key)
-        # Determine recency using reviewed_at if present, otherwise created_at
         r_time = r.reviewed_at or r.created_at
         best_time = (best.reviewed_at or best.created_at) if best else None
         if not best or (r_time and (not best_time or r_time > best_time)):
@@ -230,19 +577,20 @@ def boss_dashboard():
         key=lambda x: (x.reviewed_at or x.created_at) or _dt.min,
         reverse=True,
     )[:20]
+    for r in recent_reviews:
+        r.display_comment = _review_details(r)
+        amount_breakdown = _review_amount_breakdown(r)
+        r.display_amount = amount_breakdown["primary"]
+        r.display_amount_note = amount_breakdown["note"]
+        r.display_amount_details = amount_breakdown["details"]
 
-    recent_plans = BulkOutputPlan.query.order_by(
-        BulkOutputPlan.created_at.desc()
-    ).limit(20).all()
-
-    # Only boss/admin should see the payment approval table.
+    recent_plans = BulkOutputPlan.query.order_by(BulkOutputPlan.created_at.desc()).limit(20).all()
     show_payment_reviews = getattr(current_user, "role", None) in {"boss", "admin"}
 
     return render_template(
         "boss/dashboard.html",
         copper_total_sales=copper_total_sales,
         copper_cost_basis=copper_cost_basis,
-        # Inventory Value (Coltan)
         copper_inventory_value=copper_inventory_value,
         copper_cost_of_stock_sold=copper_cost_of_stock_sold,
         copper_gross_profit=copper_gross_profit,
@@ -251,7 +599,6 @@ def boss_dashboard():
         copper_cash_position=copper_cash_position,
         cass_total_sales=cass_total_sales,
         cass_cost_basis=cass_cost_basis,
-        # Inventory Value (Cassiterite)
         cass_inventory_value=cass_inventory_value,
         cass_cost_of_stock_sold=cass_cost_of_stock_sold,
         cass_gross_profit=cass_gross_profit,
@@ -259,13 +606,14 @@ def boss_dashboard():
         cass_customer_debt=cass_customer_debt,
         cass_cash_position=cass_cash_position,
         total_gross_profit=total_gross_profit,
-        # Combined Inventory Value (Coltan + Cassiterite)
         total_inventory_value=total_inventory_value,
         total_cost_of_stock_sold=total_cost_of_stock_sold,
         total_supplier_debt=total_supplier_debt,
         total_customer_debt=total_customer_debt,
         total_internal_worker_payments=total_internal_worker_payments,
+        total_internal_expenses=total_internal_expenses,
         total_cash_at_hand=total_cash_at_hand,
+        total_net_profit=total_net_profit,
         pending_reviews=pending_reviews,
         show_payment_reviews=show_payment_reviews,
         recent_reviews=recent_reviews,
@@ -283,6 +631,9 @@ def boss_dashboard_data():
     mineral = request.args.get('mineral') or ''
     date_from = request.args.get('from') or None
     date_to = request.args.get('to') or None
+    # Force fresh data reads to avoid stale query results on filter updates
+    db.session.expire_all()
+
 
     # Parse date filters into date objects (input type=date -> YYYY-MM-DD)
     from datetime import datetime, time
@@ -306,18 +657,23 @@ def boss_dashboard_data():
     from cassiterite.models.workers_payment import CassiteriteWorkerPayment
 
     def compute_copper(d_from=None, d_to=None):
-        # Filter outputs by output.date when date range provided (customer side)
-        q_outputs = CopperOutput.query
+        # Sales must be in sync with customer ledger truth (plans).
+        aliases = _mineral_aliases('copper')
+        plans_q = BulkOutputPlan.query.filter(
+            BulkOutputPlan.mineral_type.in_(aliases),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
         if d_from:
-            q_outputs = q_outputs.filter(CopperOutput.date >= d_from)
+            plans_q = plans_q.filter(BulkOutputPlan.created_at >= datetime.combine(d_from, time.min))
         if d_to:
-            q_outputs = q_outputs.filter(CopperOutput.date <= d_to)
-        # Compute aggregates on the DB side to avoid loading full tables
-        copper_total_sales = q_outputs.with_entities(func.coalesce(func.sum(CopperOutput.output_amount), 0)).scalar() or 0
+            plans_q = plans_q.filter(BulkOutputPlan.created_at <= datetime.combine(d_to, time.max))
+        copper_total_sales = plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0
 
         # Stock-side: restrict to lots in the date window (original supplier
         # cost basis is by stock.date).
-        stock_q = CopperStock.query
+        stock_q = CopperStock.query.filter(CopperStock.is_deleted.is_(False))
         if d_from:
             stock_q = stock_q.filter(CopperStock.date >= d_from)
         if d_to:
@@ -336,13 +692,16 @@ def boss_dashboard_data():
         ).scalar() or 0
 
         # Supplier payments filtered by the same stock window
-        pay_q = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(
-            CopperStock, SupplierPayment.stock_id == CopperStock.id
+        pay_q = db.session.query(
+            func.coalesce(func.sum(func.coalesce(SupplierPayment.amount_rwf, SupplierPayment.amount)), 0)
+        ).filter(
+            SupplierPayment.is_deleted.is_(False),
         )
+        # Best effort: date filter supplier payments by their own paid_at timestamp.
         if d_from:
-            pay_q = pay_q.filter(CopperStock.date >= d_from)
+            pay_q = pay_q.filter(SupplierPayment.paid_at >= datetime.combine(d_from, time.min))
         if d_to:
-            pay_q = pay_q.filter(CopperStock.date <= d_to)
+            pay_q = pay_q.filter(SupplierPayment.paid_at <= datetime.combine(d_to, time.max))
         copper_supplier_payments = pay_q.scalar() or 0
 
         # COGS for this window and gross profit = Sales - COGS
@@ -351,7 +710,22 @@ def boss_dashboard_data():
 
         # Supplier debt = original supplier cost - payments
         copper_supplier_debt = copper_cost_basis - copper_supplier_payments
-        copper_customer_debt = q_outputs.with_entities(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).scalar()
+        plans_q = BulkOutputPlan.query.filter(
+            BulkOutputPlan.mineral_type.in_(aliases),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        receipts_q = CustomerReceipt.query.filter(CustomerReceipt.mineral_type.in_(aliases))
+        if d_from:
+            plans_q = plans_q.filter(BulkOutputPlan.created_at >= datetime.combine(d_from, time.min))
+            receipts_q = receipts_q.filter(CustomerReceipt.received_at >= datetime.combine(d_from, time.min))
+        if d_to:
+            plans_q = plans_q.filter(BulkOutputPlan.created_at <= datetime.combine(d_to, time.max))
+            receipts_q = receipts_q.filter(CustomerReceipt.received_at <= datetime.combine(d_to, time.max))
+        expected = plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0
+        paid = receipts_q.with_entities(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0)).scalar() or 0.0
+        copper_customer_debt = float(expected or 0.0) - float(paid or 0.0)
         # Worker payments may have a paid_at/datetime field; filter by date if available
         wp_q = WorkerPayment.query
         try:
@@ -378,16 +752,21 @@ def boss_dashboard_data():
         }
 
     def compute_cass(d_from=None, d_to=None):
-        # Customer side
-        q_outputs = CassiteriteOutput.query
+        aliases = _mineral_aliases('cassiterite')
+        plans_q = BulkOutputPlan.query.filter(
+            BulkOutputPlan.mineral_type.in_(aliases),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
         if d_from:
-            q_outputs = q_outputs.filter(CassiteriteOutput.date >= d_from)
+            plans_q = plans_q.filter(BulkOutputPlan.created_at >= datetime.combine(d_from, time.min))
         if d_to:
-            q_outputs = q_outputs.filter(CassiteriteOutput.date <= d_to)
-        cass_total_sales = q_outputs.with_entities(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar() or 0
+            plans_q = plans_q.filter(BulkOutputPlan.created_at <= datetime.combine(d_to, time.max))
+        cass_total_sales = plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0
 
         # Stock-side cost basis by lot.date
-        stock_q = CassiteriteStock.query
+        stock_q = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False))
         if d_from:
             stock_q = stock_q.filter(CassiteriteStock.date >= d_from)
         if d_to:
@@ -403,20 +782,37 @@ def boss_dashboard_data():
             )
         ).scalar() or 0
 
-        pay_q = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).join(
-            CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id
+        pay_q = db.session.query(
+            func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)
+        ).filter(
+            CassiteriteSupplierPayment.is_deleted.is_(False),
         )
         if d_from:
-            pay_q = pay_q.filter(CassiteriteStock.date >= d_from)
+            pay_q = pay_q.filter(CassiteriteSupplierPayment.paid_at >= datetime.combine(d_from, time.min))
         if d_to:
-            pay_q = pay_q.filter(CassiteriteStock.date <= d_to)
+            pay_q = pay_q.filter(CassiteriteSupplierPayment.paid_at <= datetime.combine(d_to, time.max))
         cass_supplier_payments = pay_q.scalar() or 0
 
         # COGS for this window and gross profit = Sales - COGS
         cass_cogs = (cass_cost_basis or 0) - (cass_inventory_value or 0)
         cass_gross_profit = (cass_total_sales or 0) - (cass_cogs or 0)
         cass_supplier_debt = cass_cost_basis - cass_supplier_payments
-        cass_customer_debt = q_outputs.with_entities(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
+        plans_q = BulkOutputPlan.query.filter(
+            BulkOutputPlan.mineral_type.in_(aliases),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        receipts_q = CustomerReceipt.query.filter(CustomerReceipt.mineral_type.in_(aliases))
+        if d_from:
+            plans_q = plans_q.filter(BulkOutputPlan.created_at >= datetime.combine(d_from, time.min))
+            receipts_q = receipts_q.filter(CustomerReceipt.received_at >= datetime.combine(d_from, time.min))
+        if d_to:
+            plans_q = plans_q.filter(BulkOutputPlan.created_at <= datetime.combine(d_to, time.max))
+            receipts_q = receipts_q.filter(CustomerReceipt.received_at <= datetime.combine(d_to, time.max))
+        expected = plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0
+        paid = receipts_q.with_entities(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0)).scalar() or 0.0
+        cass_customer_debt = float(expected or 0.0) - float(paid or 0.0)
         wp_q = CassiteriteWorkerPayment.query
         try:
             if d_from:
@@ -451,8 +847,10 @@ def boss_dashboard_data():
     total_supplier_debt = (copper['supplier_debt'] if copper else 0) + (cass['supplier_debt'] if cass else 0)
     total_customer_debt = (copper['customer_debt'] if copper else 0) + (cass['customer_debt'] if cass else 0)
     total_internal_worker_payments = (copper['worker_payments'] if copper else 0) + (cass['worker_payments'] if cass else 0)
+    total_internal_expenses = total_internal_worker_payments
     total_sales = (copper['total_sales'] if copper else 0) + (cass['total_sales'] if cass else 0)
-    total_cash_at_hand = total_sales - total_customer_debt - total_internal_worker_payments
+    total_cash_at_hand = total_sales - total_customer_debt - total_internal_expenses
+    total_net_profit = total_gross_profit - total_internal_expenses
 
     # recent plans (no pagination) - apply mineral and optional date filters
     plans_q = BulkOutputPlan.query.order_by(BulkOutputPlan.created_at.desc())
@@ -491,7 +889,9 @@ def boss_dashboard_data():
         'total_supplier_debt': total_supplier_debt,
         'total_customer_debt': total_customer_debt,
         'total_internal_worker_payments': total_internal_worker_payments,
+        'total_internal_expenses': total_internal_expenses,
         'total_cash_at_hand': total_cash_at_hand,
+        'total_net_profit': total_net_profit,
     }
 
     return jsonify({
@@ -511,34 +911,266 @@ def boss_approve_payment(review_id: int):
     see that the boss has approved the payment.
     """
     review = PaymentReview.query.get_or_404(review_id)
+    if review.status != PaymentReviewStatus.PENDING_REVIEW.value:
+        flash("Only pending payment reviews can be approved.", "warning")
+        return redirect(url_for("core.boss_dashboard"))
 
-    # 1) Update review status and metadata
-    review.status = PaymentReviewStatus.APPROVED.value
-    review.reviewed_by_id = getattr(current_user, "id", None)
-    from datetime import datetime as _dt
-    review.reviewed_at = _dt.utcnow()
+    payload = _safe_payload(getattr(review, "request_payload", None))
+    if not payload:
+        payload = _safe_payload(review.boss_comment)
+    review_type = (review.type or "").strip().lower()
+    mineral = (review.mineral_type or "").strip().lower()
 
-    # 2) Build a short message describing what was approved
-    message = (
-        f"Boss approved {review.mineral_type} payment for "
-        f"{review.customer} ({review.amount} {review.currency})."
-    )
+    try:
+        # Execute only if the request has not been executed yet.
+        if not review.payment_id:
+            amount = float(review.amount or 0)
+            currency = (payload.get("currency") or review.currency or "RWF").upper()
+            exchange_rate = float(payload.get("exchange_rate") or 1.0)
+            amount_input = float(payload.get("amount_input") or review.amount or 0)
+            amount_rwf = float(payload.get("amount_rwf") or amount)
+            method = payload.get("method") or "approved_by_boss"
+            reference = payload.get("reference") or f"review-{review.id}"
+            note = payload.get("note") or "Auto-executed on boss approval."
 
-    # 3) Notify all active accountants.
-    #    You could later change this to only notify the
-    #    accountant who created the payment (review.created_by_id).
-    accountant_rows = db.session.query(User.id).filter_by(role="accountant", is_active=True).all()
-    for (acc_id,) in accountant_rows:
-        create_notification(
-            user_id=acc_id,
-            type_="PAYMENT_REVIEW_APPROVED",
-            message=message,
-            related_type="payment_review",
-            related_id=review.id,
+            is_supplier = ("supplier" in review_type) or ("utanga" in review_type)
+            is_worker = ("worker" in review_type) or ("mukozi" in review_type)
+
+            payment = None
+            if is_supplier:
+                payment_kind = (payload.get("payment_kind") or "settlement").strip().lower()
+                supplier_name = (payload.get("supplier_name") or review.customer or "").strip() or None
+                supplier_id = payload.get("supplier_id")
+
+                if mineral in {"coltan", "copper"}:
+                    from copper.models import SupplierPayment, CopperStock
+
+                    if payment_kind == "settlement":
+                        stock_id = payload.get("stock_id")
+                        if not stock_id:
+                            raise ValueError("Missing stock for supplier settlement request.")
+                        stock = CopperStock.query.filter(
+                            CopperStock.id == stock_id,
+                            CopperStock.is_deleted.is_(False),
+                        ).first_or_404()
+                        if amount_rwf > stock.remaining_to_pay():
+                            raise ValueError("Requested payment now exceeds remaining supplier debt.")
+                        payment = SupplierPayment(
+                            stock_id=stock.id,
+                            supplier_id=supplier_id,
+                            supplier_name=stock.supplier,
+                            amount=amount_rwf,
+                            input_amount=amount_input,
+                            currency=currency,
+                            exchange_rate=exchange_rate,
+                            amount_rwf=amount_rwf,
+                            method=method,
+                            reference=reference,
+                            note=note,
+                            payment_type='SETTLEMENT',
+                            is_advance=False,
+                            advance_remaining=0.0,
+                        )
+                    else:
+                        remaining_advance = amount_rwf
+                        created_payments = []
+                        supplier_stocks = (
+                            CopperStock.query
+                            .filter(
+                                CopperStock.supplier == supplier_name,
+                                CopperStock.net_balance > 0,
+                                CopperStock.is_deleted.is_(False),
+                            )
+                            .order_by(CopperStock.date.asc(), CopperStock.id.asc())
+                            .all()
+                        )
+                        for stock in supplier_stocks:
+                            if remaining_advance <= 0:
+                                break
+                            remaining_for_stock = max(float(stock.remaining_to_pay() or 0), 0.0)
+                            if remaining_for_stock <= 0:
+                                continue
+                            alloc = min(remaining_advance, remaining_for_stock)
+                            alloc_input = alloc / exchange_rate if currency == 'USD' and exchange_rate else alloc
+                            p = SupplierPayment(
+                                stock_id=stock.id,
+                                supplier_id=supplier_id,
+                                supplier_name=supplier_name,
+                                amount=alloc,
+                                input_amount=alloc_input,
+                                currency=currency,
+                                exchange_rate=exchange_rate,
+                                amount_rwf=alloc,
+                                method=method,
+                                reference=reference,
+                                note=note,
+                                payment_type='ADVANCE',
+                                is_advance=True,
+                                advance_remaining=0.0,
+                            )
+                            db.session.add(p)
+                            created_payments.append(p)
+                            remaining_advance -= alloc
+                        if remaining_advance > 0:
+                            remaining_input = remaining_advance / exchange_rate if currency == 'USD' and exchange_rate else remaining_advance
+                            p = SupplierPayment(
+                                stock_id=None,
+                                supplier_id=supplier_id,
+                                supplier_name=supplier_name,
+                                amount=remaining_advance,
+                                input_amount=remaining_input,
+                                currency=currency,
+                                exchange_rate=exchange_rate,
+                                amount_rwf=remaining_advance,
+                                method=method,
+                                reference=reference,
+                                note=note,
+                                payment_type='ADVANCE',
+                                is_advance=True,
+                                advance_remaining=remaining_advance,
+                            )
+                            db.session.add(p)
+                            created_payments.append(p)
+                        payment = created_payments[0] if created_payments else None
+
+                elif mineral == "cassiterite":
+                    from cassiterite.models import CassiteriteSupplierPayment, CassiteriteStock, CassiteriteAdvanceAllocation
+
+                    if payment_kind == "settlement":
+                        stock_id = payload.get("stock_id")
+                        if not stock_id:
+                            raise ValueError("Missing stock for supplier settlement request.")
+                        stock = CassiteriteStock.query.filter(
+                            CassiteriteStock.id == stock_id,
+                            CassiteriteStock.is_deleted.is_(False),
+                        ).first_or_404()
+                        if amount_rwf > stock.remaining_to_pay():
+                            raise ValueError("Requested payment now exceeds remaining supplier debt.")
+                        payment = CassiteriteSupplierPayment(
+                            stock_id=stock.id,
+                            supplier_id=supplier_id,
+                            supplier_name=stock.supplier,
+                            amount=amount_rwf,
+                            input_amount=amount_input,
+                            currency=currency,
+                            exchange_rate=exchange_rate,
+                            amount_rwf=amount_rwf,
+                            method=method,
+                            reference=reference,
+                            note=note,
+                            payment_type='SETTLEMENT',
+                            is_advance=False,
+                            advance_remaining=0.0,
+                        )
+                    else:
+                        # Model the advance as a single credit row, then apply it to
+                        # existing supplier obligations via the allocation join table.
+                        payment = CassiteriteSupplierPayment(
+                            stock_id=None,
+                            supplier_id=supplier_id,
+                            supplier_name=supplier_name,
+                            amount=amount_rwf,
+                            input_amount=amount_input,
+                            currency=currency,
+                            exchange_rate=exchange_rate,
+                            amount_rwf=amount_rwf,
+                            method=method,
+                            reference=reference,
+                            note=note,
+                            payment_type='ADVANCE',
+                            is_advance=True,
+                            advance_remaining=amount_rwf,
+                        )
+                        db.session.add(payment)
+                        db.session.flush()
+
+                        remaining_advance = float(amount_rwf or 0.0)
+                        supplier_stocks = (
+                            CassiteriteStock.query
+                            .filter(
+                                CassiteriteStock.supplier == supplier_name,
+                                CassiteriteStock.balance_to_pay > 0,
+                                CassiteriteStock.is_deleted.is_(False),
+                            )
+                            .order_by(CassiteriteStock.date.asc(), CassiteriteStock.id.asc())
+                            .all()
+                        )
+
+                        for stock in supplier_stocks:
+                            if remaining_advance <= 0:
+                                break
+                            remaining_for_stock = max(float(stock.remaining_to_pay() or 0.0), 0.0)
+                            if remaining_for_stock <= 0:
+                                continue
+                            alloc = min(remaining_advance, remaining_for_stock)
+                            if alloc <= 0:
+                                continue
+
+                            db.session.add(CassiteriteAdvanceAllocation(
+                                stock_id=stock.id,
+                                supplier_payment_id=payment.id,
+                                applied_amount=float(alloc),
+                            ))
+                            remaining_advance -= float(alloc)
+
+                        payment.advance_remaining = max(float(remaining_advance), 0.0)
+                else:
+                    raise ValueError("Unsupported mineral for supplier payment execution.")
+
+            elif is_worker:
+                worker_name = payload.get("worker_name") or review.customer
+                if mineral in {"coltan", "copper"}:
+                    from copper.models import WorkerPayment
+                    payment = WorkerPayment(
+                        worker_name=worker_name,
+                        amount=amount_rwf,
+                        method=method,
+                        reference=reference,
+                        note=note,
+                    )
+                elif mineral == "cassiterite":
+                    from cassiterite.models.workers_payment import CassiteriteWorkerPayment
+                    payment = CassiteriteWorkerPayment(
+                        worker_name=worker_name,
+                        amount=amount_rwf,
+                        method=method,
+                        reference=reference,
+                        note=note,
+                    )
+                else:
+                    raise ValueError("Unsupported mineral for worker payment execution.")
+
+            if payment is not None:
+                db.session.add(payment)
+                db.session.flush()
+                review.payment_id = payment.id
+
+        # Mark review as approved only after successful execution.
+        review.status = PaymentReviewStatus.APPROVED.value
+        review.reviewed_by_id = getattr(current_user, "id", None)
+        from datetime import datetime as _dt
+        review.reviewed_at = _dt.utcnow()
+
+        message = (
+            f"Boss approved {review.mineral_type} payment for "
+            f"{review.customer} ({amount_rwf:,.2f} RWF from {amount_input:,.2f} {currency})."
         )
 
-    # 4) Commit both the review update and notifications in one go
-    db.session.commit()
+        accountant_rows = db.session.query(User.id).filter_by(role="accountant", is_active=True).all()
+        for (acc_id,) in accountant_rows:
+            create_notification(
+                user_id=acc_id,
+                type_="PAYMENT_REVIEW_APPROVED",
+                message=message,
+                related_type="payment_review",
+                related_id=review.id,
+            )
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Approval failed; no payment was executed: {e}", "danger")
+        return redirect(url_for("core.boss_dashboard"))
 
     flash("Payment review approved.", "success")
     return redirect(url_for("core.boss_dashboard"))
@@ -587,10 +1219,40 @@ def boss_reject_payment(review_id: int):
     return redirect(url_for("core.boss_dashboard"))
 
 
+@core_bp.route("/boss/payment_review/<int:review_id>/print")
+@role_required("boss", "admin", "accountant")
+def print_payment_review(review_id: int):
+    """Render a printable approval sheet for a pending or reviewed payment."""
+
+    review = PaymentReview.query.get_or_404(review_id)
+    payload = _safe_payload(getattr(review, "request_payload", None))
+    amount_breakdown = _review_amount_breakdown(review)
+    requested_by = User.query.get(review.created_by_id) if review.created_by_id else None
+    approved_by = User.query.get(review.reviewed_by_id) if review.reviewed_by_id else None
+    accountant_name = payload.get("accountant_name") or (requested_by.username if requested_by else "")
+    cashier_name = payload.get("cashier_name") or ""
+    boss_name = approved_by.username if approved_by else ""
+
+    return render_template(
+        "receipts/payment_request_form.html",
+        review=review,
+        payload=payload,
+        accountant_name=accountant_name,
+        cashier_name=cashier_name,
+        boss_name=boss_name,
+        requested_by=requested_by,
+        approved_by=approved_by,
+        amount_breakdown=amount_breakdown,
+    )
+
+
 @core_bp.route("/store/dashboard")
 @role_required("store_keeper")
 def store_dashboard():
     """Store keeper dashboard focused on bulk output plans and notifications."""
+    # Force fresh data reads to avoid stale query results
+    db.session.expire_all()
+
 
     plans = BulkOutputPlan.query.order_by(
         BulkOutputPlan.created_at.desc()
@@ -621,131 +1283,1039 @@ def store_dashboard():
     )
 
 
-@core_bp.route("/boss/copper/customer_ledger/<customer>")
-@role_required("boss", "admin")
-def boss_copper_customer_ledger(customer: str):
-    """Boss/admin read-only view of a copper customer ledger.
+@core_bp.route("/store/bulk_plan/<int:plan_id>/execute", methods=["POST"])
+@role_required("store_keeper")
+def store_execute_bulk_plan(plan_id: int):
+    """Store keeper confirms stock release and executes a bulk output plan."""
 
-    Reuses the same aggregation logic as copper.routes.debt_routes.customer_ledger
-    but is exposed under the core blueprint so it is not blocked by
-    accountant-only protections on the copper blueprint.
+    plan = BulkOutputPlan.query.get_or_404(plan_id)
+    if plan.status != BulkPlanStatus.SENT_TO_STORE.value:
+        flash("Only plans waiting for store confirmation can be executed.", "warning")
+        return redirect(url_for("core.store_dashboard"))
+
+    plan_rows = plan.plan_json or []
+    if not plan_rows:
+        flash("This plan has no stock rows to execute.", "danger")
+        return redirect(url_for("core.store_dashboard"))
+
+    if plan.mineral_type in {"copper", "coltan"}:
+        from copper.models import CopperStock, CopperOutput
+        stock_model = CopperStock
+        output_model = CopperOutput
+        mineral_key = "coltan"
+    elif plan.mineral_type == "cassiterite":
+        from cassiterite.models import CassiteriteStock, CassiteriteOutput
+        stock_model = CassiteriteStock
+        output_model = CassiteriteOutput
+        mineral_key = "cassiterite"
+    else:
+        flash("Unsupported mineral type on this plan.", "danger")
+        return redirect(url_for("core.store_dashboard"))
+
+    stock_ids = []
+    for row in plan_rows:
+        try:
+            stock_ids.append(int(row.get("stock_id")))
+        except Exception:
+            continue
+    stocks = stock_model.query.filter(stock_model.id.in_(stock_ids)).all() if stock_ids else []
+    stocks_map = {s.id: s for s in stocks}
+
+    for row in plan_rows:
+        try:
+            sid = int(row.get("stock_id"))
+            qty = float(row.get("planned_output_kg") or 0)
+        except Exception:
+            continue
+        stock = stocks_map.get(sid)
+        if not stock:
+            flash(f"Plan row stock {sid} was not found.", "danger")
+            return redirect(url_for("core.store_dashboard"))
+        if qty <= 0:
+            flash(f"Plan row for stock {sid} has invalid quantity.", "danger")
+            return redirect(url_for("core.store_dashboard"))
+        if qty > float(stock.local_balance or 0):
+            flash(
+                f"Cannot execute plan: stock {getattr(stock, 'voucher_no', sid)} has only {stock.local_balance} kg available.",
+                "danger",
+            )
+            return redirect(url_for("core.store_dashboard"))
+
+    try:
+        for row in plan_rows:
+            sid = int(row.get("stock_id"))
+            qty = float(row.get("planned_output_kg") or 0)
+            stock = stocks_map.get(sid)
+
+            quoted_amount = float(row.get("quoted_amount_input") or 0)
+            quoted_amount_rwf = float(row.get("quoted_amount_rwf") or 0)
+            row_currency = (row.get("currency") or "RWF").upper()
+            row_exchange = float(row.get("exchange_rate") or 1.0)
+
+            output_row = output_model(
+                stock_id=stock.id,
+                date=plan.created_at.date() if plan.created_at else datetime.utcnow().date(),
+                output_kg=qty,
+                batch_id=plan.batch_id,
+                customer=plan.customer,
+                output_amount=quoted_amount,
+                output_amount_rwf=quoted_amount_rwf,
+                amount_paid=0,
+                amount_paid_rwf=0,
+                currency=row_currency,
+                exchange_rate=row_exchange,
+                payment_stage="ADVANCE_PENDING",
+                note=plan.note,
+                voucher_no=getattr(stock, "voucher_no", None),
+            )
+            output_row.update_debt()
+
+            old_q, old_wp, old_t = stock_model.contribution(stock)
+            db.session.add(output_row)
+            db.session.flush()
+
+            stock.update_calculations()
+            new_q, new_wp, new_t = stock_model.contribution(stock)
+            stock_model.apply_aggregate_delta(new_q - old_q, new_wp - old_wp, new_t - old_t)
+
+        plan.status = BulkPlanStatus.STOCK_CONFIRMED.value
+        plan.executed_by_id = getattr(current_user, "id", None)
+        plan.executed_at = datetime.utcnow()
+
+        active_users = User.query.filter_by(is_active=True).all()
+        for u in active_users:
+            create_notification(
+                user_id=u.id,
+                type_="BULK_PLAN_EXECUTED",
+                message=(
+                    f"Store confirmed and released {mineral_key} batch {plan.batch_id} for customer {plan.customer}. "
+                    f"Negotiator can now record advance/installment receipts."
+                ),
+                related_type="bulk_plan",
+                related_id=plan.id,
+            )
+
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Failed to execute plan: {exc}", "danger")
+        return redirect(url_for("core.store_dashboard"))
+
+    flash("Stock confirmed and output executed successfully.", "success")
+    return redirect(url_for("core.store_dashboard"))
+
+
+@core_bp.route("/receipts/customer", methods=["GET", "POST"])
+@role_required("negotiator", "admin")
+def customer_receipts():
+    can_record = getattr(current_user, "role", None) in {"negotiator", "admin"}
+
+    if request.method == "POST":
+        if not can_record:
+            flash("Only negotiator can set customer batch agreements.", "warning")
+            return redirect(url_for("core.customer_receipts"))
+
+        plan_id = int(request.form.get("plan_id") or 0)
+        plan = BulkOutputPlan.query.get_or_404(plan_id)
+        if plan.status not in {BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value}:
+            flash("Batch must be stock-confirmed before customer agreement.", "warning")
+            return redirect(url_for("core.customer_receipts"))
+
+        submitted_customer = (request.form.get("customer") or "").strip()
+        if not submitted_customer:
+            flash("Customer name is required.", "danger")
+            return redirect(url_for("core.customer_receipts"))
+
+        try:
+            total_expected_amount = float(request.form.get("total_expected_amount") or 0)
+            if total_expected_amount <= 0:
+                flash("Agreed amount must be greater than zero.", "danger")
+                return redirect(url_for("core.customer_receipts"))
+        except ValueError:
+            flash("Agreed amount must be a valid number.", "danger")
+            return redirect(url_for("core.customer_receipts"))
+
+        currency = (request.form.get("currency") or "RWF").upper()
+        if currency != "RWF":
+            flash("For now, agreements are stored in RWF. Please use RWF.", "warning")
+            return redirect(url_for("core.customer_receipts"))
+
+        # Prevent accidental re-agreement unless user explicitly confirms overwrite.
+        force_overwrite = (request.form.get("force_overwrite") or "0").strip() == "1"
+        has_existing_agreement = float(plan.total_expected_amount or 0.0) > 0
+        if has_existing_agreement and not force_overwrite:
+            flash(
+                f"Batch {plan.batch_id} already has an agreement ({plan.total_expected_amount:,.2f} RWF). "
+                "Tick 'Overwrite existing agreement' to change it.",
+                "warning",
+            )
+            return redirect(url_for("core.customer_receipts"))
+
+        plan.customer = submitted_customer
+        plan.total_expected_amount = total_expected_amount
+
+        output_model = _get_output_model(plan.mineral_type)
+        if output_model:
+            db.session.query(output_model).filter_by(batch_id=plan.batch_id).update({"customer": submitted_customer})
+
+        db.session.add(plan)
+        db.session.commit()
+        flash("Batch agreement saved.", "success")
+        return redirect(url_for("core.customer_receipts"))
+
+    plans = (
+        BulkOutputPlan.query
+        .filter(BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]))
+        .order_by(BulkOutputPlan.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    db.session.expire_all()
+
+    plans_view = []
+    for plan in plans:
+        summary = _compute_plan_averages(plan)
+        plans_view.append({
+            "id": plan.id,
+            "mineral_type": plan.mineral_type,
+            "customer": plan.customer,
+            "batch_id": plan.batch_id,
+            "status": plan.status,
+            "created_at": plan.created_at,
+            "summary": summary,
+            "total_expected_amount": float(plan.total_expected_amount or 0.0),
+        })
+
+    receipts = CustomerReceipt.query.options(joinedload(CustomerReceipt.created_by)).order_by(CustomerReceipt.received_at.desc()).limit(120).all()
+    return render_template("negotiator/customer_receipts.html", plans=plans_view, receipts=receipts, can_record=can_record)
+
+
+def _plan_summary(plan: BulkOutputPlan) -> dict:
+    """Extract batch metadata with O(1) complexity from plan_json."""
+    plan_rows = plan.plan_json or []
+    total_qty = 0.0
+
+    metadata = {}
+    data_rows = plan_rows
+    if plan_rows and isinstance(plan_rows[0], dict):
+        first_row = plan_rows[0]
+        if "achieved_moyenne" in first_row and "planned_output_kg" not in first_row:
+            metadata = first_row
+            data_rows = plan_rows[1:]
+
+    for row in data_rows:
+        try:
+            qty = float((row or {}).get("planned_output_kg") if isinstance(row, dict) else getattr(row, "planned_output_kg", 0) or 0)
+            if qty > 0:
+                total_qty += qty
+        except Exception:
+            continue
+
+    return {
+        "total_qty": total_qty,
+        "moyenne": float(metadata.get("achieved_moyenne", 0.0)) if metadata.get("achieved_moyenne") is not None else None,
+        "moyenne_nb": float(metadata.get("achieved_moyenne_nb", 0.0)) if metadata.get("achieved_moyenne_nb") is not None else None,
+    }
+
+
+def _compute_plan_averages(plan: BulkOutputPlan) -> dict:
+    """Return safe averages for a plan.
+
+    Source of truth:
+    - Prefer stored metadata in plan_json[0] (achieved_moyenne / achieved_moyenne_nb)
+    - If missing/zero, recompute from plan_json line items + stock rows
+
+    NOTE: moyenne/moyenne_nb here represent *quality averages* (not price).
     """
-    from collections import defaultdict
-    from copper.models import CopperOutput
+    summary = _plan_summary(plan)
+    if summary.get("moyenne") is not None and summary.get("moyenne") != 0:
+        return summary
 
-    outputs = (
-        CopperOutput.query
-        .filter_by(customer=customer)
-        .order_by(CopperOutput.date)
+    plan_rows = plan.plan_json or []
+    data_rows = plan_rows
+    if plan_rows and isinstance(plan_rows[0], dict):
+        first_row = plan_rows[0]
+        if "achieved_moyenne" in first_row and "planned_output_kg" not in first_row:
+            data_rows = plan_rows[1:]
+
+    # Compute weighted averages from selected stock lines
+    total_qty = 0.0
+    weighted_percent = 0.0
+    weighted_nb = 0.0
+    stock_ids = []
+    lines = []
+    for row in data_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            stock_id = row.get("stock_id")
+            qty = float(row.get("planned_output_kg") or 0)
+        except Exception:
+            continue
+        if not stock_id or qty <= 0:
+            continue
+        stock_ids.append(int(stock_id))
+        lines.append((int(stock_id), float(qty)))
+        total_qty += float(qty)
+
+    if total_qty <= 0 or not stock_ids:
+        return {"total_qty": float(summary.get("total_qty") or 0.0), "moyenne": 0.0, "moyenne_nb": 0.0}
+
+    stock_model = _get_stock_model(plan.mineral_type)
+    if not stock_model:
+        return {"total_qty": total_qty, "moyenne": 0.0, "moyenne_nb": 0.0}
+
+    try:
+        stock_rows = stock_model.query.filter(stock_model.id.in_(list(set(stock_ids)))).all()
+        stock_map = {int(getattr(s, "id")): s for s in stock_rows}
+    except Exception:
+        logger.exception("_compute_plan_averages: failed loading stocks for plan_id=%s", getattr(plan, 'id', None))
+        return {"total_qty": total_qty, "moyenne": 0.0, "moyenne_nb": 0.0}
+
+    for stock_id, qty in lines:
+        s = stock_map.get(int(stock_id))
+        if not s:
+            continue
+        try:
+            pct = float(getattr(s, "percentage", 0) or 0.0)
+        except Exception:
+            pct = 0.0
+
+        # Prefer explicit NB field when available (copper). Otherwise derive an
+        # NB-like value from t_unity/local_balance (cassiterite).
+        nb_val = None
+        try:
+            nb_val = getattr(s, "nb", None)
+        except Exception:
+            nb_val = None
+
+        if nb_val is None:
+            try:
+                t_unity = float(getattr(s, "t_unity", 0) or 0.0)
+                bal = float(getattr(s, "local_balance", 0) or 0.0)
+                nb_val = (t_unity / bal) if bal else 0.0
+            except Exception:
+                nb_val = 0.0
+        else:
+            try:
+                nb_val = float(nb_val or 0.0)
+            except Exception:
+                nb_val = 0.0
+
+        weighted_percent += pct * qty
+        weighted_nb += nb_val * qty
+
+    moyenne = float(weighted_percent / total_qty) if total_qty else 0.0
+    moyenne_nb = float(weighted_nb / total_qty) if total_qty else 0.0
+    return {"total_qty": total_qty, "moyenne": moyenne, "moyenne_nb": moyenne_nb}
+
+
+@core_bp.route('/api/plan_averages/<int:plan_id>')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def api_plan_averages(plan_id: int):
+    plan = BulkOutputPlan.query.get_or_404(plan_id)
+    data = _compute_plan_averages(plan)
+    return jsonify({
+        "total_qty": float(data.get("total_qty") or 0.0),
+        "moyenne": float(data.get("moyenne") or 0.0),
+        "moyenne_nb": float(data.get("moyenne_nb") or 0.0),
+    })
+
+
+def _customers_for_mineral(mineral_type: str) -> list[str]:
+    mineral = _canonical_mineral_type(mineral_type)
+    aliases = _mineral_aliases(mineral)
+    if not aliases:
+        return []
+
+    plan_rows = (
+        db.session.query(BulkOutputPlan.customer)
+        .filter(
+            BulkOutputPlan.customer.isnot(None),
+            BulkOutputPlan.mineral_type.in_(aliases),
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        .distinct()
+        .all()
+    )
+    receipt_rows = (
+        db.session.query(CustomerReceipt.customer)
+        .filter(CustomerReceipt.customer.isnot(None), CustomerReceipt.mineral_type.in_(aliases))
+        .distinct()
         .all()
     )
 
-    by_date = defaultdict(lambda: {"output_amount": 0, "amount_paid": 0, "output_kg": 0})
-    for output in outputs:
-        date_key = output.date
-        by_date[date_key]["output_amount"] += (output.output_amount or 0)
-        by_date[date_key]["amount_paid"] += (output.amount_paid or 0)
-        by_date[date_key]["output_kg"] += (output.output_kg or 0)
+    names = set()
+    for row in plan_rows + receipt_rows:
+        name = (row[0] if row else '') or ''
+        name = name.strip()
+        if name:
+            names.add(name)
 
-    ledger = []
-    running_balance = 0
-    for date in sorted(by_date.keys()):
-        data = by_date[date]
-        running_balance += data["output_amount"]
-        ledger.append({
-            "date": date,
-            "description": f"Total Output ({data['output_kg']} kg)",
-            "debit": data["output_amount"],
-            "credit": 0,
-            "balance": running_balance,
-            "output_kg": data["output_kg"],
-            "batch_id": None,
+    return sorted(names, key=lambda n: n.lower())
+
+
+def _customer_batch_cards(mineral_type: str, customer: str) -> list[dict]:
+    mineral = _canonical_mineral_type(mineral_type)
+    aliases = _mineral_aliases(mineral)
+    customer_name = (customer or '').strip()
+    if not aliases or not customer_name:
+        return []
+
+    plans = (
+        BulkOutputPlan.query
+        .filter(BulkOutputPlan.customer == customer_name, BulkOutputPlan.mineral_type.in_(aliases))
+        .order_by(BulkOutputPlan.created_at.asc(), BulkOutputPlan.id.asc())
+        .all()
+    )
+    receipts = (
+        CustomerReceipt.query
+        .filter(CustomerReceipt.customer == customer_name, CustomerReceipt.mineral_type.in_(aliases))
+        .order_by(CustomerReceipt.received_at.asc(), CustomerReceipt.id.asc())
+        .all()
+    )
+
+    batches = set()
+    for p in plans:
+        if p.batch_id:
+            batches.add(p.batch_id)
+    for r in receipts:
+        if r.batch_id:
+            batches.add(r.batch_id)
+
+    cards = []
+    for batch_id in sorted(batches):
+        plans_for_batch = [p for p in plans if p.batch_id == batch_id]
+        receipts_for_batch = [r for r in receipts if r.batch_id == batch_id]
+
+        expected = float(sum(float(p.total_expected_amount or 0.0) for p in plans_for_batch))
+        paid = float(sum(float((r.amount_rwf if r.amount_rwf is not None else r.amount_input) or 0.0) for r in receipts_for_batch))
+        remaining = float(expected - paid)
+
+        latest_plan = plans_for_batch[-1] if plans_for_batch else None
+        summary = _plan_summary(latest_plan) if latest_plan else {}
+
+        cards.append({
+            'batch_id': batch_id,
+            'expected': expected,
+            'paid': paid,
+            'remaining': remaining,
+            'qty': float(summary.get('total_qty') or 0.0),
+            'moyenne': float(summary.get('moyenne') or 0.0),
+            'moyenne_nb': float(summary.get('moyenne_nb') or 0.0),
         })
 
-        if data["amount_paid"] > 0:
-            running_balance -= data["amount_paid"]
-            ledger.append({
-                "date": date,
-                "description": "Payment",
-                "debit": 0,
-                "credit": data["amount_paid"],
-                "balance": running_balance,
-                "output_kg": 0,
-                "batch_id": None,
-            })
+    return cards
 
+
+def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None = None, page: int | None = None, per_page: int | None = None):
+    """Assemble complete customer ledger from SINGLE SOURCE OF TRUTH.
+    
+    ╔════════════════════════════════════════════════════════════════════╗
+    ║ UNIFIED LEDGER SOURCE: BulkOutputPlan + CustomerReceipt           ║
+    ║ NO DUPLICATE QUERIES, NO FALLBACKS                                 ║
+    ╚════════════════════════════════════════════════════════════════════╝
+    
+    Purpose:
+        Build debit/credit ledger for a customer showing:
+        - DEBIT entries: BulkOutputPlan rows (agreed amounts)
+        - CREDIT entries: CustomerReceipt rows (payments made)
+        - Running balance: outstanding per batch
+    
+    Args:
+        mineral_type: 'copper'|'coltan'|'cassiterite' (user input)
+        customer: Customer name (exact match)
+        batch_id: Optional - filter to specific batch
+    
+    Returns:
+        (ledger, total_expected, total_paid, remaining)
+        where ledger = [
+            {
+                date: datetime,
+                description: str (Agreement or Payment),
+                debit: float (amount owed),
+                credit: float (amount paid),
+                balance: float (running balance),
+                batch_id: str,
+                mineral_type: str,
+                qty: float (kg),
+                moyenne: float (%),
+                moyenne_nb: float (%),
+            },
+            ...
+        ]
+    
+    Data Pipeline:
+        1. Normalize mineral_type → canonical form (coltan→copper)
+        2. Query BulkOutputPlan WHERE customer + mineral_type
+        3. Query CustomerReceipt WHERE customer + mineral_type
+        4. Build ledger entries: debit (agreements) + credit (payments)
+        5. Calculate running balance (total_expected - cumulative_paid)
+    
+    Outstanding Calculation:
+        remaining = SUM(plans.total_expected_amount) - SUM(receipts.amount_rwf)
+    
+    Used by:
+        - copper_customer_ledger_batch() - Negotiator view (edit buttons)
+        - cassiterite_customer_ledger_batch() - Negotiator view (edit buttons)
+        - boss_copper_customer_ledger() - Boss view (read-only)
+        - boss_cassiterite_customer_ledger() - Boss view (read-only)
+    """
+    customer_name = (customer or '').strip()
+    if not customer_name:
+        abort(404)
+
+    mineral = _canonical_mineral_type(mineral_type)
+    aliases = _mineral_aliases(mineral)
+    if not aliases:
+        abort(404)
+
+    batch = (batch_id or '').strip() or None
+
+    # Build DB-level queries for plans (debits) and receipts (credits).
+    # We UNION ALL them with explicit labeled columns to guarantee `ledger_union.c.debit` exists.
+    from sqlalchemy import literal, select, union_all
+    plans_stmt = (
+        select(
+            BulkOutputPlan.created_at.label('date'),
+            literal(1).label('sort_key'),
+            BulkOutputPlan.batch_id.label('batch_id'),
+            BulkOutputPlan.total_expected_amount.label('debit'),
+            literal(0.0).label('credit'),
+        )
+        .where(
+            BulkOutputPlan.customer == customer_name,
+            BulkOutputPlan.mineral_type.in_(aliases),
+        )
+    )
+
+    receipts_stmt = (
+        select(
+            CustomerReceipt.received_at.label('date'),
+            literal(2).label('sort_key'),
+            CustomerReceipt.batch_id.label('batch_id'),
+            literal(0.0).label('debit'),
+            func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input).label('credit'),
+        )
+        .where(
+            CustomerReceipt.customer == customer_name,
+            CustomerReceipt.mineral_type.in_(aliases),
+        )
+    )
+
+    if batch:
+        plans_stmt = plans_stmt.where(BulkOutputPlan.batch_id == batch)
+        receipts_stmt = receipts_stmt.where(CustomerReceipt.batch_id == batch)
+
+    ledger_union = union_all(plans_stmt, receipts_stmt).subquery('ledger_union')
+
+    # Count total rows for pagination
+    total_q = db.session.query(func.count()).select_from(ledger_union)
+    total_rows = int(total_q.scalar() or 0)
+
+    # Aggregate totals (unpaginated): sum of debits and credits
+    totals_q = db.session.query(
+        func.coalesce(func.sum(ledger_union.c.debit), 0).label('total_debit'),
+        func.coalesce(func.sum(ledger_union.c.credit), 0).label('total_credit')
+    ).select_from(ledger_union).one()
+    total_expected = float(totals_q.total_debit or 0.0)
+    total_paid = float(totals_q.total_credit or 0.0)
+    remaining = float(total_expected - total_paid)
+
+    # Pagination handling: if page/per_page provided, apply limit/offset
+    ledger_rows = []
+    start_balance = 0.0
+    if page and per_page:
+        if page < 1:
+            page = 1
+        offset_val = (page - 1) * per_page
+
+        # find cutoff row (first row on this page) to compute running balance before page
+        cutoff_row = db.session.query(ledger_union).order_by(ledger_union.c.date.asc(), ledger_union.c.sort_key.asc()).offset(offset_val).limit(1).first()
+        if cutoff_row:
+            cutoff_date = cutoff_row.date
+            cutoff_sort = cutoff_row.sort_key
+
+            # sum all debits - credits strictly before cutoff
+            before_q = db.session.query(
+                func.coalesce(func.sum(ledger_union.c.debit), 0).label('d'),
+                func.coalesce(func.sum(ledger_union.c.credit), 0).label('c')
+            ).filter(
+                or_(
+                    ledger_union.c.date < cutoff_date,
+                    and_(ledger_union.c.date == cutoff_date, ledger_union.c.sort_key < cutoff_sort)
+                )
+            )
+            before_totals = before_q.one()
+            start_balance = float((before_totals.d or 0) - (before_totals.c or 0))
+
+        page_rows = db.session.query(ledger_union).order_by(ledger_union.c.date.asc(), ledger_union.c.sort_key.asc()).limit(per_page).offset(offset_val).all()
+        ledger_rows = [dict(date=r._mapping['date'], sort_key=r._mapping['sort_key'], batch_id=r._mapping['batch_id'], debit=float(r._mapping['debit'] or 0.0), credit=float(r._mapping['credit'] or 0.0)) for r in page_rows]
+    else:
+        # no pagination requested — return full ledger
+        all_rows = db.session.query(ledger_union).order_by(ledger_union.c.date.asc(), ledger_union.c.sort_key.asc()).all()
+        ledger_rows = [dict(date=r._mapping['date'], sort_key=r._mapping['sort_key'], batch_id=r._mapping['batch_id'], debit=float(r._mapping['debit'] or 0.0), credit=float(r._mapping['credit'] or 0.0)) for r in all_rows]
+
+    # Attach plan summaries for batches visible on this page
+    visible_batches = {r['batch_id'] for r in ledger_rows if r.get('batch_id')}
+    plan_map = {}
+    if visible_batches:
+        plans = BulkOutputPlan.query.filter(BulkOutputPlan.batch_id.in_(visible_batches)).all()
+        for p in plans:
+            plan_map[p.batch_id] = _plan_summary(p)
+
+    # Build final ledger with running balance starting from start_balance
+    ledger = []
+    running = float(start_balance)
+    for r in ledger_rows:
+        summary = plan_map.get(r.get('batch_id')) or {}
+        ledger.append({
+            'date': r.get('date'),
+            'description': 'Agreement' if r.get('debit', 0) > 0 else 'Payment',
+            'debit': float(r.get('debit', 0) or 0.0),
+            'credit': float(r.get('credit', 0) or 0.0),
+            'mineral_type': mineral,
+            'batch_id': r.get('batch_id'),
+            'qty': float(summary.get('total_qty') or 0.0),
+            'moyenne': float(summary.get('moyenne') or 0.0),
+            'moyenne_nb': float(summary.get('moyenne_nb') or 0.0),
+            'balance': 0.0,
+        })
+        running += float(r.get('debit', 0) or 0.0)
+        running -= float(r.get('credit', 0) or 0.0)
+        ledger[-1]['balance'] = running
+
+    return ledger, total_expected, total_paid, remaining
+
+
+@core_bp.route('/receipts/copper/customer_ledger')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def copper_customer_ledger_index():
+    customer_names = _customers_for_mineral('copper')
+    return render_template('negotiator/customer_ledger_index.html', customers=customer_names, mineral_type='copper')
+
+
+@core_bp.route('/receipts/customer_ledger')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def customer_ledger_index():
+    """Small hub page so sidebar can link to one ledger entry point."""
+    return render_template('negotiator/customer_ledger_hub.html')
+
+
+@core_bp.route('/receipts/cassiterite/customer_ledger')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def cassiterite_customer_ledger_index():
+    customer_names = _customers_for_mineral('cassiterite')
+    return render_template('negotiator/customer_ledger_index.html', customers=customer_names, mineral_type='cassiterite')
+
+
+@core_bp.route('/receipts/copper/customer_ledger/<customer>')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def copper_customer_ledger(customer: str):
+    """Display list of copper batches for a customer.
+    
+    Data Source: Single source of truth
+    - BulkOutputPlan (agreements) + CustomerReceipt (payments)
+    
+    Access Control:
+    - negotiator: Full access (can record payments)
+    - accountant: Full access (can record payments)
+    - boss: Read-only (can view ledgers only)
+    - admin: Full access
+    
+    Outstanding Calculation: total_expected_amount - sum(receipts)
+    """
+    batches = _customer_batch_cards('copper', customer)
+    user_role = getattr(current_user, 'role', None)
     return render_template(
-        "copper/customer_ledger.html",
+        'negotiator/customer_ledger_batches.html',
         customer=customer,
+        batches=batches,
+        mineral_type='copper',
+        user_role=user_role,
+        is_readonly=(user_role == 'boss')
+    )
+
+
+@core_bp.route('/receipts/copper/customer_ledger/<customer>/<batch_id>')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def copper_customer_ledger_batch(customer: str, batch_id: str):
+    """Display full ledger (debit/credit) for a copper customer batch.
+    
+    Data Source: Single source of truth
+    - Debit entries: BulkOutputPlan rows (what customer agreed to pay)
+    - Credit entries: CustomerReceipt rows (payments received)
+    - Outstanding: total_expected - sum(receipts)
+    
+    Ledger Structure:
+    [
+        {date, description, debit, credit, balance, batch_id, qty, moyenne, moyenne_nb},
+        ...
+    ]
+    
+    Access Control:
+    - negotiator: Can view and has action buttons (Record Receipts, Update Debts)
+    - accountant: Can view and has action buttons
+    - boss: Can view ONLY (read-only, no action buttons)
+    - admin: Can view and has action buttons
+    """
+    # support DB-level pagination for ledger entries
+    try:
+        page = int(request.args.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+    per_page = int(request.args.get('per_page', 50))
+    ledger, total_owed, total_paid, remaining = _customer_ledger_data('copper', customer, batch_id=batch_id, page=page, per_page=per_page)
+    user_role = getattr(current_user, 'role', None)
+    
+    return render_template(
+        'negotiator/customer_ledger.html',
+        customer=customer,
+        batch_id=batch_id,
         ledger=ledger,
-        total_owed=db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).filter(CopperOutput.customer == customer).scalar(),
-        total_paid=db.session.query(func.coalesce(func.sum(CopperOutput.amount_paid), 0)).filter(CopperOutput.customer == customer).scalar(),
-        remaining=(db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).filter(CopperOutput.customer == customer).scalar() - db.session.query(func.coalesce(func.sum(CopperOutput.amount_paid), 0)).filter(CopperOutput.customer == customer).scalar()),
-        user_role=getattr(current_user, 'role', None),
+        total_owed=total_owed,
+        total_paid=total_paid,
+        remaining=remaining,
+        mineral_type='copper',
+        user_role=user_role,
+        is_readonly=(user_role == 'boss')
+    )
+
+
+@core_bp.route('/receipts/cassiterite/customer_ledger/<customer>')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def cassiterite_customer_ledger(customer: str):
+    """Display list of cassiterite batches for a customer.
+    
+    Data Source: Single source of truth
+    - BulkOutputPlan (agreements) + CustomerReceipt (payments)
+    
+    Access Control:
+    - negotiator: Full access (can record payments)
+    - accountant: Full access (can record payments)
+    - boss: Read-only (can view ledgers only)
+    - admin: Full access
+    
+    Outstanding Calculation: total_expected_amount - sum(receipts)
+    """
+    batches = _customer_batch_cards('cassiterite', customer)
+    user_role = getattr(current_user, 'role', None)
+    return render_template(
+        'negotiator/customer_ledger_batches.html',
+        customer=customer,
+        batches=batches,
+        mineral_type='cassiterite',
+        user_role=user_role,
+        is_readonly=(user_role == 'boss')
+    )
+
+
+@core_bp.route('/receipts/cassiterite/customer_ledger/<customer>/<batch_id>')
+@role_required('negotiator', 'accountant', 'boss', 'admin')
+def cassiterite_customer_ledger_batch(customer: str, batch_id: str):
+    """Display full ledger (debit/credit) for a cassiterite customer batch.
+    
+    Data Source: Single source of truth
+    - Debit entries: BulkOutputPlan rows (what customer agreed to pay)
+    - Credit entries: CustomerReceipt rows (payments received)
+    - Outstanding: total_expected - sum(receipts)
+    
+    Ledger Structure:
+    [
+        {date, description, debit, credit, balance, batch_id, qty, moyenne, moyenne_nb},
+        ...
+    ]
+    
+    Access Control:
+    - negotiator: Can view and has action buttons (Record Receipts, Update Debts)
+    - accountant: Can view and has action buttons
+    - boss: Can view ONLY (read-only, no action buttons)
+    - admin: Can view and has action buttons
+    """
+    try:
+        page = int(request.args.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+    per_page = int(request.args.get('per_page', 50))
+    ledger, total_owed, total_paid, remaining = _customer_ledger_data('cassiterite', customer, batch_id=batch_id, page=page, per_page=per_page)
+    user_role = getattr(current_user, 'role', None)
+    
+    return render_template(
+        'negotiator/customer_ledger.html',
+        customer=customer,
+        batch_id=batch_id,
+        ledger=ledger,
+        total_owed=total_owed,
+        total_paid=total_paid,
+        remaining=remaining,
+        mineral_type='cassiterite',
+        user_role=user_role,
+        is_readonly=(user_role == 'boss')
+    )
+
+
+def _batch_debt_options():
+    """Return customer/batch outstanding options for debt update page.
+    
+    Single source of truth: Use ONLY BulkOutputPlan + CustomerReceipt.
+    Outstanding = plan.total_expected_amount - sum(receipts.amount_rwf)
+    """
+    # Query all active agreements
+    plans = (
+        BulkOutputPlan.query
+        .filter(
+            BulkOutputPlan.customer.isnot(None),
+            BulkOutputPlan.batch_id.isnot(None),
+            BulkOutputPlan.total_expected_amount.isnot(None),
+            BulkOutputPlan.total_expected_amount > 0,
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        )
+        .all()
+    )
+
+    rows_map: dict[tuple[str, str, str], dict] = {}
+
+    for p in plans:
+        canonical_mineral = _canonical_mineral_type(p.mineral_type)
+        if not canonical_mineral:
+            continue
+
+        aliases = _mineral_aliases(p.mineral_type)
+        paid = (
+            db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+            .filter(
+                CustomerReceipt.batch_id == p.batch_id,
+                CustomerReceipt.mineral_type.in_(aliases),
+            )
+            .scalar()
+            or 0
+        )
+        remaining = float((p.total_expected_amount or 0.0) - float(paid or 0.0))
+        if remaining <= 0.01:  # Skip fully paid
+            continue
+
+        key = (canonical_mineral, p.customer, p.batch_id)
+        rows_map[key] = {
+            'mineral_type': canonical_mineral,
+            'customer': p.customer,
+            'batch_id': p.batch_id,
+            'remaining': remaining,
+        }
+
+    rows = list(rows_map.values())
+
+    # Attach batch quality metadata
+    plan_map = {}
+    for p in plans:
+        canonical_mineral = _canonical_mineral_type(p.mineral_type)
+        if canonical_mineral:
+            plan_map[(canonical_mineral, p.batch_id)] = p
+
+    customer_total = {}
+    for row in rows:
+        customer_total[row['customer']] = float(customer_total.get(row['customer'], 0.0) + row['remaining'])
+
+        p = plan_map.get((row['mineral_type'], row['batch_id']))
+        if p:
+            summary = _plan_summary(p)
+            row['moyenne'] = float(summary.get('moyenne') or 0.0)
+            row['moyenne_nb'] = float(summary.get('moyenne_nb') or 0.0)
+            row['qty'] = float(summary.get('total_qty') or 0.0)
+            row['bulk_plan_id'] = p.id
+        else:
+            row['moyenne'] = 0.0
+            row['moyenne_nb'] = 0.0
+            row['qty'] = 0.0
+            row['bulk_plan_id'] = None
+
+    rows.sort(key=lambda x: (x['customer'].lower(), x['mineral_type'], x['batch_id']))
+    customers = [{'name': name, 'remaining': amount} for name, amount in sorted(customer_total.items(), key=lambda i: i[0].lower())]
+    return customers, rows
+
+
+@core_bp.route('/receipts/update_debts', methods=['GET', 'POST'])
+@role_required('negotiator', 'admin')
+def update_debts():
+    can_record = getattr(current_user, 'role', None) in {'negotiator', 'admin'}
+    customers, batch_options = _batch_debt_options()
+    option_map = {(b['customer'], b['mineral_type'], b['batch_id']): b for b in batch_options}
+
+    if request.method == 'POST':
+        if not can_record:
+            _flash_and_notify('Only negotiator can record customer payments.', 'warning')
+            return redirect(url_for('core.update_debts'))
+
+        customer = (request.form.get('customer') or '').strip()
+        mineral_type = _canonical_mineral_type(request.form.get('mineral_type'))
+        batch_id = (request.form.get('batch_id') or '').strip()
+        if not customer:
+            _flash_and_notify('Customer is required.', 'danger')
+            return redirect(url_for('core.update_debts'))
+        if mineral_type not in {'copper', 'cassiterite'}:
+            _flash_and_notify('Mineral is required.', 'danger')
+            return redirect(url_for('core.update_debts'))
+        if not batch_id:
+            _flash_and_notify('Batch is required.', 'danger')
+            return redirect(url_for('core.update_debts'))
+
+        try:
+            amount_input = float(request.form.get('amount_input') or 0)
+        except ValueError:
+            _flash_and_notify('Amount must be a number.', 'danger')
+            return redirect(url_for('core.update_debts'))
+
+        currency = (request.form.get('currency') or 'RWF').upper()
+        exchange_rate_input = request.form.get('exchange_rate')
+        receipt_type = (request.form.get('receipt_type') or CustomerReceiptType.INSTALLMENT.value).upper()
+        payment_channel = (request.form.get('payment_channel') or CustomerReceiptChannel.CASH.value).upper()
+        note = request.form.get('note') or ''
+
+        try:
+            amount_rwf, exchange_rate = _normalize_amount_to_rwf(amount_input, currency, exchange_rate_input)
+        except ValueError as exc:
+            _flash_and_notify(str(exc), 'danger')
+            return redirect(url_for('core.update_debts'))
+
+        if amount_rwf <= 0:
+            _flash_and_notify('Amount must be greater than zero.', 'danger')
+            return redirect(url_for('core.update_debts'))
+
+        selected = option_map.get((customer, mineral_type, batch_id))
+        if not selected:
+            _flash_and_notify('Selected customer batch has no outstanding amount.', 'warning')
+            return redirect(url_for('core.update_debts'))
+
+        outstanding = float(selected.get('remaining') or 0.0)
+        if outstanding <= 0:
+            _flash_and_notify('This customer batch has no outstanding balance.', 'warning')
+            return redirect(url_for('core.update_debts'))
+        if amount_rwf - outstanding > 0.01:
+            _flash_and_notify('Payment exceeds outstanding amount for selected batch.', 'danger')
+            return redirect(url_for('core.update_debts'))
+
+        stage = 'ADVANCE'
+        existing_count = CustomerReceipt.query.filter_by(customer=customer, mineral_type=mineral_type, batch_id=batch_id).count()
+        if existing_count > 0:
+            stage = 'INSTALLMENT'
+
+        applied_total = _apply_receipt_to_batch(mineral_type, batch_id, amount_rwf, stage)
+        if applied_total <= 0:
+            _flash_and_notify('Could not apply payment to selected batch outputs.', 'danger')
+            return redirect(url_for('core.update_debts'))
+
+        remaining_after = _batch_outstanding_rwf(mineral_type, batch_id)
+        final_receipt_type = receipt_type
+        if remaining_after <= 0.01:
+            final_receipt_type = CustomerReceiptType.FINAL_SETTLEMENT.value
+
+        receipt = CustomerReceipt(
+            mineral_type=mineral_type,
+            batch_id=batch_id,
+            customer=customer,
+            bulk_plan_id=selected.get('bulk_plan_id'),
+            received_at=datetime.utcnow(),
+            receipt_type=final_receipt_type,
+            payment_channel=payment_channel,
+            amount_input=amount_input,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            amount_rwf=float(applied_total),
+            created_by_id=getattr(current_user, 'id', None),
+            note=note,
+        )
+        db.session.add(receipt)
+
+        db.session.commit()
+        if mineral_type == 'cassiterite':
+            return redirect(url_for('core.cassiterite_customer_ledger_batch', customer=customer, batch_id=batch_id))
+        return redirect(url_for('core.copper_customer_ledger_batch', customer=customer, batch_id=batch_id))
+
+    # Also fetch persisted notifications so the page can render a dedicated
+    # message area (flash messages are persisted via _flash_and_notify).
+    notifications = []
+    unread_count = 0
+    if getattr(current_user, 'is_authenticated', False):
+        try:
+            notifications, unread_count = fetch_user_notifications(current_user.id)
+        except Exception:
+            logger.exception('update_debts: failed to fetch notifications')
+
+    return render_template('negotiator/update_debts.html', customers=customers, batch_options=batch_options, can_record=can_record, notifications=notifications, unread_count=unread_count)
+
+
+@core_bp.route("/boss/copper/customer_ledger/<customer>")
+@role_required("boss", "accountant", "admin")
+def boss_copper_customer_ledger(customer: str):
+    """Boss read-only view of a copper customer ledger.
+    
+    Data Source: Single source of truth
+    - BulkOutputPlan (agreements) + CustomerReceipt (payments)
+    
+    Reuses the unified _customer_ledger_data() so boss view stays in sync
+    with negotiator/accountant ledgers (accounts for agreements and receipts).
+    
+    Boss CANNOT:
+    - Record customer payments
+    - Update debts
+    - Modify agreements
+    
+    Boss CAN:
+    - View complete ledger history
+    - See all agreements and payments
+    - Monitor customer balances
+    """
+    ledger, total_expected, total_paid, remaining = _customer_ledger_data('copper', customer)
+    user_role = getattr(current_user, 'role', None)
+    
+    return render_template(
+        "negotiator/customer_ledger.html",
+        customer=customer,
+        batch_id=None,
+        ledger=ledger,
+        total_owed=total_expected,
+        total_paid=total_paid,
+        remaining=remaining,
+        mineral_type='copper',
+        user_role=user_role,
+        is_readonly=True
     )
 
 
 @core_bp.route("/boss/cassiterite/customer_ledger/<customer>")
-@role_required("boss", "admin")
+@role_required("boss", "accountant", "admin")
 def boss_cassiterite_customer_ledger(customer: str):
-    """Boss/admin read-only view of a cassiterite customer ledger.
-
-    Shows each individual output and payment row so the boss
-    sees detailed movements instead of daily aggregates.
+    """Boss read-only view of a cassiterite customer ledger.
+    
+    Data Source: Single source of truth
+    - BulkOutputPlan (agreements) + CustomerReceipt (payments)
+    
+    Reuses the unified _customer_ledger_data() so boss view stays in sync
+    with negotiator/accountant ledgers (accounts for agreements and receipts).
+    
+    Boss CANNOT:
+    - Record customer payments
+    - Update debts
+    - Modify agreements
+    
+    Boss CAN:
+    - View complete ledger history
+    - See all agreements and payments
+    - Monitor customer balances
     """
-
-    from cassiterite.models import CassiteriteOutput
-
-    outputs = (
-        CassiteriteOutput.query
-        .filter_by(customer=customer)
-        .order_by(CassiteriteOutput.date, CassiteriteOutput.id)
-        .all()
-    )
-
-    ledger = []
-    running_balance = 0.0
-
-    for output in outputs:
-        amount = float(output.output_amount or 0.0)
-        paid = float(output.amount_paid or 0.0)
-
-        # Output row (sale)
-        if amount:
-            running_balance += amount
-            ledger.append({
-                "date": output.date,
-                "description": "Output",  # template adds kg details
-                "debit": amount,
-                "credit": 0.0,
-                "balance": running_balance,
-                "output_kg": float(output.output_kg or 0.0),
-                "batch_id": output.batch_id,
-                "voucher_no": output.voucher_no,
-            })
-
-        # Payment row (if any amount was paid for this output)
-        if paid:
-            running_balance -= paid
-            ledger.append({
-                "date": output.date,
-                "description": "Payment",  # tied to this output
-                "debit": 0.0,
-                "credit": paid,
-                "balance": running_balance,
-                "output_kg": 0.0,
-                "batch_id": output.batch_id,
-                "voucher_no": output.voucher_no,
-            })
-
+    ledger, total_expected, total_paid, remaining = _customer_ledger_data('cassiterite', customer)
+    user_role = getattr(current_user, 'role', None)
+    
     return render_template(
-        "cassiterite/customer_ledger.html",
+        "negotiator/customer_ledger.html",
         customer=customer,
+        batch_id=None,
         ledger=ledger,
-        total_owed=db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).filter(CassiteriteOutput.customer == customer).scalar(),
-        total_paid=db.session.query(func.coalesce(func.sum(CassiteriteOutput.amount_paid), 0)).filter(CassiteriteOutput.customer == customer).scalar(),
-        remaining=(db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).filter(CassiteriteOutput.customer == customer).scalar() - db.session.query(func.coalesce(func.sum(CassiteriteOutput.amount_paid), 0)).filter(CassiteriteOutput.customer == customer).scalar()),
-        user_role=getattr(current_user, 'role', None),
+        total_owed=total_expected,
+        total_paid=total_paid,
+        remaining=remaining,
+        mineral_type='cassiterite',
+        user_role=user_role,
+        is_readonly=True
     )
 
 
@@ -753,43 +2323,124 @@ def boss_cassiterite_customer_ledger(customer: str):
 @role_required("boss", "admin")
 def boss_copper_supplier_ledger(supplier: str):
     """Boss/admin read-only view of copper supplier ledger."""
-    from copper.models import CopperStock, SupplierPayment
+    from sqlalchemy import or_
+    from copper.models import CopperStock, SupplierPayment, CopperSupplier, CopperAdvanceAllocation
 
-    # Eager-load payments to avoid N+1 queries when iterating stocks
+    supplier_row = CopperSupplier.query.filter(CopperSupplier.name == supplier).first()
+
     stocks = (
         CopperStock.query.options(joinedload(CopperStock.supplier_payments))
         .filter_by(supplier=supplier)
-        .order_by(CopperStock.date)
+        .order_by(CopperStock.date, CopperStock.id)
         .all()
     )
 
-    ledger = []
-    running_balance = 0
-    for stock in stocks:
-        running_balance += (stock.net_balance or 0)
-        ledger.append({
-            "date": stock.date,
-            "description": f"Stock {stock.voucher_no}",
-            "debit": stock.net_balance,
-            "credit": 0,
-            "balance": running_balance,
+    stock_ids = [s.id for s in stocks]
+    payment_filters = [SupplierPayment.is_deleted.is_(False)]
+    supplier_conditions = [
+        SupplierPayment.supplier_id == getattr(supplier_row, 'id', None),
+        SupplierPayment.supplier_name == supplier,
+    ]
+    if stock_ids:
+        supplier_conditions.append(SupplierPayment.stock_id.in_(stock_ids))
+    payment_rows = (
+        SupplierPayment.query
+        .filter(*payment_filters)
+        .filter(or_(*supplier_conditions))
+        .order_by(SupplierPayment.paid_at, SupplierPayment.id)
+        .all()
+    )
+
+    allocation_map = {}
+    if stock_ids:
+        allocation_rows = (
+            db.session.query(
+                CopperAdvanceAllocation.stock_id,
+                func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('applied'),
+            )
+            .filter(CopperAdvanceAllocation.stock_id.in_(stock_ids))
+            .group_by(CopperAdvanceAllocation.stock_id)
+            .all()
+        )
+        allocation_map = {r.stock_id: float(r.applied or 0.0) for r in allocation_rows}
+
+    ledger_rows = []
+
+    def _ledger_sort_value(value):
+        if isinstance(value, datetime):
+            return value
+        if value:
+            return datetime.combine(value, datetime.min.time())
+        return datetime.min
+
+    def _append_ledger_row(date_value, description, debit=0.0, credit=0.0, kind=0, payment_id=None, is_payment=False):
+        ledger_rows.append({
+            "date": date_value,
+            "description": description,
+            "debit": float(debit or 0.0),
+            "credit": float(credit or 0.0),
+            "payment_id": payment_id,
+            "is_payment": is_payment,
+            "_sort_ts": _ledger_sort_value(date_value),
+            "_kind": kind,
         })
 
-        # supplier_payments were eager-loaded above to prevent N+1
-        for payment in stock.supplier_payments:
-            running_balance -= (payment.amount or 0)
-            ledger.append({
-                "date": payment.paid_at,
-                "description": f"Payment (Ref: {payment.reference})",
-                "debit": 0,
-                "credit": payment.amount,
-                "balance": running_balance,
-            })
+    # Model B ledger stream:
+    # - stock = debit
+    # - advances + settlements = credits
+    # - allocations are memo-only (already included in advances)
+    for stock in stocks:
+        applied = float(allocation_map.get(stock.id, 0.0) or 0.0)
+        memo = f" (advance linked: {applied:,.2f} RWF)" if applied > 0 else ""
+        _append_ledger_row(
+            stock.date,
+            f"Stock {stock.voucher_no}{memo}",
+            debit=float(stock.net_balance or 0.0),
+            kind=1,
+        )
 
-    # Compute totals using DB aggregates to avoid re-summing the ledger list
-    total_owed = db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0)).filter(CopperStock.supplier == supplier).scalar()
-    total_paid = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(CopperStock, CopperStock.id == SupplierPayment.stock_id).filter(CopperStock.supplier == supplier).scalar()
-    balance = (total_owed or 0) - (total_paid or 0)
+    for payment in payment_rows:
+        amount = float(payment.amount_rwf or payment.amount or 0.0)
+        is_advance = bool(getattr(payment, 'is_advance', False) is True) or (payment.stock_id is None)
+        if is_advance:
+            _append_ledger_row(
+                payment.paid_at,
+                f"Advance Payment (Ref: {payment.reference})",
+                credit=amount,
+                kind=0,
+                payment_id=payment.id,
+                is_payment=True,
+            )
+        else:
+            _append_ledger_row(
+                payment.paid_at,
+                f"Settlement Payment (Ref: {payment.reference})",
+                credit=amount,
+                kind=2,
+                payment_id=payment.id,
+                is_payment=True,
+            )
+
+    ledger = []
+    running_balance = 0.0
+    for row in sorted(ledger_rows, key=lambda item: (item["_sort_ts"], item["_kind"])):
+        running_balance += float(row["debit"] or 0.0) - float(row["credit"] or 0.0)
+        ledger.append({
+            "date": row["date"],
+            "description": row["description"],
+            "debit": row["debit"],
+            "credit": row["credit"],
+            "balance": running_balance,
+            "payment_id": row.get("payment_id"),
+            "is_payment": row.get("is_payment", False),
+        })
+
+    total_owed = sum(float(s.net_balance or 0.0) for s in stocks)
+    total_paid_settlements = sum(float(p.amount_rwf or p.amount or 0.0) for p in payment_rows if p.stock_id)
+    total_advances = sum(float(p.amount_rwf or p.amount or 0.0) for p in payment_rows if not p.stock_id)
+    total_paid = float(total_paid_settlements + total_advances)
+    total_advance_applied = sum(float(v or 0.0) for v in allocation_map.values())
+    balance = float((total_owed or 0.0) - (total_paid or 0.0))
 
     return render_template(
         "copper/supplier_ledger.html",
@@ -797,13 +2448,15 @@ def boss_copper_supplier_ledger(supplier: str):
         ledger=ledger,
         total_owed=total_owed,
         total_paid=total_paid,
+        total_advances=total_advances,
+        total_advance_applied=total_advance_applied,
         balance=balance,
         user_role=getattr(current_user, 'role', None),
     )
 
 
 @core_bp.route("/boss/copper/ledgers")
-@role_required("boss", "admin")
+@role_required("boss", "accountant", "admin")
 def boss_copper_ledgers():
     """Index page for boss/admin to choose copper ledgers.
 
@@ -848,56 +2501,126 @@ def boss_cassiterite_supplier_ledger(supplier: str):
     requiring the accountant role.
     """
 
-    from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment
+    from sqlalchemy import or_
+    from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteSupplier, CassiteriteAdvanceAllocation
 
-    # All stocks and payments for this supplier
+    supplier_row = CassiteriteSupplier.query.filter(CassiteriteSupplier.name == supplier).first()
+
     stocks = (
         CassiteriteStock.query
         .filter_by(supplier=supplier)
-        .order_by(CassiteriteStock.date)
+        .order_by(CassiteriteStock.date, CassiteriteStock.id)
         .all()
     )
 
-    payments = (
+    stock_ids = [s.id for s in stocks]
+    payment_filters = [CassiteriteSupplierPayment.is_deleted.is_(False)]
+    supplier_conditions = [
+        CassiteriteSupplierPayment.supplier_id == getattr(supplier_row, 'id', None),
+        CassiteriteSupplierPayment.supplier_name == supplier,
+    ]
+    if stock_ids:
+        supplier_conditions.append(CassiteriteSupplierPayment.stock_id.in_(stock_ids))
+    payment_rows = (
         CassiteriteSupplierPayment.query
-        .join(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
-        .filter(CassiteriteStock.supplier == supplier)
-        .order_by(CassiteriteSupplierPayment.paid_at)
+        .filter(*payment_filters)
+        .filter(or_(*supplier_conditions))
+        .order_by(CassiteriteSupplierPayment.paid_at, CassiteriteSupplierPayment.id)
         .all()
     )
 
-    # Build combined ledger entries (purchases = debit, payments = credit)
-    ledger_entries = []
+    allocation_map = {}
+    if stock_ids:
+        try:
+            allocation_rows = (
+                db.session.query(
+                    CassiteriteAdvanceAllocation.stock_id,
+                    func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0).label('applied'),
+                )
+                .filter(CassiteriteAdvanceAllocation.stock_id.in_(stock_ids))
+                .group_by(CassiteriteAdvanceAllocation.stock_id)
+                .all()
+            )
+            allocation_map = {r.stock_id: float(r.applied or 0.0) for r in allocation_rows}
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            allocation_map = {}
+
+    ledger_rows = []
+
+    def _ledger_sort_value(value):
+        if isinstance(value, datetime):
+            return value
+        if value:
+            return datetime.combine(value, datetime.min.time())
+        return datetime.min
+
+    def _append_ledger_row(date_value, description, debit=0.0, credit=0.0, kind=0, payment_id=None, is_payment=False):
+        ledger_rows.append({
+            "date": date_value,
+            "description": description,
+            "debit": float(debit or 0.0),
+            "credit": float(credit or 0.0),
+            "payment_id": payment_id,
+            "is_payment": is_payment,
+            "_sort_ts": _ledger_sort_value(date_value),
+            "_kind": kind,
+        })
 
     for stock in stocks:
-        ledger_entries.append(
-            {
-                "date": stock.date,
-                "description": f"Purchase {stock.voucher_no}",
-                "debit": float(stock.balance_to_pay or 0),
-                "credit": 0.0,
-                "is_payment": False,
-            }
+        applied = float(allocation_map.get(stock.id, 0.0) or 0.0)
+        memo = f" (advance linked: {applied:,.2f} RWF)" if applied > 0 else ""
+        _append_ledger_row(
+            stock.date,
+            f"Purchase {stock.voucher_no}{memo}",
+            debit=float(stock.balance_to_pay or 0.0),
+            kind=1,
         )
 
-    for payment in payments:
-        ledger_entries.append(
-            {
-                "date": payment.paid_at.date() if payment.paid_at else None,
-                "description": f"Payment (ref: {payment.reference or 'N/A'})",
-                "debit": 0.0,
-                "credit": float(payment.amount or 0),
-                "is_payment": True,
-            }
-        )
+    for payment in payment_rows:
+        amount = float(payment.amount_rwf or payment.amount or 0.0)
+        is_advance = bool(getattr(payment, 'is_advance', False) is True) or (payment.stock_id is None)
+        if is_advance:
+            _append_ledger_row(
+                payment.paid_at,
+                f"Advance Payment (ref: {payment.reference or 'N/A'})",
+                credit=amount,
+                kind=0,
+                payment_id=payment.id,
+                is_payment=True,
+            )
+        else:
+            _append_ledger_row(
+                payment.paid_at,
+                f"Settlement Payment (ref: {payment.reference or 'N/A'})",
+                credit=amount,
+                kind=2,
+                payment_id=payment.id,
+                is_payment=True,
+            )
 
-    # Sort all entries by date
-    ledger_entries.sort(key=lambda x: x["date"] or 0)
+    ledger_entries = []
+    running_balance = 0.0
+    for row in sorted(ledger_rows, key=lambda item: (item["_sort_ts"], item["_kind"])):
+        running_balance += float(row["debit"] or 0.0) - float(row["credit"] or 0.0)
+        ledger_entries.append({
+            "date": row["date"],
+            "description": row["description"],
+            "debit": row["debit"],
+            "credit": row["credit"],
+            "balance": running_balance,
+            "payment_id": row.get("payment_id"),
+            "is_payment": row.get("is_payment", False),
+        })
 
-    # Compute totals using DB aggregates to avoid Python-side summation
-    total_owed = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(CassiteriteStock.supplier == supplier).scalar()
-    total_paid = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).join(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id).filter(CassiteriteStock.supplier == supplier).scalar()
-    balance = (total_owed or 0) - (total_paid or 0)
+    total_owed = sum(float(stock.balance_to_pay or 0.0) for stock in stocks)
+    total_paid_settlements = sum(float(p.amount_rwf or p.amount or 0.0) for p in payment_rows if p.stock_id)
+    total_advances = sum(float(p.amount_rwf or p.amount or 0.0) for p in payment_rows if not p.stock_id)
+    total_paid = float(total_paid_settlements + total_advances)
+    balance = float((total_owed or 0.0) - (total_paid or 0.0))
 
     return render_template(
         "cassiterite/supplier_ledger.html",
@@ -905,13 +2628,14 @@ def boss_cassiterite_supplier_ledger(supplier: str):
         ledger_entries=ledger_entries,
         total_owed=total_owed,
         total_paid=total_paid,
+        total_advances=total_advances,
         balance=balance,
         user_role=getattr(current_user, 'role', None),
     )
 
 
 @core_bp.route("/boss/cassiterite/ledgers")
-@role_required("boss", "admin")
+@role_required("boss", "accountant", "admin")
 def boss_cassiterite_ledgers():
     """Index page for boss/admin to choose cassiterite ledgers."""
     from cassiterite.models import CassiteriteStock, CassiteriteOutput
@@ -1187,6 +2911,9 @@ def admin_delete_user(user_id: int):
         flash("You cannot delete your own account.", "warning")
         return redirect(request.referrer or url_for("core.admin_users"))
 
+    # Remove owned notifications first so the required notification.user_id
+    # column never has to be nulled out during the delete flush.
+    db.session.query(Notification).filter(Notification.user_id == user.id).delete(synchronize_session=False)
     db.session.delete(user)
     db.session.commit()
     flash("User deleted successfully.", "success")

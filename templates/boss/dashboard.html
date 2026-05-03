@@ -12,17 +12,32 @@
     <div class="max-w-7xl mx-auto bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-slate-200">
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
             <div>
-                {%if show_payment_reviews%}
-                <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900 tracking-tight">🧑‍💼 Urubuga rw’Umuyobozi</h1>
+                {% if show_payment_reviews %}
+                <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900 tracking-tight inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-gray-900" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M20 21a8 8 0 0 0-16 0" />
+                        <circle cx="12" cy="7" r="4" />
+                        <path d="M17 11l4 2" />
+                        <path d="M17 13l4-2" />
+                    </svg>
+                    <span>Urubuga rw’Umuyobozi</span>
+                </h1>
                 <p class="mt-1 text-sm text-gray-500">Incamake y’imikorere, amafaranga n’ibyemezo.</p>
-                    {%else%}
+                {% else %}
                 <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900 tracking-tight">Urubuga rusange rw’igenzura</h1>
                 <p class="mt-1 text-sm text-gray-900">Incamake y’imikorere, amafaranga n’ibyemezo.</p>
-                {%endif%}
+                {% endif %}
             </div>
             <div class="flex flex-wrap items-center gap-2 justify-end">
 
-                <a href="{{ url_for('entry_point') }}" class="inline-flex items-center px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg border border-slate-200">🏠 Menyu Nyamukuru</a>
+                <a href="{{ url_for('entry_point') }}" class="inline-flex items-center px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg border border-slate-200">
+                    <span class="inline-flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M3 9.5 12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z" />
+                        </svg>
+                        <span>Menyu Nyamukuru</span>
+                    </span>
+                </a>
                 <a href="{{ url_for('logout') }}" class="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm">Sohoka</a>
             </div>
         </div>
@@ -55,6 +70,11 @@
                     <div id="kpi-total-gross-profit" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_gross_profit or 0) }}</div>
                     <div class="text-sm opacity-80">Coltan + Gasegereti</div>
                 </div>
+                <div class="bg-gradient-to-br from-violet-600 to-violet-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-violet-400/60">
+                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Inyungu Nyakuri</h3>
+                    <div id="kpi-total-net-profit" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_net_profit or 0) }}</div>
+                    <div class="text-sm opacity-80">Inyungu rusange - amafaranga y’imbere</div>
+                </div>
                 <div class="bg-gradient-to-br from-slate-700 to-slate-900 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Agaciro ka stock isigaye (RWF)</h3>
                         <div id="kpi-total-inventory-value" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_inventory_value or 0) }}</div>
@@ -76,8 +96,8 @@
                     <div class="text-sm opacity-80">Ibyo abakiriya batubereyemo</div>
                 </div>
                 <div class="bg-gradient-to-br from-yellow-600 to-yellow-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-yellow-400/60">
-                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga yishyuwe abakozi imbere</h3>
-                    <div id="kpi-total-internal-worker-payments" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_internal_worker_payments or 0) }}</div>
+                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga y'imbere</h3>
+                    <div id="kpi-total-internal-worker-payments" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_internal_expenses or 0) }}</div>
                     <div class="text-sm opacity-80">Coltan + Gasegereti</div>
                 </div>
                 <div class="bg-gradient-to-br from-slate-600 to-slate-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
@@ -85,10 +105,99 @@
                     <div id="kpi-total-cash-at-hand" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_cash_at_hand or 0) }}</div>
                     <div class="text-sm opacity-80">Igiteranyo cy’ibyagurishijwe byose(sales) - imyenda y’abakiriya - amafaranga yishyuwe abakozi (imbere)</div>
                 </div>
+                <div class="bg-gradient-to-br from-indigo-600 to-indigo-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-indigo-400/60">
+                    <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Igiciro Gisigaye Gikabiri</h3>
+                    <div id="kpi-total-remaining-kg" class="text-3xl font-bold mb-1">0.00</div>
+                    <div class="text-sm opacity-80">Stock isigaye (Coltan + Gasegereti)</div>
+                </div>
             </div>
         </section>
 
-        
+        <!-- Accountant-specific Action Cards -->
+        {% if current_user.role in ['admin'] %}
+        <section class="mb-10">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4 inline-flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-800" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 1v2" />
+                    <path d="M12 21v2" />
+                    <path d="M4.2 4.2l1.4 1.4" />
+                    <path d="M18.4 18.4l1.4 1.4" />
+                    <path d="M1 12h2" />
+                    <path d="M21 12h2" />
+                    <path d="M4.2 19.8l1.4-1.4" />
+                    <path d="M18.4 5.6l1.4-1.4" />
+                    <circle cx="12" cy="12" r="3" />
+                </svg>
+                <span>Quick Actions</span>
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+                <a href="{{ url_for('core.customer_receipts') }}" class="group rounded-2xl bg-gradient-to-br from-indigo-50 to-indigo-100 p-6 shadow-md border border-indigo-200 hover:shadow-lg hover:border-indigo-300 transition-all">
+                    <div class="flex flex-col gap-3">
+                        <div class="text-4xl">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-indigo-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M9 5h6" />
+                                <path d="M9 9h6" />
+                                <path d="M9 13h6" />
+                                <path d="M9 17h6" />
+                                <rect x="7" y="3" width="10" height="18" rx="2" />
+                                <path d="M9 3v2" />
+                            </svg>
+                        </div>
+                        <h3 class="text-lg font-bold text-indigo-900">Record Receipts</h3>
+                        <p class="text-sm text-indigo-700">Open the negotiator receipt form for advances, installments, and final settlements.</p>
+                        <div class="mt-2 text-xs font-semibold text-indigo-600 group-hover:text-indigo-700">Open Receipt Desk →</div>
+                    </div>
+                </a>
+
+                <a href="{{ url_for('core.boss_copper_ledgers') }}" class="group rounded-2xl bg-gradient-to-br from-sky-50 to-sky-100 p-6 shadow-md border border-sky-200 hover:shadow-lg hover:border-sky-300 transition-all">
+                    <div class="flex flex-col gap-3">
+                        <div class="text-4xl">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-sky-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M6 2h12v20l-6-3-6 3z" />
+                                <path d="M9 6h6" />
+                                <path d="M9 10h6" />
+                                <path d="M9 14h6" />
+                            </svg>
+                        </div>
+                        <h3 class="text-lg font-bold text-sky-900">Coltan Customer Ledgers</h3>
+                        <p class="text-sm text-sky-700">Browse all Coltan customers and jump into each ledger just like supplier ledgers.</p>
+                        <div class="mt-2 text-xs font-semibold text-sky-600 group-hover:text-sky-700">View Coltan Ledgers →</div>
+                    </div>
+                </a>
+
+                <a href="{{ url_for('core.boss_cassiterite_ledgers') }}" class="group rounded-2xl bg-gradient-to-br from-emerald-50 to-emerald-100 p-6 shadow-md border border-emerald-200 hover:shadow-lg hover:border-emerald-300 transition-all">
+                    <div class="flex flex-col gap-3">
+                        <div class="text-4xl">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M6 2h12v20l-6-3-6 3z" />
+                                <path d="M9 6h6" />
+                                <path d="M9 10h6" />
+                                <path d="M9 14h6" />
+                            </svg>
+                        </div>
+                        <h3 class="text-lg font-bold text-emerald-900">Cassiterite Customer Ledgers</h3>
+                        <p class="text-sm text-emerald-700">Browse all cassiterite customers with the same customer-ledger audit trail.</p>
+                        <div class="mt-2 text-xs font-semibold text-emerald-600 group-hover:text-emerald-700">View Cassiterite Ledgers →</div>
+                    </div>
+                </a>
+                
+                <div class="rounded-2xl bg-gradient-to-br from-slate-50 to-slate-100 p-6 shadow-md border border-slate-200">
+                    <div class="flex flex-col gap-3">
+                        <div class="text-4xl">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-slate-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z" />
+                                <path d="M3.3 7l8.7 5 8.7-5" />
+                                <path d="M12 22V12" />
+                            </svg>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900">Remaining Stock</h3>
+                        <p class="text-sm text-slate-700">Total stock remaining calculated from input minus output across all minerals.</p>
+                        <div id="remaining-kg" class="mt-2 text-2xl font-bold text-slate-900">--</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
 
         <!-- Per mineral KPIs -->
         <section class="mb-10 grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -131,7 +240,7 @@
                         <p id="copper-cash-position" class="text-base font-bold tabular-nums text-slate-900">{{ '{:,.2f}'.format(copper_cash_position or 0) }}</p>
                     </div>
                     <div class="pt-4">
-                        {%if current_user.role == 'boss' %}
+                        {% if current_user.role == 'boss' %}
                             <a href="{{ url_for('core.boss_copper_ledgers') }}" class="inline-flex items-center justify-center px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 shadow-sm">
                                 Kanda hano urebe igitabo kibaruramari
                             </a>
@@ -217,12 +326,17 @@
                         <tbody class="divide-y divide-gray-200">
                             {% for r in pending_reviews %}
                                 <tr class="hover:bg-gray-50">
-                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else 'N/A' }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.created_at|rwanda_datetime }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700 uppercase">{{ r.mineral_type|translate_mineral }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.type|translate_review_type }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.customer }}</td>
-                                            <td class="px-4 py-3 text-sm text-gray-700">{{ r.boss_comment or '-' }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-700 font-semibold">{{ '{:,.2f}'.format(r.amount or 0) }} {{ r.currency }}</td>
+                                            <td class="px-4 py-3 text-sm text-gray-700">{{ r.display_comment or r.boss_comment or '-' }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-700 font-semibold">
+                                        <div>{{ r.display_amount or ('{:,.2f}'.format(r.amount or 0) ~ ' ' ~ (r.currency or 'RWF')) }}</div>
+                                        {% if r.display_amount_note %}
+                                        <div class="text-[11px] text-slate-500">{{ r.display_amount_note }}</div>
+                                        {% endif %}
+                                    </td>
                                     <td class="px-4 py-3 text-sm text-amber-700 font-semibold">{{ r.status }}</td>
                                     <td class="px-4 py-3 text-sm">
                                         <div class="flex gap-2">
@@ -233,6 +347,7 @@
                                                 <input type="text" name="boss_comment" placeholder="Impamvu" class="border border-gray-300 rounded px-2 py-1 text-xs" />
                                                 <button type="submit" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs font-semibold">Hakanira</button>
                                             </form>
+                                            <a href="{{ url_for('core.print_payment_review', review_id=r.id) }}" target="_blank" class="bg-slate-600 hover:bg-slate-700 text-white px-3 py-1 rounded text-xs font-semibold">Print</a>
                                         </div>
                                     </td>
                                 </tr>
@@ -266,12 +381,17 @@
                         <tbody class="divide-y divide-gray-200">
                             {% for r in recent_reviews %}
                                 <tr class="hover:bg-gray-50">
-                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else 'N/A' }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.created_at|rwanda_datetime }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700 uppercase">{{ r.mineral_type|translate_mineral }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.type|translate_review_type }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.customer }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.boss_comment or '-' }}</td>
-                                    <td class="px-4 py-3 text-sm text-gray-700 font-semibold">{{ '{:,.2f}'.format(r.amount or 0) }} {{ r.currency }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.display_comment or r.boss_comment or '-' }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-700 font-semibold">
+                                        <div>{{ r.display_amount or ('{:,.2f}'.format(r.amount or 0) ~ ' ' ~ (r.currency or 'RWF')) }}</div>
+                                        {% if r.display_amount_note %}
+                                        <div class="text-[11px] text-slate-500">{{ r.display_amount_note }}</div>
+                                        {% endif %}
+                                    </td>
                                     <td class="px-4 py-3 text-sm text-amber-700 font-semibold">{{ r.status }}</td>
                                 </tr>
                             {% endfor %}

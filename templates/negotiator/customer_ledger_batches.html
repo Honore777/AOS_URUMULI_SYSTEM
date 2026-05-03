@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Batches</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-800">Customer Batches</h1>
+                <p class="text-sm text-slate-600 mt-1"><span class="font-semibold">Customer:</span> {{ customer }} | <span class="font-semibold uppercase">{{ mineral_type }}</span></p>
+            </div>
+            <a href="{{ url_for('core.copper_customer_ledger_index') if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger_index') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back To Customer List</a>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <aside class="lg:col-span-3 rounded-xl bg-white p-5 shadow-lg border border-slate-200 h-fit">
+                <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
+                <nav class="space-y-2">
+                    <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
+                    <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Customer Ledgers</a>
+                </nav>
+            </aside>
+
+            <section class="lg:col-span-9 rounded-xl bg-white p-6 shadow-lg border border-slate-200">
+                <p class="text-sm text-slate-600 mb-4">Click a batch to open full debit/credit details.</p>
+                {% if batches %}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {% for b in batches %}
+                    <a href="{{ url_for('core.copper_customer_ledger_batch', customer=customer, batch_id=b.batch_id) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger_batch', customer=customer, batch_id=b.batch_id) }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
+                        <p class="font-semibold text-slate-900">Batch {{ b.batch_id }}</p>
+                        <p class="text-xs text-slate-600 mt-1">Qty {{ '%.2f'|format(b.qty or 0) }} kg | Moy {{ '%.2f'|format(b.moyenne or 0) }} | NB {{ '%.2f'|format(b.moyenne_nb or 0) }}</p>
+                        <p class="text-xs mt-1 text-slate-600">Agreed {{ '{:,.0f}'.format(b.expected or 0) }} | Paid {{ '{:,.0f}'.format(b.paid or 0) }} | Remaining <span class="font-bold text-slate-900">{{ '{:,.0f}'.format(b.remaining or 0) }}</span></p>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500">No batch movements found for this customer.</p>
+                {% endif %}
+            </section>
+        </div>
+    </div>
+</body>
+</html>

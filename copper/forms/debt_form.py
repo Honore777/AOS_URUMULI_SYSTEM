@@ -4,7 +4,7 @@ For tracking customer debts
 """
 from flask_wtf import FlaskForm
 from wtforms import SelectField, FloatField, SubmitField
-from wtforms.validators import DataRequired, NumberRange
+from wtforms.validators import DataRequired, NumberRange, Optional
 from config import db
 from sqlalchemy import func
 
@@ -13,6 +13,8 @@ class DebtTrackingForm(FlaskForm):
     """Form for tracking copper customer debts"""
     customer = SelectField('Select Customer', validators=[DataRequired()])
     payment_amount = FloatField('New payment', validators=[DataRequired(), NumberRange(min=0.01, message="Amount must be greater than zero")])
+    currency = SelectField('Currency', choices=[('RWF', 'RWF'), ('USD', 'USD')], validators=[DataRequired()], default='RWF')
+    exchange_rate = FloatField('Exchange Rate (RWF per currency unit)', validators=[Optional(), NumberRange(min=0.0001)], default=1.0)
     submit = SubmitField('Save Payment')
 
     def __init__(self, *args, **kwargs):

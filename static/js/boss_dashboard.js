@@ -22,15 +22,38 @@ function formatAmount(v) {
     return (v == null) ? '0.00' : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function formatNumberWithDecimals(v, decimals = 2) {
+    if (v == null || isNaN(v)) return Number(0).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    return Number(v).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+async function fetchRemainingStock() {
+    try {
+        const res = await fetch('/api/remaining_stock', {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!res.ok) throw new Error('Failed to fetch remaining stock');
+        const data = await res.json();
+        const el = document.getElementById('kpi-total-remaining-kg');
+        if (el) {
+            el.textContent = formatNumberWithDecimals(data.total_remaining_kg || 0, 2);
+        }
+    } catch (error) {
+        console.error('Error fetching remaining stock:', error);
+    }
+}
+
 function updateKPIs(kpis) {
     if (!kpis) return;
     const mapping = {
         'total_gross_profit': 'kpi-total-gross-profit',
+        'total_net_profit': 'kpi-total-net-profit',
         'total_inventory_value': 'kpi-total-inventory-value',
         'total_cost_of_stock_sold': 'kpi-total-cogs',
         'total_supplier_debt': 'kpi-total-supplier-debt',
         'total_customer_debt': 'kpi-total-customer-debt',
         'total_internal_worker_payments': 'kpi-total-internal-worker-payments',
+        'total_internal_expenses': 'kpi-total-internal-worker-payments',
         'total_cash_at_hand': 'kpi-total-cash-at-hand'
     };
     Object.entries(mapping).forEach(([key, elid]) => {
@@ -114,10 +137,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const applyBtn = document.getElementById('filter-apply');
     const initialFilters = readFilters();
     loadAndRender(initialFilters);
+        fetchRemainingStock();
     applyBtn?.addEventListener('click', (e) => {
         e.preventDefault();
         const params = readFilters();
         loadAndRender(params);
+        fetchRemainingStock();
     });
     // Reset button clears filters and reloads default data
     const resetBtn = document.getElementById('filter-reset');

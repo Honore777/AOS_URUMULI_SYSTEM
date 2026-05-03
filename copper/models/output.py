@@ -23,7 +23,12 @@ class CopperOutput(db.Model):
     batch_id=db.Column(db.String(100),nullable=True, index=True)
     customer = db.Column(db.String(100))
     output_amount = db.Column(db.Float)
+    output_amount_rwf = db.Column(db.Float, default=0)
     amount_paid = db.Column(db.Float, default=0)
+    amount_paid_rwf = db.Column(db.Float, default=0)
+    currency = db.Column(db.String(10), nullable=False, default='RWF', index=True)
+    exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+    payment_stage = db.Column(db.String(30), nullable=False, default='FULL_SETTLEMENT', index=True)
     debt_remaining = db.Column(db.Float, default=0)
     note = db.Column(db.Text)
     voucher_no=db.Column(db.String(100), db.ForeignKey('copper_stock.voucher_no'),nullable=True)
@@ -38,4 +43,6 @@ class CopperOutput(db.Model):
 
     def update_debt(self):
         """Calculate remaining debt after payment"""
-        self.debt_remaining = (self.output_amount or 0) - (self.amount_paid or 0)
+        sale_amount = self.output_amount_rwf if self.output_amount_rwf is not None else self.output_amount
+        paid_amount = self.amount_paid_rwf if self.amount_paid_rwf is not None else self.amount_paid
+        self.debt_remaining = (sale_amount or 0) - (paid_amount or 0)

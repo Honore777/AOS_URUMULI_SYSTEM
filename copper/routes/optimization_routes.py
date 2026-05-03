@@ -321,6 +321,10 @@ def optimize_stocks():
     # previously computed recommended quantities.
     if quantities:
         session['optimization_quantities'] = quantities
+        # IMPORTANT: Store achieved moyenne/nb for O(1) lookup in batch selector
+        # This avoids recalculation when negotiator views the batch
+        session['optimization_achieved_moyenne'] = float(achieved_moyenne) if achieved_moyenne else 0.0
+        session['optimization_achieved_moyenne_nb'] = float(achieved_moyenne_nb) if achieved_moyenne_nb else 0.0
 
     # Only set optimization_mode when we have an explicit mode to avoid
     # accidentally clearing a previously active edit session on plain GETs.
@@ -457,68 +461,45 @@ def optimize_stocks_totals():
 
 @copper_bp.route('/optimize_stocks/confirm_output', methods=['POST'])
 def confirm_bulk_output():
-    """Record bulk output from optimization results"""
-    from copper.forms import CopperOutputForm
-    
-    # Get form data
+    """Create a bulk output plan and send it to store for execution.
+
+    Accountant should only provide the `date` (and optional note). Monetary
+    details and customer assignment are recorded later by the negotiator when
+    receipts are recorded.
+    """
     date = datetime.strptime(request.form.get("date"), "%Y-%m-%d").date() if request.form.get("date") else datetime.utcnow().date()
-    customer = request.form.get("customer")
-    output_amount = float(request.form.get('output_amount') or 0)
-    amount_paid = float(request.form.get('amount_paid') or 0)
+    # Do not accept customer/output_amount/amount_paid here — negotiator will
+    # set customer and handle receipts later.
     note = request.form.get("note") or "Bulk output from optimization"
-    
-    # Get quantities from session (stored when results page was rendered)
+
     quantities = session.get('optimization_quantities', {})
-    
-    # DEBUG: Log what we're receiving
-    print(f"\n{'='*80}")
-    tgt = session.get('optimization_target_moyenne')
-    tgt_nb = session.get('optimization_target_moyenne_nb')
-    tgt_total = session.get('optimization_target_total_quantity')
-            # If any target is present, attempt to recompute selection server-side
-    if tgt is not None or tgt_nb is not None or tgt_total is not None:
-        print(f"   repr(): {repr(quantities)}")
-        print(f"   Content: {quantities}")
-        print(f"{'='*80}\n")
-        target_moyenne=tgt,
-        target_moyenne_nb=tgt_nb,
-        target_total_quantity=tgt_total,
+    if not quantities:
+        flash("No selected quantities found. Please optimize again.", "danger")
         return redirect(url_for('copper.optimize_stocks'))
-    
-    # DEBUG: Show what we're processing
-    print(f"\n{'='*80}")
-    print(f"🔍 BULK OUTPUT PROCESSING:")
-    print(f"   Total stocks to process: {len(quantities)}")
-    print(f"   Quantities: {quantities}")
-    print(f"{'='*80}\n")
-    
-    # Calculate TOTAL quantity for proportional distribution
+
+    # No currency/exchange handling here
+
     total_qty = sum(float(qty) for qty in quantities.values())
-    print(f"📊 Total Quantity: {total_qty} kg\n")
-    
-    # Generate readable batch_id: customer_name_date_hexcode
+    if total_qty <= 0:
+        flash("Total selected quantity must be greater than zero.", "danger")
+        return redirect(url_for('copper.optimize_stocks'))
+
     hex_code = uuid.uuid4().hex[:6]
     date_str = date.strftime('%Y%m%d')
-    customer_safe = customer.lower().replace(' ', '_')[:20]  # Make safe for ID
-    batch_id = f"{customer_safe}_{date_str}_{hex_code}"
-    
-    print(f"📦 Batch ID: {batch_id}\n")
-    
-    # ------------------------------------------------------------------
-    # 1) Build and store a BulkOutputPlan so the store keeper (and boss)
-    #    can see the exact optimal table that was used here.
-    # ------------------------------------------------------------------
-    # Batch-fetch all involved stocks to avoid N+1 queries
-    plan_items = []
+    # Use date + random code for batch id (no customer in batch id)
+    batch_id = f"batch_{date_str}_{hex_code}"
+
     try:
         requested_ids = [int(sid) for sid in quantities.keys()]
     except Exception:
         requested_ids = []
+
     stocks_map = {}
     if requested_ids:
         stocks = CopperStock.query.filter(CopperStock.id.in_(requested_ids)).all()
         stocks_map = {s.id: s for s in stocks}
 
+    plan_items = []
     for stock_id_str, qty in quantities.items():
         try:
             stock_id = int(stock_id_str)
@@ -530,28 +511,77 @@ def confirm_bulk_output():
         if not stock or qty_float <= 0:
             continue
 
+        proportion = qty_float / total_qty if total_qty > 0 else 0
+        # Monetary quotes intentionally left zero at this stage; negotiator
+        # will fill customer & amounts when recording receipts.
         plan_items.append({
             "stock_id": stock.id,
             "voucher_no": stock.voucher_no,
             "supplier": stock.supplier,
             "planned_output_kg": float(qty_float),
+            "quoted_amount_input": 0.0,
+            "quoted_amount_rwf": 0.0,
+            "currency": "RWF",
+            "exchange_rate": 1.0,
         })
 
+    if not plan_items:
+        flash("No valid plan rows were generated. Please re-run optimization.", "danger")
+        return redirect(url_for('copper.optimize_stocks'))
+
     from flask_login import current_user
+    from datetime import datetime
+
+    # Compute achieved quality deterministically from the quantities being submitted.
+    # This avoids relying on session state and prevents zeros in negotiator views.
+    total_unit = 0.0
+    total_tunity = 0.0
+    for item in plan_items:
+        try:
+            sid = int(item.get('stock_id'))
+            qty_f = float(item.get('planned_output_kg') or 0.0)
+        except Exception:
+            continue
+        if qty_f <= 0:
+            continue
+        stock = stocks_map.get(sid)
+        if not stock:
+            continue
+        # `unit_percent` and `t_unity` store per-row totals (already multiplied by remaining qty).
+        # Convert them to per-kg by dividing by the stock's local_balance.
+        lb = float(getattr(stock, 'local_balance', 0) or 0)
+        if lb <= 0:
+            continue
+        unit_per_kg = float(getattr(stock, 'unit_percent', 0) or 0) / lb
+        tunity_per_kg = float(getattr(stock, 't_unity', 0) or 0) / lb
+        total_unit += unit_per_kg * qty_f
+        total_tunity += tunity_per_kg * qty_f
+
+    achieved_moyenne_val = float(total_unit / total_qty) if total_qty else 0.0
+    achieved_moyenne_nb_val = float(total_tunity / total_qty) if total_qty else 0.0
+    
+    # Store metadata at top level of plan_json for quick retrieval
+    plan_metadata = {
+        "achieved_moyenne": float(achieved_moyenne_val) if achieved_moyenne_val else 0.0,
+        "achieved_moyenne_nb": float(achieved_moyenne_nb_val) if achieved_moyenne_nb_val else 0.0,
+        "created_at_iso": datetime.utcnow().isoformat(),
+    }
+    
+    # Merge metadata with plan items for backward compatibility
+    plan_json_full = [plan_metadata] + plan_items if plan_items else [plan_metadata]
 
     plan = BulkOutputPlan(
         mineral_type="coltan",
         created_by_id=getattr(current_user, "id", None),
         status=BulkPlanStatus.SENT_TO_STORE.value,
-        customer=customer,
+        customer=None,
         batch_id=batch_id,
         note=note,
-        plan_json=plan_items,
+        plan_json=plan_json_full,
     )
     db.session.add(plan)
-    db.session.flush()  # so plan.id is available for notifications
+    db.session.flush()
 
-    # Notify all active store keepers that a new copper bulk plan exists.
     store_keepers = User.query.filter_by(role="store_keeper", is_active=True).all()
     emails = []
     for sk in store_keepers:
@@ -559,8 +589,7 @@ def confirm_bulk_output():
             user_id=sk.id,
             type_="BULK_PLAN_CREATED",
             message=(
-                f"New coltan bulk output plan {plan.id} for customer {customer} "
-                f"(batch {batch_id})"
+                f"New coltan bulk output plan {plan.id} (batch {batch_id})"
             ),
             related_type="bulk_plan",
             related_id=plan.id,
@@ -568,17 +597,15 @@ def confirm_bulk_output():
         if getattr(sk, 'email', None):
             emails.append(sk.email)
 
-    # Persist plan + notifications so storekeepers can see them immediately
     db.session.commit()
 
-    # Send one email to all storekeepers with the bulk plan details
     try:
         from flask_login import current_user
         from utils import send_brevo_email_async
         subject = f"Bulk Output Plan {plan.id} - Action Required"
         html_content = (
             f"<p>Dear Storekeeper,</p>"
-            f"<p>A new bulk output plan (ID: {plan.id}, batch: {batch_id}) was created by {getattr(current_user, 'name', 'Unknown')} for customer {customer}.</p>"
+            f"<p>A new bulk output plan (ID: {plan.id}, batch: {batch_id}) was created by {getattr(current_user, 'name', 'Unknown')}.</p>"
             f"<p>Note: {note}</p>"
             f"<p>Log into the system to review and execute the plan.</p>"
             "<p>Regards,<br>Urumuli Smart System</p>"
@@ -589,88 +616,9 @@ def confirm_bulk_output():
         import logging
         logging.exception("Failed to enqueue copper bulk plan email via Brevo")
 
-    # ------------------------------------------------------------------
-    # 2) Execute the actual outputs as before (business logic unchanged)
-    # ------------------------------------------------------------------
-    output_count = 0
-    # Reuse batch-fetched stocks_map to process outputs (single try per stock)
-    for stock_id_str, qty in quantities.items():
-        try:
-            stock_id = int(stock_id_str)
-            qty = float(qty)
-
-            stock = stocks_map.get(stock_id) or CopperStock.query.get(stock_id)
-            if not stock:
-                continue
-
-            # Validation: cannot output more than available
-            if qty > stock.local_balance:
-                flash(
-                    f"⚠️ Stock {stock.voucher_no}: Cannot output {qty}kg, only {stock.local_balance}kg available",
-                    "warning",
-                )
-                continue
-
-            # Calculate PROPORTIONAL amounts for this stock
-            proportion = qty / total_qty if total_qty > 0 else 0
-            proportional_amount = output_amount * proportion
-            proportional_paid = amount_paid * proportion
-
-            # Create output record with proportional amounts
-            out = CopperOutput(
-                batch_id=batch_id,  # Group all stocks in this order together
-                stock_id=stock.id,
-                date=date,
-                output_kg=qty,
-                output_amount=proportional_amount,  # Proportional
-                amount_paid=proportional_paid,  # Proportional
-                customer=customer,
-                note=note,
-            )
-
-            out.update_debt()
-            db.session.add(out)
-            db.session.flush()
-
-            # Update stock's local balance
-            stock.local_balance = stock.remaining_stock()
-
-            # Recalculate t_unity for this stock
-            stock.t_unity = (stock.nb or 0) * (stock.local_balance or 0)
-
-            # IMPORTANT: Recalculate unit_percent based on new local_balance
-            from utils import calculate_unit_percentage
-
-            stock.unit_percent = calculate_unit_percentage(
-                stock.local_balance,
-                stock.percentage,
-            )
-
-            print("   After update:")
-            print(f"   local_balance: {stock.local_balance}")
-            print(f"   t_unity: {stock.t_unity}")
-            print(f"   unit_percent: {stock.unit_percent}\n")
-
-            output_count += 1
-        except (ValueError, TypeError) as e:
-            print(f"❌ Error processing stock {stock_id_str}: {e}\n")
-            flash(f"❌ Error processing stock: {e}", "danger")
-            continue
-
-    # Mark the bulk plan as executed and record who executed it.
-    plan.status = BulkPlanStatus.EXECUTED.value
-    plan.executed_at = datetime.utcnow()
-    plan.executed_by_id = getattr(current_user, "id", None)
-    
-    # Update global moyennes once after all changes
-    CopperStock.update_global_moyennes()
-    
-    db.session.commit()
-    
-    # IMPORTANT: Clear session data after successful output to prevent duplicates
-    # This ensures the same quantities won't be reused if user comes back to page
     session.pop('optimization_quantities', None)
     session.pop('optimization_mode', None)
-    
-    flash(f"✅ Bulk output recorded successfully! {output_count} stocks updated.", "success")
+
+    # Any monetary/receipt details are recorded later by the negotiator
+    flash("Bulk plan submitted. Store keeper must confirm stock before output is posted.", "success")
     return redirect(url_for('copper.optimize_stocks'))

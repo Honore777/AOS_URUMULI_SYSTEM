@@ -9,7 +9,7 @@
 </head>
 <body class="bg-gray-50 min-h-screen p-6">
 
-    <div class="max-w-6xl mx-auto">
+    <div class="max-w-screen-2xl mx-auto">
         
         <!-- Header -->
         <div class="flex justify-between items-center mb-6">
@@ -19,6 +19,18 @@
                 Back to Dashboard
             </a>
         </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="mb-4">
+            {% for category, msg in messages %}
+            <div class="px-4 py-3 rounded {{ 'bg-emerald-50 border-emerald-200 text-emerald-800' if category == 'success' else ('bg-red-50 border-red-200 text-red-800' if category == 'danger' or category == 'error' else ('bg-amber-50 border-amber-200 text-amber-800' if category == 'warning' else 'bg-blue-50 border-blue-200 text-blue-800')) }} border" role="alert">
+                {{ msg }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
         <!-- SECTION 1: INITIAL - Enter targets and show recommended stocks -->
@@ -33,7 +45,7 @@
                 <form method="POST" action="{{ url_for('copper.optimize_stocks') }}" class="space-y-4">
                     {{ form.hidden_tag() }}
 
-                    <div class="grid grid-cols-2 gap-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-gray-700 font-medium mb-2">{{ form.target_moyenne.label }}</label>
                             {{ form.target_moyenne(class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500") }}
@@ -66,7 +78,7 @@
             <div class="bg-white p-6 rounded-lg shadow-md mb-8">
                 <h2 class="text-2xl font-bold mb-4 text-gray-800">📊 Recommended Stocks</h2>
                 
-                    <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-blue-50 rounded-lg">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-blue-50 rounded-lg">
                     <div>
                         <p class="text-gray-600 text-sm">Target Percentage:</p>
                         <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne.data }}</p>
@@ -77,7 +89,7 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
                     <div>
                         <p class="text-gray-600 text-sm">Achieved Percentage:</p>
                         <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne) }}</p>
@@ -159,7 +171,7 @@
                     <button type="button"
                             onclick="document.getElementById('bulk-output-form-initial').style.display='block'"
                             class="bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
-                        ✅ Confirm & Output
+                        ✅ Confirm & Send to Store
                     </button>
                     <button type="button"
                             onclick="printElement('initial-stocks-table')"
@@ -173,10 +185,10 @@
 
                 <!-- Bulk Output Recording Form for INITIAL selection -->
                 <div class="bg-green-50 p-6 rounded-lg border-2 border-green-500 mt-6 hidden" id="bulk-output-form-initial">
-                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Record Bulk Output (Current Selection)</h3>
+                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Send Plan to Store Keeper (Current Selection)</h3>
                     <p class="text-sm text-gray-700 mb-4">
-                        You are about to record a bulk output directly from this recommended selection
-                        (before editing). Quantities will follow the optimal proposal shown above.
+                        You are about to send this bulk plan to the store keeper.
+                        Stock is output only after store confirmation. Customer receipts are recorded later.
                     </p>
                     <form method="POST" action="{{ url_for('copper.confirm_bulk_output') }}" class="space-y-4">
                         {{ form.hidden_tag() }}
@@ -187,35 +199,6 @@
                                 <label class="block text-gray-700 font-medium mb-2">Date</label>
                                 <input type="date" 
                                        name="date"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Customer</label>
-                                <input type="text" 
-                                       name="customer" 
-                                       placeholder="Customer name"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Total Output Amount</label>
-                                <input type="number" 
-                                       name="output_amount" 
-                                       step="0.01"
-                                       placeholder="0.00"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Amount Paid</label>
-                                <input type="number" 
-                                       name="amount_paid" 
-                                       step="0.01"
-                                       placeholder="0.00"
                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
                                        required>
                             </div>
@@ -232,7 +215,7 @@
                         <div class="flex gap-3">
                             <button type="submit" 
                                     class="flex-1 bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
-                                💾 Record Bulk Output
+                                📨 Send Plan to Store
                             </button>
                             <button type="button" 
                                     onclick="document.getElementById('bulk-output-form-initial').style.display='none'"
@@ -253,7 +236,7 @@
             <div class="bg-white p-6 rounded-lg shadow-md mb-8">
                 <h2 class="text-2xl font-bold mb-4 text-gray-800">Step 2: Adjust Stock Quantities</h2>
                 
-                <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-amber-50 rounded-lg border-l-4 border-amber-500">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-amber-50 rounded-lg border-l-4 border-amber-500">
                     <div>
                         <p class="text-gray-600 text-sm">Target Percentage:</p>
                         <p class="text-2xl font-bold text-amber-600">{{ form.target_moyenne.data }}</p>
@@ -368,7 +351,7 @@
             <div class="bg-white p-6 rounded-lg shadow-md mb-8">
                 <h2 class="text-2xl font-bold mb-4 text-gray-800">✅ Step 3: Optimized Results</h2>
                 
-                <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
                     <div>
                         <p class="text-gray-600 text-sm">Target Moyenne:</p>
                         <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne.data }}</p>
@@ -379,7 +362,7 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg">
                     <div>
                         <p class="text-gray-600 text-sm">Target Moyenne NB:</p>
                         <p class="text-2xl font-bold text-indigo-600">{{ form.target_moyenne_nb.data }}</p>
@@ -432,46 +415,17 @@
 
                 <!-- Bulk Output Recording Form (Initially Hidden) -->
                 <div class="bg-green-50 p-6 rounded-lg border-2 border-green-500 mb-6" id="bulk-output-form" style="display:none;">
-                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Record Bulk Output</h3>
+                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Send Plan to Store Keeper</h3>
                     
                     <form method="POST" action="{{ url_for('copper.confirm_bulk_output') }}" class="space-y-4">
                         {{ form.hidden_tag() }}
                         <!-- Quantities are now stored in server-side session, no need to pass via form -->
 
-                        <div class="grid grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-gray-700 font-medium mb-2">Date</label>
                                 <input type="date" 
                                        name="date"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Customer</label>
-                                <input type="text" 
-                                       name="customer" 
-                                       placeholder="Customer name"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Total Output Amount</label>
-                                <input type="number" 
-                                       name="output_amount" 
-                                       step="0.01"
-                                       placeholder="0.00"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Amount Paid</label>
-                                <input type="number" 
-                                       name="amount_paid" 
-                                       step="0.01"
-                                       placeholder="0.00"
                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
                                        required>
                             </div>
@@ -488,7 +442,7 @@
                         <div class="flex gap-3">
                             <button type="submit" 
                                     class="flex-1 bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
-                                💾 Record Bulk Output
+                                📨 Send Plan to Store
                             </button>
                             <button type="button" 
                                     onclick="document.getElementById('bulk-output-form').style.display='none'"
@@ -504,7 +458,7 @@
                     <button type="button" 
                             onclick="document.getElementById('bulk-output-form').style.display='block'"
                             class="bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
-                        ✅ Confirm & Output
+                        ✅ Confirm & Send to Store
                     </button>
                     <button type="button" 
                             onclick="window.print()"

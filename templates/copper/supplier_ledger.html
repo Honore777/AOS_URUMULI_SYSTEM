@@ -38,16 +38,19 @@
     <!-- Summary Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="bg-white shadow rounded-lg p-4">
-            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Igiteranyo Cyose (Agomba Kwishyurwa){% else %}Total Owed{% endif %}</p>
+            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Umwenda (Stock Net yose){% else %}Total Owed (sum of stock net){% endif %}</p>
             <p class="text-2xl font-bold text-red-600">{{ '{:,.2f}'.format(total_owed or 0) }}</p>
         </div>
         <div class="bg-white shadow rounded-lg p-4">
-            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Igiteranyo Cyose Yishyuye{% else %}Total Paid{% endif %}</p>
+            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Amafaranga Yishyuwe (Advance + Settlements){% else %}Total Paid (advances + settlements){% endif %}</p>
             <p class="text-2xl font-bold text-green-600">{{ '{:,.2f}'.format(total_paid or 0) }}</p>
         </div>
         <div class="bg-white shadow rounded-lg p-4">
-            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Umubare Usigaye{% else %}Remaining Balance{% endif %}</p>
-            <p class="text-2xl font-bold text-gray-900">{{ '{:,.2f}'.format(balance or 0) }}</p>
+            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Asigaye / Cyangwa Umwenda wacu (niba ari negative){% else %}Balance (negative means supplier credit){% endif %}</p>
+            <p class="text-2xl font-bold {{ 'text-gray-900' if (balance or 0) >= 0 else 'text-indigo-700' }}">{{ '{:,.2f}'.format(balance or 0) }}</p>
+            {% if (balance or 0) < 0 %}
+                <p class="mt-1 text-sm text-indigo-700">{% if user_role == 'boss' %}Uyu mutanga afite amafaranga yacu (twamurenzeho).{% else %}Supplier owes you (advance credit).{% endif %}</p>
+            {% endif %}
         </div>
     </div>
 
@@ -76,7 +79,7 @@
                         {% if row.debit %}{{ '{:,.2f}'.format(row.debit) }}{% endif %}
                     </td>
                     <td class="px-4 py-2 text-right text-green-600">
-                        {% if row.credit %}{{ '{:,.2f}'.format(row.credit) }}{% endif %}
+                        {% if row.credit %}{{ '{:,.2f}'.format(row.credit) }}{% elif row.advance_amount %}{{ '{:,.2f}'.format(row.advance_amount) }}{% endif %}
                     </td>
                     <td class="px-4 py-2 text-right font-semibold">
                         {{ '{:,.2f}'.format(row.balance) }}

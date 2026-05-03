@@ -176,7 +176,7 @@
                     <button type="button"
                             onclick="document.getElementById('cass-bulk-output-form-initial').style.display='block'"
                             class="bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
-                        ✅ Confirm & Output
+                        ✅ Confirm & Send to Store
                     </button>
                     <button type="button"
                             onclick="printElement('cass-initial-stocks-table')"
@@ -187,10 +187,10 @@
 
                 <!-- Bulk Output Recording Form for INITIAL selection -->
                 <div class="bg-green-50 p-6 rounded-lg border-2 border-green-500 mt-6 hidden" id="cass-bulk-output-form-initial">
-                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Record Bulk Output (Current Selection)</h3>
+                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Send Plan to Store Keeper (Current Selection)</h3>
                     <p class="text-sm text-gray-700 mb-4">
-                        You are about to record a bulk output directly from this recommended selection
-                        (before editing). Quantities will follow the optimal proposal shown above.
+                        You are about to send this bulk plan to the store keeper.
+                        Stock is output only after store confirmation. Customer receipts are recorded later.
                     </p>
 
                     <form method="POST" action="{{ url_for('cassiterite.confirm_bulk_output') }}" class="space-y-4">
@@ -202,35 +202,6 @@
                                 <label class="block text-gray-700 font-medium mb-2">Date</label>
                                 <input type="date" 
                                        name="date"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Customer</label>
-                                <input type="text" 
-                                       name="customer" 
-                                       placeholder="Customer name"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Total Output Amount</label>
-                                <input type="number" 
-                                       name="output_amount" 
-                                       step="0.01"
-                                       placeholder="0.00"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Amount Paid</label>
-                                <input type="number" 
-                                       name="amount_paid" 
-                                       step="0.01"
-                                       placeholder="0.00"
                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
                                        required>
                             </div>
@@ -247,7 +218,7 @@
                         <div class="flex gap-3">
                             <button type="submit" 
                                     class="flex-1 bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
-                                💾 Record Bulk Output
+                                📨 Send Plan to Store
                             </button>
                             <button type="button" 
                                     onclick="document.getElementById('cass-bulk-output-form-initial').style.display='none'"
@@ -433,7 +404,7 @@
                 <!-- Confirmation Modal Trigger -->
                 <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
                     <h3 class="text-lg font-semibold text-blue-900 mb-3">Ready to create bulk export?</h3>
-                    <p class="text-blue-800 text-sm mb-3">Click the button below. You'll be asked for customer, output amount, and payment details for batch export.</p>
+                    <p class="text-blue-800 text-sm mb-3">Click the button below. Only the date is required here; customer and payment details are handled later by the negotiator.</p>
                     <button type="button" onclick="document.getElementById('cass-bulk-output-form-result').style.display='block'" class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 inline-block">
                         Confirm and Output
                     </button>
@@ -441,10 +412,10 @@
 
                 <!-- Bulk Output Recording Form for RESULT selection (hidden modal) -->
                 <div class="bg-green-50 p-6 rounded-lg border-2 border-green-500 mt-6" id="cass-bulk-output-form-result" style="display:none;">
-                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Record Bulk Output (Current Selection)</h3>
+                    <h3 class="text-xl font-bold text-green-700 mb-4">📤 Send Plan to Store Keeper (Current Selection)</h3>
                     <p class="text-sm text-gray-700 mb-4">
-                        You are about to record a bulk output directly from this optimized selection.
-                        Quantities will follow the optimal proposal shown above.
+                        You are about to send this optimized plan to the store keeper.
+                        Stock is output only after store confirmation. Customer receipts are recorded later.
                     </p>
 
                     <form method="POST" action="{{ url_for('cassiterite.confirm_bulk_output') }}" class="space-y-4">
@@ -456,35 +427,6 @@
                                 <label class="block text-gray-700 font-medium mb-2">Date</label>
                                 <input type="date" 
                                        name="date"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Customer</label>
-                                <input type="text" 
-                                       name="customer" 
-                                       placeholder="Customer name"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Total Output Amount</label>
-                                <input type="number" 
-                                       name="output_amount" 
-                                       step="0.01"
-                                       placeholder="0.00"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
-                                       required>
-                            </div>
-
-                            <div>
-                                <label class="block text-gray-700 font-medium mb-2">Amount Paid</label>
-                                <input type="number" 
-                                       name="amount_paid" 
-                                       step="0.01"
-                                       placeholder="0.00"
                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500"
                                        required>
                             </div>
@@ -501,7 +443,7 @@
                         <div class="flex gap-3">
                             <button type="submit" 
                                     class="flex-1 bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
-                                💾 Record Bulk Output
+                                📨 Send Plan to Store
                             </button>
                             <button type="button" 
                                     onclick="document.getElementById('cass-bulk-output-form-result').style.display='none'"
@@ -603,7 +545,7 @@
     <div class="mt-8 bg-blue-50 border-l-4 border-blue-600 p-6 rounded">
         <h3 class="font-semibold text-blue-900 mb-2">How to Optimize</h3>
         <ul class="text-blue-800 space-y-1 text-sm">
-            <li>✓ Enter customer name and total budget</li>
+            <li>✓ Enter only the date before sending to store</li>
             <li>✓ Select optimization strategy (quality, cost, or balanced)</li>
             <li>✓ System automatically calculates best mix</li>
             <li>✓ Review results and confirm to record outputs</li>

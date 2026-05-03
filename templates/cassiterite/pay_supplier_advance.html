@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cassiterite Pay Supplier Advance</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-gray-50 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto">
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800">Pay Supplier Advance</h1>
+                <p class="text-sm text-gray-600">Separate route for supplier advances. Normal supplier settlement stays on the other page.</p>
+            </div>
+            <a href="{{ url_for('cassiterite.dashboard') }}" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">Back to Dashboard</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="mb-6 space-y-2">
+            {% for category, message in messages %}
+            <div class="px-4 py-3 rounded-md shadow {{ 'bg-green-100 text-green-800' if category == 'success' else 'bg-red-100 text-red-800' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        {% if pending_reviews is defined and pending_reviews %}
+        <div class="mb-6 p-4 rounded bg-amber-50 text-amber-900 border border-amber-200">
+            <p class="font-semibold">Pending requests waiting boss approval: {{ pending_reviews|length }}</p>
+            <ul class="mt-2 text-sm list-disc list-inside">
+                {% for r in pending_reviews[:5] %}
+                <li>{{ r.customer }} - {{ '{:,.2f}'.format(r.amount or 0) }} {{ r.currency }} ({{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else 'N/A' }})</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">💰 Record New Supplier Advance</h2>
+            <form method="POST" action="{{ url_for('cassiterite.pay_supplier_advance') }}" class="space-y-4">
+                {{ form.hidden_tag() }}
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.existing_supplier.label }}</label>
+                        {{ form.existing_supplier(class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.new_supplier.label }}</label>
+                        {{ form.new_supplier(placeholder="Enter new supplier if not listed", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.amount.label }}</label>
+                        {{ form.amount(placeholder="Enter amount", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.method.label }}</label>
+                        {{ form.method(class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.currency.label }}</label>
+                        {{ form.currency(class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.exchange_rate.label }}</label>
+                        {{ form.exchange_rate(class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2", placeholder="Required for USD") }}
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.reference.label }}</label>
+                        {{ form.reference(placeholder="Receipt/Transaction #", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.note.label }}</label>
+                        {{ form.note(rows="3", placeholder="Optional notes", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2") }}
+                    </div>
+                </div>
+
+                <div>
+                    {{ form.submit(class="bg-amber-600 text-white px-6 py-2 rounded-md hover:bg-amber-700 transition font-medium") }}
+                </div>
+            </form>
+        </div>
+
+        {% if supplier_summaries %}
+        <div class="overflow-x-auto">
+            <h2 class="text-2xl font-semibold mb-4 text-gray-700">📊 Suppliers We Owe</h2>
+            <table class="w-full bg-white shadow-md rounded-lg overflow-hidden">
+                <thead class="bg-amber-600 text-white">
+                    <tr>
+                        <th class="px-4 py-2 text-left">Supplier</th>
+                        <th class="px-4 py-2 text-right">Owed</th>
+                        <th class="px-4 py-2 text-right">Paid</th>
+                        <th class="px-4 py-2 text-right">Remaining Balance</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for s in supplier_summaries %}
+                    <tr class="hover:bg-gray-100">
+                        <td class="px-4 py-2 font-semibold">{{ s.supplier }}</td>
+                        <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(s.owed or 0) }}</td>
+                        <td class="px-4 py-2 text-right text-green-600">{{ '{:,.2f}'.format(s.paid or 0) }}</td>
+                        <td class="px-4 py-2 text-right font-bold {{ 'text-red-600' if s.remaining > 0 else 'text-green-600' }}">{{ '{:,.2f}'.format(s.remaining or 0) }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="text-center px-4 py-4 text-gray-500">No suppliers found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <div class="overflow-x-auto mt-10">
+            <h2 class="text-2xl font-semibold mb-4 text-gray-700">Recent Advance Payments</h2>
+            <table class="w-full bg-white shadow-md rounded-lg overflow-hidden">
+                <thead class="bg-amber-600 text-white">
+                    <tr>
+                        <th class="px-4 py-2 text-left">Date</th>
+                        <th class="px-4 py-2 text-left">Supplier</th>
+                        <th class="px-4 py-2 text-right">Amount</th>
+                        <th class="px-4 py-2 text-right">Advance Remaining</th>
+                        <th class="px-4 py-2 text-left">Method</th>
+                        <th class="px-4 py-2 text-left">Reference</th>
+                        <th class="px-4 py-2 text-center">Printable Form</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for payment in recent_advances.items %}
+                    <tr class="hover:bg-gray-100">
+                        <td class="px-4 py-2">{{ payment.paid_at.strftime('%Y-%m-%d %H:%M') if payment.paid_at else '-' }}</td>
+                        <td class="px-4 py-2 font-semibold">{{ payment.supplier_name or 'Unknown' }}</td>
+                        <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(payment.amount or 0) }}</td>
+                        <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(payment.advance_remaining or 0) }}</td>
+                        <td class="px-4 py-2">{{ payment.method or '-' }}</td>
+                        <td class="px-4 py-2">{{ payment.reference or '-' }}</td>
+                        <td class="px-4 py-2 text-center">
+                            <a href="{{ url_for('cassiterite.supplier_receipt', payment_id=payment.id) }}" target="_blank" class="bg-slate-700 text-white px-3 py-1 rounded text-xs hover:bg-slate-800 transition">View / Print Form</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center px-4 py-4 text-gray-500">No advance payments yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if recent_advances.pages > 1 %}
+        <div class="mt-4 flex gap-2 items-center">
+            {% if recent_advances.has_prev %}
+            <a href="{{ url_for('cassiterite.pay_supplier_advance', page=recent_advances.prev_num) }}" class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300">Previous</a>
+            {% endif %}
+            <span class="text-sm text-gray-600">Page {{ recent_advances.page }} of {{ recent_advances.pages }}</span>
+            {% if recent_advances.has_next %}
+            <a href="{{ url_for('cassiterite.pay_supplier_advance', page=recent_advances.next_num) }}" class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300">Next</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

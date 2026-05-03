@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Update Debts</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-slate-800">Negotiator - Update Debts</h1>
+            <div class="flex items-center gap-2">
+                <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
+                <a href="{{ url_for('logout') }}" class="rounded bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700">Logout</a>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <aside class="lg:col-span-3 rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
+                <nav class="space-y-2">
+                    <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Update Debts</a>
+                    <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Ledgers</a>
+                </nav>
+            </aside>
+
+            <section class="lg:col-span-9 rounded-xl bg-white p-6 shadow-lg border border-slate-200 space-y-5">
+                {# Render persisted flash messages and notifications #}
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        <div class="space-y-2">
+                            {% for category, msg in messages %}
+                                <div class="rounded px-3 py-2 text-sm {% if category == 'danger' %}bg-red-50 text-red-800 border border-red-100{% elif category == 'warning' %}bg-amber-50 text-amber-800 border border-amber-100{% elif category == 'success' %}bg-emerald-50 text-emerald-800 border border-emerald-100{% else %}bg-slate-50 text-slate-800 border border-slate-100{% endif %}">
+                                    {{ msg }}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+
+
+                {% if not can_record %}
+                <div class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    Read-only mode: only negotiators record debt payments.
+                </div>
+                {% endif %}
+
+                {% if not customers %}
+                <div class="rounded border border-blue-300 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                    No outstanding customer-batch debts found yet. Save agreements first, then apply payments to a selected batch.
+                </div>
+                {% endif %}
+
+                <form method="post" action="{{ url_for('core.update_debts') }}" class="space-y-4">
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Customer (with remaining total)</label>
+                        <select id="customer-select" name="customer" required class="w-full rounded border border-slate-300 px-3 py-2">
+                            <option value="">-- Choose customer --</option>
+                            {% for c in customers %}
+                            <option value="{{ c.name }}">{{ c.name }} (remaining {{ '{:,.0f}'.format(c.remaining or 0) }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Batch for this customer</label>
+                        <select id="batch-select" required class="w-full rounded border border-slate-300 px-3 py-2">
+                            <option value="">-- Select batch --</option>
+                        </select>
+                        <input type="hidden" id="mineral-type" name="mineral_type" />
+                        <input type="hidden" id="batch-id" name="batch_id" />
+                    </div>
+
+                    <div id="batch-details" class="hidden rounded-lg bg-blue-50 border border-blue-200 p-4">
+                        <p class="text-sm font-semibold text-blue-900 mb-2">Batch details</p>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                            <div class="rounded bg-white p-2"><p class="text-slate-600">Mineral</p><p id="d-mineral" class="font-bold text-slate-900">-</p></div>
+                            <div class="rounded bg-white p-2"><p class="text-slate-600">Quantity</p><p id="d-qty" class="font-bold text-slate-900">-</p></div>
+                            <div class="rounded bg-white p-2"><p class="text-slate-600">Moyenne</p><p id="d-moy" class="font-bold text-slate-900">-</p></div>
+                            <div class="rounded bg-white p-2"><p class="text-slate-600">NB</p><p id="d-nb" class="font-bold text-slate-900">-</p></div>
+                        </div>
+                        <p class="mt-2 text-sm text-slate-700">Remaining for selected batch: <span id="d-rem" class="font-bold">0</span> RWF</p>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="mb-1 block text-sm font-semibold text-slate-700">Payment Amount</label>
+                            <input type="number" name="amount_input" step="0.01" min="0" required class="w-full rounded border border-slate-300 px-3 py-2" />
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-semibold text-slate-700">Currency</label>
+                            <select name="currency" class="w-full rounded border border-slate-300 px-3 py-2">
+                                <option value="RWF">RWF</option>
+                                <option value="USD">USD</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-semibold text-slate-700">Exchange Rate</label>
+                            <input type="number" name="exchange_rate" step="0.01" min="0" class="w-full rounded border border-slate-300 px-3 py-2" placeholder="Only if USD" />
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="mb-1 block text-sm font-semibold text-slate-700">Receipt Type</label>
+                            <select name="receipt_type" class="w-full rounded border border-slate-300 px-3 py-2">
+                                <option value="ADVANCE">Advance</option>
+                                <option value="INSTALLMENT">Installment</option>
+                                <option value="FINAL_SETTLEMENT">Final Settlement</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-semibold text-slate-700">Payment Channel</label>
+                            <select name="payment_channel" class="w-full rounded border border-slate-300 px-3 py-2">
+                                <option value="CASH">Cash</option>
+                                <option value="BANK">Bank Transfer</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Note</label>
+                        <textarea name="note" rows="2" class="w-full rounded border border-slate-300 px-3 py-2"></textarea>
+                    </div>
+
+                    <div>
+                        <button type="submit" class="rounded bg-indigo-600 text-white px-4 py-2 hover:bg-indigo-700">Apply Payment To Selected Batch</button>
+                    </div>
+                </form>
+            </section>
+        </div>
+    </div>
+
+    <script>
+    const batchOptions = {{ batch_options | tojson }};
+    const customerSelect = document.getElementById('customer-select');
+    const batchSelect = document.getElementById('batch-select');
+    const mineralInput = document.getElementById('mineral-type');
+    const batchIdInput = document.getElementById('batch-id');
+    const details = document.getElementById('batch-details');
+
+    function fillBatchSelect(customerName) {
+        batchSelect.innerHTML = '<option value="">-- Select batch --</option>';
+        details.classList.add('hidden');
+        mineralInput.value = '';
+        batchIdInput.value = '';
+        if (!customerName) {
+            return;
+        }
+        const rows = batchOptions.filter(r => r.customer === customerName);
+        rows.forEach(r => {
+            const opt = document.createElement('option');
+            opt.value = r.batch_id;
+            opt.textContent = '[' + r.mineral_type.toUpperCase() + '] Batch ' + r.batch_id + ' (remaining ' + Number(r.remaining || 0).toLocaleString() + ')';
+            opt.dataset.mineral = r.mineral_type;
+            opt.dataset.qty = r.qty || 0;
+            opt.dataset.moy = r.moyenne || 0;
+            opt.dataset.nb = r.moyenne_nb || 0;
+            opt.dataset.remaining = r.remaining || 0;
+            batchSelect.appendChild(opt);
+        });
+    }
+
+    customerSelect.addEventListener('change', function() {
+        fillBatchSelect(this.value);
+    });
+
+    batchSelect.addEventListener('change', function() {
+        const opt = this.options[this.selectedIndex];
+        if (!this.value) {
+            details.classList.add('hidden');
+            mineralInput.value = '';
+            batchIdInput.value = '';
+            return;
+        }
+        mineralInput.value = opt.dataset.mineral || '';
+        batchIdInput.value = this.value;
+        details.classList.remove('hidden');
+        document.getElementById('d-mineral').textContent = (opt.dataset.mineral || '-').toUpperCase();
+        document.getElementById('d-qty').textContent = Number(opt.dataset.qty || 0).toFixed(2) + ' kg';
+        document.getElementById('d-moy').textContent = Number(opt.dataset.moy || 0).toFixed(2);
+        document.getElementById('d-nb').textContent = Number(opt.dataset.nb || 0).toFixed(2);
+        document.getElementById('d-rem').textContent = Number(opt.dataset.remaining || 0).toLocaleString();
+    });
+    </script>
+</body>
+</html>

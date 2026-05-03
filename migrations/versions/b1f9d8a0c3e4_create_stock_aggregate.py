@@ -7,6 +7,7 @@ Create Date: 2026-04-06 01:30:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -17,15 +18,18 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        'stock_aggregate',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('mineral_type', sa.String(length=32), nullable=False, unique=True),
-        sa.Column('total_quantity', sa.Float(), nullable=False, server_default=sa.text('0')),
-        sa.Column('total_weighted_percent', sa.Float(), nullable=False, server_default=sa.text('0')),
-        sa.Column('total_t_unity', sa.Float(), nullable=False, server_default=sa.text('0')),
-        sa.Column('updated_at', sa.DateTime(), nullable=True),
-    )
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    if 'stock_aggregate' not in inspector.get_table_names():
+        op.create_table(
+            'stock_aggregate',
+            sa.Column('id', sa.Integer(), primary_key=True),
+            sa.Column('mineral_type', sa.String(length=32), nullable=False, unique=True),
+            sa.Column('total_quantity', sa.Float(), nullable=False, server_default=sa.text('0')),
+            sa.Column('total_weighted_percent', sa.Float(), nullable=False, server_default=sa.text('0')),
+            sa.Column('total_t_unity', sa.Float(), nullable=False, server_default=sa.text('0')),
+            sa.Column('updated_at', sa.DateTime(), nullable=True),
+        )
 
 
 def downgrade():

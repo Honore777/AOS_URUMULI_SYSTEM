@@ -9,9 +9,9 @@ import openpyxl
 import pandas as pd
 
 from config import db
-from copper.models import CopperStock, CopperOutput, SupplierPayment
+from copper.models import CopperStock, CopperOutput, SupplierPayment, CopperAdvanceAllocation
 from copper import copper_bp
-from core.models import Notification, create_notification, User, fetch_user_notifications
+from core.models import Notification, create_notification, User, fetch_user_notifications, BulkOutputPlan, BulkPlanStatus, CustomerReceipt
 from sqlalchemy.orm import joinedload, selectinload
 from flask_login import current_user
 from sqlalchemy import func
@@ -83,7 +83,7 @@ def _compute_cumulative_map(remaining_filters, page_ids):
 @copper_bp.route("/stock/<int:stock_id>/delete", methods=["POST"])
 @trace_time
 def delete_stock(stock_id):
-    """Delete a copper stock and its related outputs/payments, then redirect to dashboard."""
+    """Soft-delete a copper stock and redirect to dashboard."""
     try:
         logger.info("delete_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CopperStock.query.get_or_404(stock_id)
@@ -95,19 +95,11 @@ def delete_stock(stock_id):
             except Exception:
                 contrib_q = contrib_wp = contrib_t = 0.0
 
-            # Bulk-delete child rows to avoid N separate DELETE statements
-            try:
-                db.session.query(CopperOutput).filter(CopperOutput.stock_id == stock_id).delete(synchronize_session=False)
-                db.session.query(SupplierPayment).filter(SupplierPayment.stock_id == stock_id).delete(synchronize_session=False)
-                # Remove the parent in a single statement
-                db.session.query(CopperStock).filter(CopperStock.id == stock_id).delete(synchronize_session=False)
-            except Exception:
-                logger.exception("delete_stock: bulk-delete children failed; falling back to ORM delete")
-                db.session.delete(stock)
-                try:
-                    db.session.flush()
-                except Exception:
-                    pass
+            stock.is_deleted = True
+            stock.deleted_at = datetime.utcnow()
+            stock.deleted_by_id = getattr(current_user, 'id', None)
+            stock.delete_reason = request.form.get('delete_reason') or 'Deleted from dashboard.'
+            db.session.add(stock)
 
             # Apply delta to the single-row aggregate (remove contribution)
             try:
@@ -261,6 +253,26 @@ def add_stock():
     from copper.forms import CopperStockForm
 
     form = CopperStockForm()
+    advance_choices = []
+    advance_rows = (
+        db.session.query(
+            SupplierPayment.id,
+            SupplierPayment.supplier_name,
+            SupplierPayment.advance_remaining,
+            SupplierPayment.paid_at,
+        )
+        .filter(
+            SupplierPayment.is_advance.is_(True),
+            SupplierPayment.is_deleted.is_(False),
+            SupplierPayment.advance_remaining > 0,
+        )
+        .order_by(SupplierPayment.paid_at.desc(), SupplierPayment.id.desc())
+        .all()
+    )
+    for row in advance_rows:
+        label = f"{row.supplier_name or 'Unknown supplier'} - Advance remaining: {float(row.advance_remaining or 0):,.2f} RWF"
+        advance_choices.append((int(row.id), label))
+    form.advance_payment_ids.choices = advance_choices
     if request.method == "POST":
         try:
             logger.info("add_stock: start user=%s", getattr(current_user, 'username', None))
@@ -286,6 +298,7 @@ def add_stock():
             tot_amount_tag = transport_tag * input_kg
             rra_3_percent = (rra_3_percent_default * exchange * percentage * input_kg) * 3 / 100
             net_balance = (amount or 0) - (tot_amount_tag or 0) - (rma or 0) - (inkomane or 0) - (rra_3_percent or 0)
+            requested_advance_ids = [int(v) for v in request.form.getlist('advance_payment_ids') if str(v).strip().isdigit()]
 
             # For production we maintain `total_balance` at read-time using a
             # windowed query. Avoid doing a full SUM(...) here — store the
@@ -316,12 +329,59 @@ def add_stock():
                 amount=amount,
                 rra_3_percent=rra_3_percent,
                 net_balance=net_balance,
-                total_balance=total_balance
+                total_balance=total_balance,
             )
 
             try:
                 db.session.add(s)
                 db.session.flush()
+
+                if requested_advance_ids:
+                    advance_rows = (
+                        SupplierPayment.query.filter(
+                            SupplierPayment.id.in_(requested_advance_ids),
+                            SupplierPayment.is_advance.is_(True),
+                            SupplierPayment.is_deleted.is_(False),
+                        )
+                        .order_by(SupplierPayment.paid_at.asc(), SupplierPayment.id.asc())
+                        .with_for_update()
+                        .all()
+                    )
+                    if len(advance_rows) != len(set(requested_advance_ids)):
+                        flash("One or more selected advances are no longer available.", "danger")
+                        db.session.rollback()
+                        return render_template("copper/add_stock.html", form=form)
+
+                    total_allocated = 0.0
+                    for advance_payment in advance_rows:
+                        if advance_payment.supplier_name and advance_payment.supplier_name.strip().lower() != supplier.strip().lower():
+                            flash("Selected advances must belong to the same supplier as the stock.", "danger")
+                            db.session.rollback()
+                            return render_template("copper/add_stock.html", form=form)
+
+                        if total_allocated >= float(net_balance or 0.0):
+                            break
+
+                        advance_available = float(advance_payment.advance_remaining or 0.0)
+                        if advance_available <= 0:
+                            continue
+
+                        apply_amount = min(float(net_balance or 0.0) - total_allocated, advance_available)
+                        if apply_amount <= 0:
+                            continue
+
+                        total_allocated += apply_amount
+                        advance_payment.advance_remaining = max(advance_available - apply_amount, 0.0)
+                        db.session.add(CopperAdvanceAllocation(
+                            stock_id=s.id,
+                            supplier_payment_id=advance_payment.id,
+                            applied_amount=apply_amount,
+                        ))
+
+                    if total_allocated <= 0 and requested_advance_ids:
+                        flash("Selected advances could not be applied to this stock.", "danger")
+                        db.session.rollback()
+                        return render_template("copper/add_stock.html", form=form)
 
                 s.update_calculations()
 
@@ -388,6 +448,32 @@ def dashboard():
     moyenne = 0
     moyenne_nb = 0
     remaining_stocks_count = 0
+    latest_achieved_moyenne = None
+    latest_achieved_moyenne_nb = None
+
+    try:
+        latest_plan = (
+            BulkOutputPlan.query
+            .filter(
+                BulkOutputPlan.mineral_type == 'coltan',
+                BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+            )
+            .order_by(BulkOutputPlan.created_at.desc())
+            .first()
+        )
+        if latest_plan and latest_plan.plan_json:
+            first_row = latest_plan.plan_json[0] if isinstance(latest_plan.plan_json, list) and latest_plan.plan_json else {}
+            if isinstance(first_row, dict):
+                achieved_moyenne_value = first_row.get('achieved_moyenne')
+                achieved_moyenne_nb_value = first_row.get('achieved_moyenne_nb')
+                if achieved_moyenne_value is not None:
+                    latest_achieved_moyenne = float(achieved_moyenne_value)
+                if achieved_moyenne_nb_value is not None:
+                    latest_achieved_moyenne_nb = float(achieved_moyenne_nb_value)
+    except Exception:
+        latest_achieved_moyenne = None
+        latest_achieved_moyenne_nb = None
+
     cached_aggs = _get_dashboard_aggregates(ttl=10)
     if cached_aggs:
         total_input = cached_aggs.get('total_input', 0)
@@ -470,6 +556,7 @@ def dashboard():
                 total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
                 moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
                 moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
+
             # Cache small dashboard card values (still owned by dashboard view)
             try:
                 _set_dashboard_aggregates({
@@ -483,12 +570,48 @@ def dashboard():
             except Exception:
                 pass
 
+        if latest_achieved_moyenne is not None:
+            moyenne = latest_achieved_moyenne
+        if latest_achieved_moyenne_nb is not None:
+            moyenne_nb = latest_achieved_moyenne_nb
+
         # Ensure server-rendered rows display the global moyenne values (don't rely
         # on per-row stored fields which we may avoid updating on every insert).
         try:
             for s in stocks:
                 s.moyenne = moyenne
                 s.moyenne_nb = moyenne_nb
+        except Exception:
+            pass
+
+    # Customer outstanding must match the customer ledger (plans - receipts).
+    # This keeps the dashboard KPI consistent even when output rows are not
+    # maintaining a debt_remaining field.
+    try:
+        total_expected_amount = (
+            db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+            .filter(
+                BulkOutputPlan.mineral_type.in_(['copper', 'coltan']),
+                BulkOutputPlan.total_expected_amount.isnot(None),
+                BulkOutputPlan.total_expected_amount > 0,
+                BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+            )
+            .scalar()
+            or 0.0
+        )
+        total_paid_amount = (
+            db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+            .filter(CustomerReceipt.mineral_type.in_(['copper', 'coltan']))
+            .scalar()
+            or 0.0
+        )
+        total_debt = float(total_expected_amount or 0.0) - float(total_paid_amount or 0.0)
+        customer_debt = total_debt
+        cash_position = float(total_sales or 0.0) - float(customer_debt or 0.0)
+    except Exception:
+        logger.exception("dashboard: failed computing customer debt from plans/receipts")
+        try:
+            db.session.rollback()
         except Exception:
             pass
 
@@ -870,10 +993,10 @@ SELECT
   (SELECT COALESCE(SUM(input_kg),0) FROM copper_stock WHERE {stock_where}) AS total_input,
   (SELECT COALESCE(COUNT(id),0) FROM copper_stock WHERE {stock_where}) AS total_stocks,
   (SELECT COALESCE(SUM(output_kg),0) FROM copper_output WHERE {output_where}) AS total_output,
-  (SELECT COALESCE(SUM(debt_remaining),0) FROM copper_output WHERE {output_where}) AS total_debt,
-  (SELECT COALESCE(SUM(output_amount),0) FROM copper_output WHERE {output_where}) AS total_sales,
+  0 AS total_debt,
+  0 AS total_sales,
   (SELECT COALESCE(SUM(net_balance),0) FROM copper_stock WHERE {stock_where}) AS total_supplier_obligation,
-  (SELECT COALESCE(SUM(sp.amount),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE {stock_where}) AS total_payments
+    (SELECT COALESCE(SUM(COALESCE(sp.amount_rwf, sp.amount)),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE {stock_where}) AS total_payments
 """
 
                 row = db.session.execute(text(combined_sql), params).fetchone()
@@ -881,7 +1004,26 @@ SELECT
                 total_stocks = int(row.total_stocks or 0)
                 total_output = float(row.total_output or 0)
                 total_debt = float(row.total_debt or 0)
-                total_sales = float(row.total_sales or 0)
+                # Sales must match ledger truth (plans). Compute separately so we
+                # don't couple this fast path to legacy copper_output monetary fields.
+                try:
+                    sales_q = (
+                        db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+                        .filter(
+                            BulkOutputPlan.mineral_type.in_(['copper', 'coltan']),
+                            BulkOutputPlan.total_expected_amount.isnot(None),
+                            BulkOutputPlan.total_expected_amount > 0,
+                            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+                        )
+                    )
+                    if start_date:
+                        sales_q = sales_q.filter(BulkOutputPlan.created_at >= datetime.combine(start, datetime.min.time()))
+                    if end_date:
+                        sales_q = sales_q.filter(BulkOutputPlan.created_at <= datetime.combine(end, datetime.max.time()))
+                    total_sales = float(sales_q.scalar() or 0.0)
+                except Exception:
+                    logger.exception('filter_stocks: total_sales aggregate from plans failed (combined SQL path)')
+                    total_sales = float(row.total_sales or 0)
                 total_supplier_obligation = float(row.total_supplier_obligation or 0)
                 total_payments = float(row.total_payments or 0)
                 timings['stock_aggregates'] = time.perf_counter() - t_comb
@@ -899,11 +1041,31 @@ SELECT
 
                 t1 = time.perf_counter()
                 total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).filter(*output_filters).scalar() or 0
-                total_debt = db.session.query(func.coalesce(func.sum(CopperOutput.debt_remaining), 0)).filter(*output_filters).scalar() or 0
+                total_debt = 0
                 timings['output_aggregates'] = time.perf_counter() - t1
 
                 t2 = time.perf_counter()
-                total_sales = db.session.query(func.coalesce(func.sum(CopperOutput.output_amount), 0)).filter(*output_filters).scalar() or 0
+                # Total sales (monetary) must follow the same source of truth as debt.
+                # We therefore sum BulkOutputPlan.total_expected_amount for the same
+                # mineral type and date window.
+                try:
+                    sales_q = (
+                        db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+                        .filter(
+                            BulkOutputPlan.mineral_type.in_(['copper', 'coltan']),
+                            BulkOutputPlan.total_expected_amount.isnot(None),
+                            BulkOutputPlan.total_expected_amount > 0,
+                            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+                        )
+                    )
+                    if start_date:
+                        sales_q = sales_q.filter(BulkOutputPlan.created_at >= datetime.combine(start, datetime.min.time()))
+                    if end_date:
+                        sales_q = sales_q.filter(BulkOutputPlan.created_at <= datetime.combine(end, datetime.max.time()))
+                    total_sales = float(sales_q.scalar() or 0.0)
+                except Exception:
+                    logger.exception('filter_stocks: total_sales aggregate from plans failed')
+                    total_sales = 0.0
                 timings['sales_aggregate'] = time.perf_counter() - t2
 
                 t3 = time.perf_counter()
@@ -911,7 +1073,7 @@ SELECT
                 timings['supplier_obligation'] = time.perf_counter() - t3
 
                 t4 = time.perf_counter()
-                total_payments = db.session.query(func.coalesce(func.sum(SupplierPayment.amount), 0)).join(CopperStock, SupplierPayment.stock_id == CopperStock.id).filter(*stock_filters).scalar() or 0
+                total_payments = db.session.query(func.coalesce(func.sum(func.coalesce(SupplierPayment.amount_rwf, SupplierPayment.amount)), 0)).join(CopperStock, SupplierPayment.stock_id == CopperStock.id).filter(*stock_filters).scalar() or 0
                 timings['payments_aggregate'] = time.perf_counter() - t4
 
             # Remaining stocks aggregates (only local_balance > 0)
@@ -957,6 +1119,34 @@ SELECT
                 timings['cogs_aggregate'] = None
 
             gross_profit = (total_sales or 0) - (cost_of_stock_sold or 0)
+
+            # Customer outstanding debt (plans - receipts) as single source of truth.
+            try:
+                plan_q = (
+                    db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+                    .filter(
+                        BulkOutputPlan.mineral_type.in_(['copper', 'coltan']),
+                        BulkOutputPlan.total_expected_amount.isnot(None),
+                        BulkOutputPlan.total_expected_amount > 0,
+                        BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+                    )
+                )
+                receipts_q = (
+                    db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+                    .filter(CustomerReceipt.mineral_type.in_(['copper', 'coltan']))
+                )
+                if start_date:
+                    plan_q = plan_q.filter(BulkOutputPlan.created_at >= datetime.combine(start, datetime.min.time()))
+                    receipts_q = receipts_q.filter(CustomerReceipt.received_at >= datetime.combine(start, datetime.min.time()))
+                if end_date:
+                    plan_q = plan_q.filter(BulkOutputPlan.created_at <= datetime.combine(end, datetime.max.time()))
+                    receipts_q = receipts_q.filter(CustomerReceipt.received_at <= datetime.combine(end, datetime.max.time()))
+                expected_amt = plan_q.scalar() or 0.0
+                paid_amt = receipts_q.scalar() or 0.0
+                total_debt = float(expected_amt or 0.0) - float(paid_amt or 0.0)
+            except Exception:
+                logger.exception("filter_stocks: failed computing customer debt from plans/receipts")
+                total_debt = 0.0
 
             # For moyenne values prefer reading the single-row StockAggregate when
             # the caller requested an unfiltered snapshot. Keep this minimal and
@@ -1086,7 +1276,7 @@ SELECT
   (SELECT COALESCE(SUM(debt_remaining),0) FROM copper_output) AS total_debt,
   (SELECT COALESCE(SUM(output_amount),0) FROM copper_output) AS total_sales,
   (SELECT COALESCE(SUM(net_balance),0) FROM copper_stock WHERE local_balance > 0) AS total_supplier_obligation,
-  (SELECT COALESCE(SUM(sp.amount),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE s.local_balance > 0) AS total_payments
+    (SELECT COALESCE(SUM(COALESCE(sp.amount_rwf, sp.amount)),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE s.local_balance > 0) AS total_payments
 """
                             row = db.session.execute(text(combined_sql)).fetchone()
                             if row:

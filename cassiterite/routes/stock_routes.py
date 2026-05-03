@@ -5,9 +5,11 @@ This module handles:
 - Rendering the cassiterite dashboard (with KPIs)
     including optional notifications for the logged-in user.
 """
+from datetime import datetime
 from flask import render_template, request, redirect, url_for, flash, jsonify
 from config import db
-from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment
+from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
+from core.models import BulkOutputPlan, BulkPlanStatus, CustomerReceipt
 from sqlalchemy import func
 from cassiterite.forms import AddCassiteriteStockForm
 from cassiterite.routes import cassiterite_bp
@@ -27,6 +29,36 @@ def add_stock():
     form = AddCassiteriteStockForm()
     try:
         logger.info("cassiterite.add_stock: start user=%s", getattr(current_user, "username", None))
+
+        # Populate available advance-payment choices (unallocated advances only).
+        try:
+            advance_rows = (
+                db.session.query(
+                    CassiteriteSupplierPayment.id,
+                    CassiteriteSupplierPayment.supplier_name,
+                    CassiteriteSupplierPayment.advance_remaining,
+                    CassiteriteSupplierPayment.paid_at,
+                )
+                .filter(
+                    CassiteriteSupplierPayment.is_advance.is_(True),
+                    CassiteriteSupplierPayment.is_deleted.is_(False),
+                    CassiteriteSupplierPayment.advance_remaining > 0,
+                )
+                .order_by(CassiteriteSupplierPayment.paid_at.desc(), CassiteriteSupplierPayment.id.desc())
+                .all()
+            )
+        except Exception:
+            advance_rows = []
+
+        advance_choices = [
+            (
+                int(row.id),
+                f"{(row.supplier_name or 'Unknown supplier')} - Advance remaining: {float(row.advance_remaining or 0):,.2f} RWF",
+            )
+            for row in advance_rows
+        ]
+        form.advance_payment_ids.choices = advance_choices
+
         if form.validate_on_submit():
             # Check if voucher already exists
             existing = CassiteriteStock.query.filter_by(voucher_no=form.voucher_no.data).first()
@@ -55,9 +87,73 @@ def add_stock():
             # Run DB-side calculations on the new stock
             stock.update_calculations()
 
+            # Apply selected supplier advances (optional)
+            requested_advance_ids = []
+            try:
+                requested_advance_ids = [int(x) for x in (form.advance_payment_ids.data or [])]
+            except Exception:
+                requested_advance_ids = []
+
             try:
                 db.session.add(stock)
                 db.session.flush()
+
+                if requested_advance_ids:
+                    # Lock selected advances and apply them to this stock.
+                    advance_payments = (
+                        CassiteriteSupplierPayment.query
+                        .filter(
+                            CassiteriteSupplierPayment.id.in_(requested_advance_ids),
+                            CassiteriteSupplierPayment.is_deleted.is_(False),
+                            CassiteriteSupplierPayment.is_advance.is_(True),
+                            CassiteriteSupplierPayment.advance_remaining > 0,
+                        )
+                        .with_for_update()
+                        .order_by(CassiteriteSupplierPayment.paid_at.asc(), CassiteriteSupplierPayment.id.asc())
+                        .all()
+                    )
+
+                    if len(advance_payments) != len(set(requested_advance_ids)):
+                        flash("One or more selected advances are no longer available.", "danger")
+                        db.session.rollback()
+                        return render_template('cassiterite/add_entry.html', form=form)
+
+                    total_allocated = 0.0
+                    for advance_payment in advance_payments:
+                        # Supplier safety: only allow applying advances that belong to the same supplier.
+                        adv_supplier = (advance_payment.supplier_name or '').strip().lower()
+                        if adv_supplier and adv_supplier != (stock.supplier or '').strip().lower():
+                            flash("Selected advances must belong to the same supplier as the stock.", "danger")
+                            db.session.rollback()
+                            return render_template('cassiterite/add_entry.html', form=form)
+
+                        if total_allocated >= float(stock.balance_to_pay or 0.0):
+                            break
+
+                        available = float(advance_payment.advance_remaining or 0.0)
+                        if available <= 0:
+                            continue
+
+                        remaining_for_stock = max(float(stock.balance_to_pay or 0.0) - total_allocated, 0.0)
+                        if remaining_for_stock <= 0:
+                            continue
+
+                        apply_amount = min(available, remaining_for_stock)
+                        if apply_amount <= 0:
+                            continue
+
+                        total_allocated += apply_amount
+                        advance_payment.advance_remaining = max(available - apply_amount, 0.0)
+                        db.session.add(CassiteriteAdvanceAllocation(
+                            stock_id=stock.id,
+                            supplier_payment_id=advance_payment.id,
+                            applied_amount=apply_amount,
+                        ))
+
+                    if total_allocated <= 0:
+                        flash("Selected advances could not be applied to this stock.", "danger")
+                        db.session.rollback()
+                        return render_template('cassiterite/add_entry.html', form=form)
 
                 # Apply delta to global aggregate (add new stock's contribution)
                 try:
@@ -88,7 +184,7 @@ def add_stock():
 @trace_time
 @cassiterite_bp.route('/stock/<int:stock_id>/delete', methods=['POST'])
 def delete_stock(stock_id):
-    """Delete a cassiterite stock and its related outputs/payments, then redirect to dashboard."""
+    """Soft-delete a cassiterite stock and redirect to dashboard."""
     try:
         logger.info("cassiterite.delete_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CassiteriteStock.query.get_or_404(stock_id)
@@ -100,19 +196,11 @@ def delete_stock(stock_id):
             except Exception:
                 contrib_q = contrib_wp = contrib_t = 0.0
 
-            # Bulk-delete child rows to avoid N separate DELETE statements
-            try:
-                db.session.query(CassiteriteOutput).filter(CassiteriteOutput.stock_id == stock_id).delete(synchronize_session=False)
-                db.session.query(CassiteriteSupplierPayment).filter(CassiteriteSupplierPayment.stock_id == stock_id).delete(synchronize_session=False)
-                # Remove the parent in a single statement
-                db.session.query(CassiteriteStock).filter(CassiteriteStock.id == stock_id).delete(synchronize_session=False)
-            except Exception:
-                logger.exception("cassiterite.delete_stock: bulk-delete children failed; falling back to ORM delete")
-                db.session.delete(stock)
-                try:
-                    db.session.flush()
-                except Exception:
-                    pass
+            stock.is_deleted = True
+            stock.deleted_at = datetime.utcnow()
+            stock.deleted_by_id = getattr(current_user, 'id', None)
+            stock.delete_reason = request.form.get('delete_reason') or 'Deleted from dashboard.'
+            db.session.add(stock)
 
             # Apply delta to the single-row aggregate (remove contribution)
             try:
@@ -283,9 +371,39 @@ def dashboard():
         try:
             total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).scalar()
             total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).scalar()
-            total_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).scalar()
-            total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).scalar()
+            # Sales must be in sync with customer ledger truth (plans), because
+            # Output rows may exist without monetary fields populated.
+            total_sales = (
+                db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+                .filter(
+                    BulkOutputPlan.mineral_type.in_(['cassiterite']),
+                    BulkOutputPlan.total_expected_amount.isnot(None),
+                    BulkOutputPlan.total_expected_amount > 0,
+                    BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+                )
+                .scalar()
+            )
             total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
+
+            # Customer outstanding debt from single source of truth: plans - receipts
+            total_expected_amount = (
+                db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+                .filter(
+                    BulkOutputPlan.mineral_type.in_(['cassiterite']),
+                    BulkOutputPlan.total_expected_amount.isnot(None),
+                    BulkOutputPlan.total_expected_amount > 0,
+                    BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+                )
+                .scalar()
+                or 0.0
+            )
+            total_paid_amount = (
+                db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+                .filter(CustomerReceipt.mineral_type.in_(['cassiterite']))
+                .scalar()
+                or 0.0
+            )
+            total_debt = float(total_expected_amount or 0.0) - float(total_paid_amount or 0.0)
             # Inventory Value (current cost of remaining Cassiterite stock)
             cass_inventory_value = db.session.query(
                 func.coalesce(
@@ -563,17 +681,63 @@ FROM (
             output_filters.append(CassiteriteOutput.date <= end)
 
         total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).filter(*output_filters).scalar() or 0
-        total_debt = db.session.query(func.coalesce(func.sum(CassiteriteOutput.debt_remaining), 0)).filter(*output_filters).scalar() or 0
 
-        # Total sales (monetary) for the filtered outputs window
-        total_sales = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_amount), 0)).filter(*output_filters).scalar() or 0
+        # Customer outstanding debt from single source of truth: plans - receipts
+        try:
+            plan_q = (
+                db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+                .filter(
+                    BulkOutputPlan.mineral_type.in_(['cassiterite']),
+                    BulkOutputPlan.total_expected_amount.isnot(None),
+                    BulkOutputPlan.total_expected_amount > 0,
+                    BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+                )
+            )
+            receipts_q = (
+                db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+                .filter(CustomerReceipt.mineral_type.in_(['cassiterite']))
+            )
+            if start_date:
+                plan_q = plan_q.filter(BulkOutputPlan.created_at >= _dt.combine(start, _dt.min.time()))
+                receipts_q = receipts_q.filter(CustomerReceipt.received_at >= _dt.combine(start, _dt.min.time()))
+            if end_date:
+                plan_q = plan_q.filter(BulkOutputPlan.created_at <= _dt.combine(end, _dt.max.time()))
+                receipts_q = receipts_q.filter(CustomerReceipt.received_at <= _dt.combine(end, _dt.max.time()))
+            expected_amt = plan_q.scalar() or 0.0
+            paid_amt = receipts_q.scalar() or 0.0
+            total_debt = float(expected_amt or 0.0) - float(paid_amt or 0.0)
+        except Exception:
+            logger.exception("cassiterite.filter_stocks: failed computing customer debt from plans/receipts")
+            total_debt = 0.0
+
+        # Total sales (monetary) must follow the same source of truth as debt.
+        # We therefore sum BulkOutputPlan.total_expected_amount for the same
+        # mineral type and date window.
+        try:
+            sales_q = (
+                db.session.query(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0))
+                .filter(
+                    BulkOutputPlan.mineral_type.in_(['cassiterite']),
+                    BulkOutputPlan.total_expected_amount.isnot(None),
+                    BulkOutputPlan.total_expected_amount > 0,
+                    BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+                )
+            )
+            if start_date:
+                sales_q = sales_q.filter(BulkOutputPlan.created_at >= _dt.combine(start, _dt.min.time()))
+            if end_date:
+                sales_q = sales_q.filter(BulkOutputPlan.created_at <= _dt.combine(end, _dt.max.time()))
+            total_sales = float(sales_q.scalar() or 0.0)
+        except Exception:
+            logger.exception('cassiterite.filter_stocks: total_sales aggregate from plans failed')
+            total_sales = 0.0
 
         # Total supplier obligation (balance_to_pay) respecting the same stock filters
         total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(*stock_filters).scalar() or 0
 
         # Total payments made against the filtered cassiterite stocks
         from cassiterite.models import CassiteriteSupplierPayment
-        total_payments = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
+        total_payments = db.session.query(func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
 
         # Inventory value (book cost) and supplier outstanding (liability)
         inventory_value = total_supplier_obligation
@@ -615,7 +779,7 @@ FROM (
 
             # Total payments made against the filtered cassiterite stocks
         from cassiterite.models import CassiteriteSupplierPayment
-        total_payments = db.session.query(func.coalesce(func.sum(CassiteriteSupplierPayment.amount), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
+        total_payments = db.session.query(func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
 
             # Remaining stocks aggregates (only local_balance > 0). We will reuse
             # this both for moyenne and Inventory Value (current cost of remaining

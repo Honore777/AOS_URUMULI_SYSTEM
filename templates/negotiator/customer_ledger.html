@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Ledger</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-800">{% if user_role == 'boss' %}Igitabo mbaruramari cy’Umukiriya{% else %}Customer Ledger{% endif %}{% if is_readonly and user_role != 'boss' %} (Read-Only){% endif %}</h1>
+                <p class="text-sm text-slate-600 mt-1"><span class="font-semibold">{% if user_role == 'boss' %}Umukiriya{% else %}Customer{% endif %}:</span> {{ customer }} | <span class="font-semibold">{% if user_role == 'boss' %}Itsinda (Batch){% else %}Batch{% endif %}:</span> {{ batch_id or '-' }}</p>
+            </div>
+            {% if user_role == 'boss' %}
+            <a href="{{ url_for('core.boss_dashboard') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Subira ku Rubuga rw’Umuyobozi</a>
+            {% else %}
+            <a href="{{ url_for('core.copper_customer_ledger', customer=customer) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger', customer=customer) }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back To Customer Batches</a>
+            {% endif %}
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <aside class="lg:col-span-3 rounded-xl bg-white p-5 shadow-lg border border-slate-200 h-fit">
+                <h2 class="text-sm font-bold text-slate-900 mb-4">{% if user_role == 'boss' %}Ibyerekeye Ledger{% else %}{% if is_readonly %}Ledger View{% else %}Negotiator Pages{% endif %}{% endif %}</h2>
+                <nav class="space-y-2">
+                    {% if not is_readonly %}
+                    <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
+                    {% endif %}
+                    {% if user_role != 'boss' %}
+                    <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Customer Ledgers</a>
+                    {% endif %}
+                </nav>
+            </aside>
+
+            <section class="lg:col-span-9 space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                        <p class="text-xs text-slate-500">{% if user_role == 'boss' %}Igiteranyo cy’Ayo Agomba Kwishyura (Byumvikanyweho){% else %}Total Owed (Agreed){% endif %}</p>
+                        <p class="text-2xl font-bold text-red-600">{{ '{:,.0f}'.format(total_owed or 0) }}</p>
+                    </div>
+                    <div class="rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                        <p class="text-xs text-slate-500">{% if user_role == 'boss' %}Igiteranyo cy’Ayo Yishyuye{% else %}Total Paid{% endif %}</p>
+                        <p class="text-2xl font-bold text-emerald-600">{{ '{:,.0f}'.format(total_paid or 0) }}</p>
+                    </div>
+                    <div class="rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                        <p class="text-xs text-slate-500">{% if user_role == 'boss' %}Asigaye (Umwenda){% else %}Remaining{% endif %}</p>
+                        <p class="text-2xl font-bold text-slate-900">{{ '{:,.0f}'.format(remaining or 0) }}</p>
+                    </div>
+                </div>
+
+                <div class="rounded-xl bg-white p-6 shadow-lg border border-slate-200">
+                    <h2 class="text-sm font-bold text-slate-900 mb-4">{% if user_role == 'boss' %}Ibitabo by’Imyenda n’Ibyishyuwe{% else %}Debit / Credit Ledger{% endif %}</h2>
+                    {% if ledger %}
+                    <div class="overflow-auto">
+                        <table class="w-full text-xs">
+                            <thead class="sticky top-0 bg-slate-800 text-white">
+                                <tr>
+                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Itariki{% else %}Date{% endif %}</th>
+                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Ubwoko bw’Amabuye{% else %}Mineral{% endif %}</th>
+                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Itsinda (Batch){% else %}Batch{% endif %}</th>
+                                    <th class="px-2 py-2 text-right">Qty (kg)</th>
+                                    <th class="px-2 py-2 text-right">Moyenne</th>
+                                    <th class="px-2 py-2 text-right">NB</th>
+                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Ibisobanuro{% else %}Description{% endif %}</th>
+                                    <th class="px-2 py-2 text-right">{% if user_role == 'boss' %}Umwenda (Debit){% else %}Debit{% endif %}</th>
+                                    <th class="px-2 py-2 text-right">{% if user_role == 'boss' %}Ibyishyuwe (Credit){% else %}Credit{% endif %}</th>
+                                    <th class="px-2 py-2 text-right">{% if user_role == 'boss' %}Asigaye{% else %}Balance{% endif %}</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200">
+                                {% for e in ledger %}
+                                {% set debit_amount = e.get('debit', 0) %}
+                                {% set credit_amount = e.get('credit', 0) %}
+                                {% set balance_amount = e.get('balance', 0) %}
+                                <tr class="hover:bg-slate-50">
+                                    <td class="px-2 py-2 text-slate-600">{{ e.get('date').strftime('%Y-%m-%d %H:%M') if e.get('date') else '-' }}</td>
+                                    <td class="px-2 py-2 text-slate-700 uppercase">{{ e.get('mineral_type') or '-' }}</td>
+                                    <td class="px-2 py-2 text-slate-700">{{ e.get('batch_id') or '-' }}</td>
+                                    <td class="px-2 py-2 text-right text-slate-700">{{ '%.2f'|format(e.get('qty', 0) or 0) }}</td>
+                                    <td class="px-2 py-2 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne', 0) or 0) }}</td>
+                                    <td class="px-2 py-2 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne_nb', 0) or 0) }}</td>
+                                    <td class="px-2 py-2 font-semibold text-slate-900">{{ e.get('description') }}</td>
+                                    <td class="px-2 py-2 text-right font-bold text-red-700">{% if debit_amount %}{{ '{:,.0f}'.format(debit_amount or 0) }}{% else %}-{% endif %}</td>
+                                    <td class="px-2 py-2 text-right font-bold text-emerald-700">{% if credit_amount %}{{ '{:,.0f}'.format(credit_amount or 0) }}{% else %}-{% endif %}</td>
+                                    <td class="px-2 py-2 text-right font-bold text-slate-900">{{ '{:,.0f}'.format(balance_amount or 0) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-xs text-slate-500">No ledger movements yet.</p>
+                    {% endif %}
+                </div>
+            </section>
+        </div>
+    </div>
+</body>
+</html>

@@ -19,6 +19,20 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _normalize_amount_to_rwf(amount, currency, exchange_rate):
+    currency_code = (currency or 'RWF').upper()
+    input_amount = float(amount or 0)
+    rate = float(exchange_rate or 0)
+
+    if currency_code == 'RWF':
+        return input_amount, 1.0
+    if currency_code == 'USD':
+        if rate <= 0:
+            raise ValueError('Exchange rate is required and must be greater than 0 for USD transactions.')
+        return input_amount * rate, rate
+    raise ValueError(f'Unsupported currency: {currency_code}')
+
+
 @cassiterite_bp.route('/record_output', methods=['GET', 'POST'])
 @role_required("accountant")
 def record_output():
@@ -41,15 +55,36 @@ def record_output():
         if not stock:
             flash("Stock not found!", "error")
             return redirect(url_for('cassiterite.record_output'))
+
+        currency = (form.currency.data or 'RWF').upper()
+        exchange_rate_input = form.exchange_rate.data
+        payment_stage = (form.payment_stage.data or 'full_settlement').strip().lower()
+        
+        # Handle optional fields: customer, output_amount, amount_paid
+        customer = (form.customer.data or '').strip() or None
+        output_amount = form.output_amount.data or 0
+        amount_paid = form.amount_paid.data or 0
+        
+        try:
+            output_amount_rwf, exchange_rate = _normalize_amount_to_rwf(output_amount, currency, exchange_rate_input)
+            amount_paid_rwf, _ = _normalize_amount_to_rwf(amount_paid, currency, exchange_rate_input)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for('cassiterite.record_output'))
         
         # Create output
         output = CassiteriteOutput(
             stock_id=stock.id,
             date=form.date.data,
             output_kg=form.output_kg.data,
-            customer=form.customer.data,
-            output_amount=form.output_amount.data,
-            amount_paid=form.amount_paid.data if hasattr(form, 'amount_paid') else 0,
+            customer=customer,
+            output_amount=output_amount,
+            output_amount_rwf=output_amount_rwf,
+            amount_paid=amount_paid,
+            amount_paid_rwf=amount_paid_rwf,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            payment_stage=payment_stage,
             note=form.note.data,
             voucher_no=stock.voucher_no
         )
@@ -99,7 +134,7 @@ def record_output():
         from flask import current_app
         from flask_login import current_user
         from utils import send_brevo_email_async
-        output_details = f"Stock: {stock.voucher_no}, Supplier: {stock.supplier}, Output: {form.output_kg.data} kg, Customer: {form.customer.data}, Note: {form.note.data}"
+        output_details = f"Stock: {stock.voucher_no}, Supplier: {stock.supplier}, Output: {form.output_kg.data} kg, Note: {form.note.data}"
         subject = "Cassiterite Stock Output Request"
         html_content = (
             "<p>Dear Storekeeper,</p>"
@@ -116,7 +151,7 @@ def record_output():
             logging.exception("Failed to enqueue cassiterite output email via Brevo")
             flash("Email notification failed; in-app notification(s) saved.", "warning")
 
-        flash(f"Output of {form.output_kg.data}kg recorded!", "success")
+        flash(f"Output of {form.output_kg.data}kg recorded. Customer and amount will be added later by the negotiator.", "success")
         return redirect(url_for('cassiterite.list_outputs'))
     
     return render_template('cassiterite/record_output.html', form=form)
@@ -345,6 +380,9 @@ def optimize():
 
     if quantities:
         session['optimization_quantities'] = quantities
+        # IMPORTANT: Store achieved moyenne for O(1) lookup in batch selector
+        # This avoids recalculation when negotiator views the batch
+        session['optimization_achieved_moyenne'] = float(achieved_moyenne) if achieved_moyenne else 0.0
 
     if mode is not None:
         session['optimization_mode'] = mode
@@ -432,11 +470,12 @@ def cassiterite_save_edits():
 @cassiterite_bp.route('/confirm_bulk_output', methods=['POST'])
 @role_required("accountant")
 def confirm_bulk_output():
-    """Record bulk cassiterite output from optimization results"""
+    """Create a cassiterite bulk output plan for store confirmation/execution.
+
+    Accountant provides only the `date` and optional note; customer and
+    monetary details are recorded by the negotiator when receipts are applied.
+    """
     date = datetime.strptime(request.form.get("date"), "%Y-%m-%d").date() if request.form.get("date") else datetime.utcnow().date()
-    customer = request.form.get("customer")
-    output_amount = float(request.form.get('output_amount') or 0)
-    amount_paid = float(request.form.get('amount_paid') or 0)
     note = request.form.get("note") or "Bulk output from optimization"
     
     # Get quantities from session
@@ -447,28 +486,18 @@ def confirm_bulk_output():
         return redirect(url_for('cassiterite.optimize'))
     
     try:
-        # Calculate total quantity
         total_qty = sum(float(qty) for qty in quantities.values())
-        
         if total_qty == 0:
             flash("Total quantity is zero!", "error")
             return redirect(url_for('cassiterite.optimize'))
-        
-        # Generate batch_id (similar format as copper)
+
         hex_code = uuid4().hex[:6]
         date_str = date.strftime('%Y%m%d')
-        customer_safe = (customer or 'customer').lower().replace(' ', '_')[:20]
-        batch_id = f"{customer_safe}_{date_str}_{hex_code}"
+        batch_id = f"batch_{date_str}_{hex_code}"
 
-        # Get all cassiterite stocks
-        # Only fetch stocks referenced in the quantities dict to avoid loading full table
         stock_ids = [int(k) for k in quantities.keys() if str(k).isdigit()]
         all_stocks = {s.id: s for s in CassiteriteStock.query.filter(CassiteriteStock.id.in_(stock_ids)).all()} if stock_ids else {}
 
-        # ------------------------------------------------------------------
-        # 1) Build and store a BulkOutputPlan so the store keeper (and boss)
-        #    can see the exact optimal table that was used here.
-        # ------------------------------------------------------------------
         plan_items = []
         for stock_id_str, qty in quantities.items():
             try:
@@ -481,26 +510,72 @@ def confirm_bulk_output():
             if not stock or qty_float <= 0:
                 continue
 
+            proportion = qty_float / total_qty if total_qty > 0 else 0
             plan_items.append({
                 "stock_id": stock.id,
                 "voucher_no": stock.voucher_no,
                 "supplier": stock.supplier,
                 "planned_output_kg": float(qty_float),
+                "quoted_amount_input": 0.0,
+                "quoted_amount_rwf": 0.0,
+                "currency": "RWF",
+                "exchange_rate": 1.0,
             })
+
+        if not plan_items:
+            flash("No valid rows generated for this plan.", "error")
+            return redirect(url_for('cassiterite.optimize'))
+
+        from datetime import datetime
+
+        # Compute achieved quality deterministically from the quantities being submitted.
+        # This avoids relying on session state and prevents zeros in negotiator views.
+        total_unit = 0.0
+        total_tunity = 0.0
+        for item in plan_items:
+            try:
+                sid = int(item.get('stock_id'))
+                qty_f = float(item.get('planned_output_kg') or 0.0)
+            except Exception:
+                continue
+            if qty_f <= 0:
+                continue
+            stock = all_stocks.get(sid)
+            if not stock:
+                continue
+            lb = float(getattr(stock, 'local_balance', 0) or 0)
+            if lb <= 0:
+                continue
+            unit_per_kg = float(getattr(stock, 'unit_percent', 0) or 0) / lb
+            tunity_per_kg = float(getattr(stock, 't_unity', 0) or 0) / lb
+            total_unit += unit_per_kg * qty_f
+            total_tunity += tunity_per_kg * qty_f
+
+        achieved_moyenne_val = float(total_unit / total_qty) if total_qty else 0.0
+        achieved_moyenne_nb_val = float(total_tunity / total_qty) if total_qty else 0.0
+        
+        # Store metadata at top level of plan_json for quick retrieval
+        plan_metadata = {
+            "achieved_moyenne": float(achieved_moyenne_val) if achieved_moyenne_val else 0.0,
+            "achieved_moyenne_nb": float(achieved_moyenne_nb_val) if achieved_moyenne_nb_val else 0.0,
+            "created_at_iso": datetime.utcnow().isoformat(),
+        }
+        
+        # Merge metadata with plan items for backward compatibility
+        plan_json_full = [plan_metadata] + plan_items if plan_items else [plan_metadata]
 
         plan = BulkOutputPlan(
             mineral_type="cassiterite",
             created_by_id=getattr(current_user, "id", None),
             status=BulkPlanStatus.SENT_TO_STORE.value,
-            customer=customer,
+            customer=None,
             batch_id=batch_id,
             note=note,
-            plan_json=plan_items,
+            plan_json=plan_json_full,
         )
         db.session.add(plan)
-        db.session.flush()  # ensure plan.id is available
+        db.session.flush()
 
-        # Notify all active store keepers about this new cassiterite plan
         store_keepers = User.query.filter_by(role="store_keeper", is_active=True).all()
         emails = []
         for sk in store_keepers:
@@ -508,8 +583,7 @@ def confirm_bulk_output():
                 user_id=sk.id,
                 type_="BULK_PLAN_CREATED",
                 message=(
-                    f"New cassiterite bulk output plan {plan.id} for customer {customer} "
-                    f"(batch {batch_id})"
+                    f"New cassiterite bulk output plan {plan.id} (batch {batch_id})"
                 ),
                 related_type="bulk_plan",
                 related_id=plan.id,
@@ -517,17 +591,15 @@ def confirm_bulk_output():
             if getattr(sk, 'email', None):
                 emails.append(sk.email)
 
-        # Persist plan + notifications so storekeepers can see them immediately
         db.session.commit()
 
-        # Send one email to all storekeepers with the bulk plan details
         try:
             from flask_login import current_user
             from utils import send_brevo_email_async
             subject = f"Bulk Output Plan {plan.id} - Action Required"
             html_content = (
                 f"<p>Dear Storekeeper,</p>"
-                f"<p>A new bulk output plan (ID: {plan.id}, batch: {batch_id}) was created by {getattr(current_user, 'name', 'Unknown')} for customer {customer}.</p>"
+                f"<p>A new bulk output plan (ID: {plan.id}, batch: {batch_id}) was created by {getattr(current_user, 'name', 'Unknown')}.</p>"
                 f"<p>Note: {note}</p>"
                 f"<p>Log into the system to review and execute the plan.</p>"
                 "<p>Regards,<br>Urumuli Smart System</p>"
@@ -538,85 +610,13 @@ def confirm_bulk_output():
             import logging
             logging.exception("Failed to enqueue cassiterite bulk plan email via Brevo")
 
-        # ------------------------------------------------------------------
-        # 2) Execute outputs with proportional amounts (existing logic)
-        # ------------------------------------------------------------------
-        for stock_id_str, qty in quantities.items():
-            stock_id = int(stock_id_str)
-            qty = float(qty)
-            
-            stock = all_stocks.get(stock_id)
-            if not stock:
-                continue
-            
-            if qty > stock.local_balance:
-                flash(f"Stock {stock.voucher_no}: Cannot output {qty}kg, only {stock.local_balance}kg available", "warning")
-                continue
-            
-            # Calculate proportional amounts
-            proportion = qty / total_qty if total_qty > 0 else 0
-            proportional_amount = output_amount * proportion
-            proportional_paid = amount_paid * proportion
-            
-            output = CassiteriteOutput(
-                stock_id=stock.id,
-                date=date,
-                output_kg=qty,
-                customer=customer,
-                output_amount=proportional_amount,
-                amount_paid=proportional_paid,
-                voucher_no=stock.voucher_no,
-                batch_id=batch_id,
-                note=note
-            )
-
-            # Calculate remaining debt for this proportional line
-            output.update_debt()
-            db.session.add(output)
-            
-            # Update stock
-            stock.local_balance = stock.remaining_stock()
-            stock.unit_percent = (stock.local_balance * stock.percentage) / 100 if stock.percentage else 0
-
-            # Apply delta to the aggregate for this stock
-            try:
-                old_q, old_wp, old_t = CassiteriteStock.contribution(stock)
-            except Exception:
-                old_q = old_wp = old_t = 0.0
-
-            # Flush so the output is visible for remaining_stock calculations
-            try:
-                db.session.flush()
-            except Exception:
-                pass
-
-            # Recalculate stock fields and apply per-stock delta
-            stock.update_calculations()
-            try:
-                new_q, new_wp, new_t = CassiteriteStock.contribution(stock)
-                CassiteriteStock.apply_aggregate_delta(new_q - old_q, new_wp - old_wp, new_t - old_t)
-            except Exception:
-                try:
-                    logger.exception("confirm_bulk_output: failed to apply aggregate delta for stock %s", stock_id)
-                except Exception:
-                    import logging
-                    logging.exception("confirm_bulk_output: failed to apply aggregate delta for stock %s", stock_id)
-
-        # Mark the bulk plan as executed and record who executed it
-        plan.status = BulkPlanStatus.EXECUTED.value
-        plan.executed_at = datetime.utcnow()
-        plan.executed_by_id = getattr(current_user, "id", None)
-
-        # Commit all outputs and per-stock aggregate deltas
-        db.session.commit()
-        
-        # Clean session
         session.pop('optimization_quantities', None)
         session.pop('optimization_mode', None)
         session.pop('optimization_target_moyenne', None)
-        
-        flash(f"✓ Batch {batch_id} recorded successfully!", "success")
-        return redirect(url_for('cassiterite.list_outputs'))
+
+        # Monetary/receipt details are recorded later by the negotiator
+        flash(f"✓ Batch {batch_id} sent to store keeper for confirmation.", "success")
+        return redirect(url_for('cassiterite.optimize'))
     
     except Exception as e:
         db.session.rollback()

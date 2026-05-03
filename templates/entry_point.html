@@ -187,15 +187,24 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>⚙️ Urumuli - Mining System</h1>
+            <h1>Urumuli - Mining System</h1>
             <p>Mining Company Management System</p>
         </div>
 
         <div class="modules-grid">
             <!-- Coltan/Copper Module -->
-             {%if current_user.role in [ 'accountant', 'admin']%}
+             {% if current_user.role in [ 'accountant', 'admin'] %}
                 <a href="/copper/dashboard" class="module-card">
-                    <div class="module-icon coltan-icon">🔴</div>
+                    <div class="module-icon coltan-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 16V8"/>
+                            <path d="M3 16V8"/>
+                            <path d="M21 8l-9-5-9 5"/>
+                            <path d="M21 16l-9 5-9-5"/>
+                            <path d="M3 8l9 5 9-5"/>
+                            <path d="M12 13v8"/>
+                        </svg>
+                    </div>
                     <h2>Coltan</h2>
                     <p>Manage coltan (tantalum) mining operations, stock tracking, and quality optimization</p>
                     
@@ -210,40 +219,81 @@
 
                     <button class="btn btn-coltan">Open Coltan Module →</button>
                 </a>
-                {%endif%}
+            {% endif %}
             <!-- Cassiterite Module -->
 
             {% if current_user.role in ['accountant', 'admin'] %}
 
-                        <a href="/cassiterite/dashboard" class="module-card">
-                            <div class="module-icon cassiterite-icon">🟢</div>
-                            <h2>Cassiterite</h2>
-                            <p>Manage cassiterite (tin) mining operations with LME pricing and advanced optimization</p>
-                            
-                            <div class="features">
-                                <ul class="feature-list">
-                                    <li>LME Price Integration</li>
-                                    <li>Stock Management</li>
-                                    <li>Hybrid Optimization</li>
-                                    <li>Payment Tracking</li>
-                                </ul>
-                            </div>
+                <a href="/cassiterite/dashboard" class="module-card">
+                    <div class="module-icon cassiterite-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 16V8"/>
+                            <path d="M3 16V8"/>
+                            <path d="M21 8l-9-5-9 5"/>
+                            <path d="M21 16l-9 5-9-5"/>
+                            <path d="M3 8l9 5 9-5"/>
+                            <path d="M12 13v8"/>
+                        </svg>
+                    </div>
+                    <h2>Cassiterite</h2>
+                    <p>Manage cassiterite (tin) mining operations with LME pricing and advanced optimization</p>
+                    
+                    <div class="features">
+                        <ul class="feature-list">
+                            <li>LME Price Integration</li>
+                            <li>Stock Management</li>
+                            <li>Hybrid Optimization</li>
+                            <li>Payment Tracking</li>
+                        </ul>
+                    </div>
+                    <button class="btn btn-cassiterite">Open Cassiterite Module →</button>
+                </a>
+            {% endif %}
 
-                            <button class="btn btn-cassiterite">Open Cassiterite Module →</button>
-                        </a>    
-                        {% endif %}
+                {% if current_user.role == 'negotiator' %}
+                    <a href="{{ url_for('core.customer_receipts') }}" class="module-card">
+                        <div class="module-icon" style="color:#2563eb;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M4 3a1 1 0 0 1 1-1 1.3 1.3 0 0 1 .7.2l.9.6a1.3 1.3 0 0 0 1.4 0l.9-.6a1.3 1.3 0 0 1 1.4 0l.9.6a1.3 1.3 0 0 0 1.4 0l.9-.6a1.3 1.3 0 0 1 1.4 0l.9.6a1.3 1.3 0 0 0 1.4 0l.9-.6A1.3 1.3 0 0 1 19 2a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1 1.3 1.3 0 0 1-.7-.2l-.9-.6a1.3 1.3 0 0 0-1.4 0l-.9.6a1.3 1.3 0 0 1-1.4 0l-.9-.6a1.3 1.3 0 0 0-1.4 0l-.9.6a1.3 1.3 0 0 1-1.4 0l-.9-.6a1.3 1.3 0 0 0-1.4 0l-.9.6a1.3 1.3 0 0 1-.7.2 1 1 0 0 1-1-1z"/>
+                                <path d="M8 7h8"/>
+                                <path d="M8 11h8"/>
+                                <path d="M8 15h5"/>
+                            </svg>
+                        </div>
+                        <h2>Customer Receipts</h2>
+                        <p>Record advances, installments, and final settlements after store-confirmed bulk output.</p>
+                        <div class="features">
+                            <ul class="feature-list">
+                                <li>Advance / Installment / Final</li>
+                                <li>Cash or Bank channel</li>
+                                <li>USD / RWF normalization</li>
+                                <li>Batch debt auto-update</li>
+                            </ul>
+                        </div>
+                        <button class="btn btn-coltan">Open Receipts →</button>
+                    </a>
+                {% endif %}
+
+
 
                 <!-- Boss Consolidated Dashboard (only meaningful for boss role) -->
 
-                {% if current_user.role in ['boss','accountant'] %}
+                {% if current_user.role in ['boss','accountant','admin'] %}
                 <a href="{{ url_for('core.boss_dashboard') }}" class="module-card">
-                    <div class="module-icon" style="color:#f1c40f;">🧑‍💼</div>
+                    <div class="module-icon" style="color:#f59e0b;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M3 3v18h18"/>
+                            <path d="M7 14l3-3 3 2 5-6"/>
+                            <path d="M7 19h12"/>
+                        </svg>
+                    </div>
                     <h2>General Overview Dashboard</h2>
                     <p>See overall company performance across Coltan and Cassiterite: gross profit, debts, and approvals.</p>
                     <button class="btn" style="background-color:#f1c40f;color:#2c3e50;">Go to General Overview Dashboard</button>
                 </a>
+                {% endif %}
+
         </div>
-        {% endif %}
 
 
 

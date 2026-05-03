@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Record Customer Receipts</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <style>
+        .agreement-action {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            border-radius: 0.75rem;
+            padding: 0.75rem 1rem;
+            border: 1px solid transparent;
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-decoration: none;
+            color: #ffffff;
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
+            transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+        }
+        .agreement-action:hover {
+            transform: translateY(-1px);
+            filter: brightness(0.98);
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.24);
+        }
+        .agreement-action:focus-visible {
+            outline: 2px solid #0f172a;
+            outline-offset: 2px;
+        }
+        .agreement-action-save {
+            background: linear-gradient(135deg, #15803d 0%, #166534 100%);
+            border-color: #166534;
+        }
+        .agreement-action-update {
+            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+            border-color: #1e40af;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-slate-800">Negotiator - Record Customer Receipts</h1>
+            <div class="flex items-center gap-2">
+                <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
+                <a href="{{ url_for('logout') }}" class="rounded bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700">Logout</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="space-y-2">
+            {% for category, message in messages %}
+            <div class="rounded border px-4 py-3 text-sm {{ 'border-emerald-300 bg-emerald-50 text-emerald-800' if category in ['success', 'info'] else 'border-red-300 bg-red-50 text-red-800' if category in ['danger', 'error'] else 'border-amber-300 bg-amber-50 text-amber-800' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <aside class="lg:col-span-3 rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
+                <nav class="space-y-2">
+                    <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
+                    <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Ledgers</a>
+                </nav>
+            </aside>
+
+            <section class="lg:col-span-9 rounded-xl bg-white p-6 shadow-lg border border-slate-200">
+                <h2 class="mb-6 text-lg font-bold text-slate-800">Set Batch Agreement</h2>
+                {% if not can_record %}
+                <div class="mb-4 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    Read-only mode: only negotiators can save agreements.
+                </div>
+                {% endif %}
+
+                <form method="post" action="{{ url_for('core.customer_receipts') }}" class="space-y-5">
+                    <input type="hidden" id="force-overwrite" name="force_overwrite" value="0" />
+                    <div>
+                        <label class="mb-2 block text-sm font-semibold text-slate-700">Select Executed Batch</label>
+                        <select id="plan-selector" name="plan_id" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">-- Choose batch --</option>
+                            {% for p in plans %}
+                            <option
+                                value="{{ p.id }}"
+                                data-mineral="{{ p.mineral_type }}"
+                                data-qty="{{ p.summary.total_qty or 0 }}"
+                                data-moyenne="{{ p.summary.moyenne or 0 }}"
+                                data-moyenne-nb="{{ p.summary.moyenne_nb or 0 }}"
+                                data-batch-id="{{ p.batch_id }}"
+                                data-created="{{ p.created_at.strftime('%Y-%m-%d') if p.created_at else '-' }}"
+                                data-customer="{{ p.customer or '' }}"
+                                data-total="{{ p.total_expected_amount or 0 }}"
+                            >
+                                {{ p.customer or 'No customer' }} [{{ p.mineral_type|upper }} | Batch {{ p.batch_id }} | Qty {{ '%.2f'|format(p.summary.total_qty or 0) }}kg | Moy {{ '%.2f'|format(p.summary.moyenne or 0) }} | NB {{ '%.2f'|format(p.summary.moyenne_nb or 0) }}]
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div id="batch-metadata" class="hidden space-y-3 rounded-lg bg-blue-50 p-4 border border-blue-200">
+                        <p class="text-sm font-semibold text-blue-900">Selected Batch Details</p>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                            <div class="rounded bg-white px-2 py-2 shadow-sm">
+                                <p class="text-slate-600 font-medium">Quantity (kg)</p>
+                                <p id="batch-qty" class="text-slate-900 font-bold">-</p>
+                            </div>
+                            <div class="rounded bg-white px-2 py-2 shadow-sm">
+                                <p class="text-slate-600 font-medium">Moyenne</p>
+                                <p id="batch-moyenne" class="text-slate-900 font-bold">-</p>
+                            </div>
+                            <div class="rounded bg-white px-2 py-2 shadow-sm">
+                                <p class="text-slate-600 font-medium">Moyenne NB</p>
+                                <p id="batch-moyenne-nb" class="text-slate-900 font-bold">-</p>
+                            </div>
+                            <div class="rounded bg-white px-2 py-2 shadow-sm">
+                                <p class="text-slate-600 font-medium">Output Date</p>
+                                <p id="batch-created" class="text-slate-900 font-bold">-</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Customer Name</label>
+                        <input id="customer-input" type="text" name="customer" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Agreed Total Amount</label>
+                        <input id="total-input" type="number" name="total_expected_amount" step="0.01" min="0" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Currency</label>
+                        <select name="currency" class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="RWF">RWF</option>
+                        </select>
+                    </div>
+
+                    <label class="flex items-center gap-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                        <input id="overwrite-check" type="checkbox" class="h-4 w-4 rounded border-amber-400 text-amber-700 focus:ring-amber-500" />
+                        <span>Overwrite existing agreement for selected batch</span>
+                    </label>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <button type="submit" class="agreement-action agreement-action-save">Save Agreement</button>
+                        <a href="{{ url_for('core.update_debts') }}" class="agreement-action agreement-action-update">Go To Update Debts</a>
+                    </div>
+                </form>
+            </section>
+        </div>
+    </div>
+
+    <script>
+    const selector = document.getElementById('plan-selector');
+    const metadata = document.getElementById('batch-metadata');
+    const customerInput = document.getElementById('customer-input');
+    const totalInput = document.getElementById('total-input');
+    const overwriteCheck = document.getElementById('overwrite-check');
+    const forceOverwriteInput = document.getElementById('force-overwrite');
+    const planAveragesBase = "{{ url_for('core.api_plan_averages', plan_id=0)[:-1] }}";
+
+    overwriteCheck.addEventListener('change', function() {
+        forceOverwriteInput.value = this.checked ? '1' : '0';
+    });
+
+    selector.addEventListener('change', function() {
+        const selectedOption = this.options[this.selectedIndex];
+        if (!this.value) {
+            metadata.classList.add('hidden');
+            customerInput.value = '';
+            totalInput.value = '';
+            overwriteCheck.checked = false;
+            forceOverwriteInput.value = '0';
+            return;
+        }
+
+        metadata.classList.remove('hidden');
+        const planId = selectedOption.value;
+        const qty = parseFloat(selectedOption.dataset.qty || 0) || 0;
+        let moyenne = parseFloat(selectedOption.dataset.moyenne || 0) || 0;
+        let moyenneNb = parseFloat(selectedOption.dataset.moyenneNb || 0) || 0;
+
+        customerInput.value = selectedOption.dataset.customer || '';
+        if ((parseFloat(selectedOption.dataset.total || 0) || 0) > 0) {
+            totalInput.value = parseFloat(selectedOption.dataset.total || 0).toFixed(2);
+        }
+
+        if ((moyenne === 0 || isNaN(moyenne)) && qty > 0) {
+            fetch(planAveragesBase + encodeURIComponent(planId))
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('batch-qty').textContent = parseFloat(data.total_qty || qty).toFixed(2);
+                    document.getElementById('batch-moyenne').textContent = parseFloat(data.moyenne || 0).toFixed(2);
+                    document.getElementById('batch-moyenne-nb').textContent = parseFloat(data.moyenne_nb || 0).toFixed(2);
+                    document.getElementById('batch-created').textContent = selectedOption.dataset.created;
+                })
+                .catch(() => {
+                    document.getElementById('batch-qty').textContent = qty.toFixed(2);
+                    document.getElementById('batch-moyenne').textContent = moyenne.toFixed(2);
+                    document.getElementById('batch-moyenne-nb').textContent = moyenneNb.toFixed(2);
+                    document.getElementById('batch-created').textContent = selectedOption.dataset.created;
+                });
+            return;
+        }
+
+        document.getElementById('batch-qty').textContent = qty.toFixed(2);
+        document.getElementById('batch-moyenne').textContent = moyenne.toFixed(2);
+        document.getElementById('batch-moyenne-nb').textContent = moyenneNb.toFixed(2);
+        document.getElementById('batch-created').textContent = selectedOption.dataset.created;
+    });
+    </script>
+</body>
+</html>

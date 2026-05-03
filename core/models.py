@@ -21,6 +21,7 @@ from config import db
 from werkzeug.security import generate_password_hash, check_password_hash
 import logging
 from sqlalchemy import func
+from sqlalchemy.orm import backref
 
 
 class User(db.Model):
@@ -29,8 +30,11 @@ class User(db.Model):
         This is a simple user model with a ROLE column so we can distinguish
         between:
         - accountant
+        - cashier
+        - negotiator
         - store_keeper
         - boss
+        - admin
 
         NOTE: This model is designed to work nicely with Flask-Login later.
         For now, it just provides helpers to hash/check passwords.
@@ -47,7 +51,7 @@ class User(db.Model):
         # Hashed password (NEVER store raw passwords)
         password_hash = db.Column(db.String(255), nullable=False)
 
-        # Role will be one of: 'accountant', 'store_keeper', 'boss'
+        # Role is currently stored as a string (examples above).
         role = db.Column(db.String(20), nullable=False, default="accountant")
 
         # Extra flags / metadata
@@ -126,7 +130,11 @@ class Notification(db.Model):
         related_type = db.Column(db.String(50), nullable=True)
         related_id = db.Column(db.Integer, nullable=True)
 
-        user = db.relationship("User", backref="notifications", lazy=True)
+        user = db.relationship(
+            "User",
+            backref=backref("notifications", cascade="all, delete-orphan"),
+            lazy=True,
+        )
 
 
 def create_notification(user_id: int,
@@ -241,6 +249,7 @@ class BulkPlanStatus(enum.Enum):
         """
 
         SENT_TO_STORE = "SENT_TO_STORE"
+        STOCK_CONFIRMED = "STOCK_CONFIRMED"
         EXECUTED = "EXECUTED"
 
 
@@ -268,6 +277,8 @@ class BulkOutputPlan(db.Model):
         created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
         created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+        created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
+
         # Current status of the plan (string copy of BulkPlanStatus value)
         status = db.Column(db.String(20), nullable=False,
                                              default=BulkPlanStatus.SENT_TO_STORE.value)
@@ -281,6 +292,11 @@ class BulkOutputPlan(db.Model):
         customer = db.Column(db.String(100), nullable=True)
         batch_id = db.Column(db.String(100), nullable=True)
         note = db.Column(db.Text)
+        
+        # Total agreed/expected amount for the entire batch (for debt tracking)
+        # This is the total price the customer agreed to pay for the batch
+        # Debt = total_expected_amount - total_payments_received
+        total_expected_amount = db.Column(db.Float, nullable=True, default=0)
 
         # The optimal table from the optimization step as JSON.
         # Typical structure (Python side before JSON):
@@ -294,6 +310,61 @@ class BulkOutputPlan(db.Model):
         # This way the store keeper (and boss) can see exactly which
         # stock lines were chosen and for how many kilograms.
         plan_json = db.Column(db.JSON, nullable=False)
+
+
+class CustomerReceiptType(enum.Enum):
+        """Lifecycle stage for customer receipts against an executed batch."""
+
+        ADVANCE = "ADVANCE"
+        INSTALLMENT = "INSTALLMENT"
+        FINAL_SETTLEMENT = "FINAL_SETTLEMENT"
+
+
+class CustomerReceiptChannel(enum.Enum):
+        """Where the customer paid money into."""
+
+        CASH = "CASH"
+        BANK = "BANK"
+
+
+class CustomerReceipt(db.Model):
+        """Immutable customer receipt event (advance/installment/final settlement)."""
+
+        __tablename__ = "customer_receipt"
+
+        id = db.Column(db.Integer, primary_key=True)
+
+        # Cross-module references
+        mineral_type = db.Column(db.String(20), nullable=False, index=True)
+        batch_id = db.Column(db.String(100), nullable=False, index=True)
+        customer = db.Column(db.String(100), nullable=False, index=True)
+        bulk_plan_id = db.Column(db.Integer, db.ForeignKey("bulk_output_plan.id"), nullable=True, index=True)
+
+        # Receipt timing and classification
+        received_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+        receipt_type = db.Column(db.String(30), nullable=False, default=CustomerReceiptType.ADVANCE.value, index=True)
+        payment_channel = db.Column(db.String(20), nullable=False, default=CustomerReceiptChannel.CASH.value, index=True)
+
+        # Entered and normalized amounts
+        amount_input = db.Column(db.Float, nullable=False, default=0)
+        currency = db.Column(db.String(10), nullable=False, default="RWF", index=True)
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+        amount_rwf = db.Column(db.Float, nullable=False, default=0)
+
+        # Audit fields
+        created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+        note = db.Column(db.Text, nullable=True)
+
+        plan = db.relationship("BulkOutputPlan", backref="customer_receipts", lazy=True)
+        created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
+        # Cash collection tracking (set when cashier confirms physical cash)
+        is_collected = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        collected_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        collected_at = db.Column(db.DateTime, nullable=True)
+        cash_account_id = db.Column(db.Integer, db.ForeignKey('cash_account.id'), nullable=True)
+
+        collected_by = db.relationship('User', foreign_keys=[collected_by_id], lazy=True)
 
 
 class StockAggregate(db.Model):
@@ -391,4 +462,146 @@ class PaymentReview(db.Model):
         reviewed_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
         reviewed_at = db.Column(db.DateTime, nullable=True)
         boss_comment = db.Column(db.Text)
+        request_payload = db.Column(db.Text, nullable=True)
+
+
+class SupplierTransactionType(enum.Enum):
+        """Financial movement type for supplier transactions."""
+
+        ADVANCE = "ADVANCE"
+        STOCK_PAYMENT = "STOCK_PAYMENT"
+        ADJUSTMENT = "ADJUSTMENT"
+        REFUND = "REFUND"
+
+
+class TransactionApprovalStatus(enum.Enum):
+        """Approval lifecycle for requests that require boss decision."""
+
+        PENDING = "PENDING"
+        APPROVED = "APPROVED"
+        REJECTED = "REJECTED"
+
+
+class TransactionDisbursementStatus(enum.Enum):
+        """Cash/bank execution lifecycle after approval."""
+
+        NOT_DISBURSED = "NOT_DISBURSED"
+        DISBURSED = "DISBURSED"
+        CANCELLED = "CANCELLED"
+
+
+class ExpenseCategory(enum.Enum):
+        """Generalized internal expense categories.
+
+        This replaces a worker-only payment mindset and allows recording
+        items like labor, stationery, utilities, and other internal costs.
+        """
+
+        LABOR = "LABOR"
+        STATIONERY = "STATIONERY"
+        UTILITIES = "UTILITIES"
+        OTHER = "OTHER"
+
+
+class ExpenseTransaction(db.Model):
+        """Generic internal expense transaction.
+
+        Replaces worker-only payments with a broader model for labor and
+        non-labor business expenses while preserving approval/disbursement flow.
+        """
+
+        __tablename__ = "expense_transaction"
+
+        id = db.Column(db.Integer, primary_key=True)
+
+        category = db.Column(
+                db.String(20),
+                nullable=False,
+                default=ExpenseCategory.OTHER.value,
+                index=True,
+        )
+
+        # Compatibility field used by existing worker-payment routes.
+        worker_name = db.Column(db.String(120), nullable=True, index=True)
+        # Generic payee name for non-worker expenses.
+        payee_name = db.Column(db.String(120), nullable=True, index=True)
+        description = db.Column(db.Text, nullable=True)
+        amount = db.Column(db.Float, nullable=False)
+        currency = db.Column(db.String(10), nullable=False, default="RWF")
+        method = db.Column(db.String(20), nullable=True)  # CASH | BANK | MOMO
+        reference = db.Column(db.String(100), nullable=True)
+        note = db.Column(db.Text, nullable=True)
+        paid_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+        # Optional: used for filtered reporting by mineral in transition phase.
+        mineral_type = db.Column(db.String(20), nullable=True, index=True)
+
+        approval_status = db.Column(
+                db.String(20),
+                nullable=False,
+                default=TransactionApprovalStatus.PENDING.value,
+                index=True,
+        )
+        approved_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        approved_at = db.Column(db.DateTime, nullable=True)
+
+        disbursement_status = db.Column(
+                db.String(20),
+                nullable=False,
+                default=TransactionDisbursementStatus.NOT_DISBURSED.value,
+                index=True,
+        )
+        disbursed_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        disbursed_at = db.Column(db.DateTime, nullable=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+        is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        deleted_at = db.Column(db.DateTime, nullable=True)
+        deleted_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        delete_reason = db.Column(db.Text, nullable=True)
+
+        approved_by = db.relationship("User", foreign_keys=[approved_by_id], lazy=True)
+        disbursed_by = db.relationship("User", foreign_keys=[disbursed_by_id], lazy=True)
+        created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
+        deleted_by = db.relationship("User", foreign_keys=[deleted_by_id], lazy=True)
+
+
+class CashAccount(db.Model):
+        """Represents a named cash drawer or bank-like cash account used by cashiers.
+
+        Minimal fields so the Cashier can record `cash_in` and `cash_out` transactions
+        and reconcile balances per account.
+        """
+
+        __tablename__ = "cash_account"
+
+        id = db.Column(db.Integer, primary_key=True)
+        name = db.Column(db.String(120), nullable=False, unique=True)
+        opening_balance = db.Column(db.Float, nullable=False, default=0.0)
+        current_balance = db.Column(db.Float, nullable=False, default=0.0)
+        created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class CashTransaction(db.Model):
+        """Immutable record of a cash movement recorded by a cashier.
+
+        direction: 'IN' for cash in, 'OUT' for cash out.
+        """
+
+        __tablename__ = "cash_transaction"
+
+        id = db.Column(db.Integer, primary_key=True)
+        account_id = db.Column(db.Integer, db.ForeignKey("cash_account.id"), nullable=False, index=True)
+        amount = db.Column(db.Float, nullable=False)
+        direction = db.Column(db.String(4), nullable=False)  # IN | OUT
+        note = db.Column(db.Text, nullable=True)
+        created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+        account = db.relationship("CashAccount", backref="transactions", lazy=True)
+        created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
+
 

@@ -9,14 +9,43 @@ from wtforms.validators import DataRequired, InputRequired, NumberRange, Optiona
 
 class SupplierPaymentForm(FlaskForm):
     """Form for recording supplier payments"""
+    payment_kind = SelectField(
+        'Payment Type',
+        choices=[
+            ('settlement', 'Settle Existing Supplier Debt'),
+            ('advance', 'Pay Supplier Advance'),
+        ],
+        validators=[DataRequired()],
+        default='settlement',
+    )
+    existing_supplier = SelectField(
+        'Existing Supplier (for advance)',
+        choices=[],
+        validators=[Optional()],
+    )
+    new_supplier = StringField(
+        'Or New Supplier Name (for advance)',
+        validators=[Optional()],
+    )
     stock_id = SelectField(
         'Select Supplier Obligation',
         coerce=int,
-        validators=[DataRequired()]
+        validators=[Optional()]
     )
     amount = FloatField(
-        'Payment amount (RWF)',
+        'Payment amount',
         validators=[InputRequired(), NumberRange(min=0.01)]
+    )
+    currency = SelectField(
+        'Currency',
+        choices=[('RWF', 'RWF'), ('USD', 'USD')],
+        validators=[DataRequired()],
+        default='RWF',
+    )
+    exchange_rate = FloatField(
+        'Exchange Rate (RWF per currency unit)',
+        validators=[Optional(), NumberRange(min=0.0001)],
+        default=1.0,
     )
     method = SelectField(
         'Payment Method',

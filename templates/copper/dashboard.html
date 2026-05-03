@@ -7,24 +7,63 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
 </head>
 <body class="bg-gradient-to-br from-blue-600 to-purple-700 min-h-screen p-6">
-    <div class="max-w-6xl mx-auto bg-white rounded-lg shadow-xl p-8">
+    <div class="max-w-screen-2xl mx-auto bg-white rounded-lg shadow-xl p-6 md:p-8">
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
-            <h1 class="text-3xl md:text-4xl font-bold text-gray-900 text-center md:text-left">📊 Coltan Management Dashboard</h1>
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900 text-center md:text-left inline-flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-900" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 3v18h18" />
+                    <path d="M7 14v4" />
+                    <path d="M11 10v8" />
+                    <path d="M15 6v12" />
+                    <path d="M19 12v6" />
+                </svg>
+                <span>Coltan Management Dashboard</span>
+            </h1>
             <div class="flex flex-wrap items-center gap-3 justify-center md:justify-end">
                 <a href="{{ url_for('entry_point') }}" class="bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg shadow-sm border border-gray-200">
-                    🏠 Back to Modules
+                    <span class="inline-flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M3 9.5 12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z" />
+                        </svg>
+                        <span>Back to Modules</span>
+                    </span>
                 </a>
                 <a href="{{ url_for('core.profile') }}" class="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold py-2 px-4 rounded-lg shadow-sm border border-gray-200">
-                    👤 Profile
+                    <span class="inline-flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M20 21a8 8 0 0 0-16 0" />
+                            <circle cx="12" cy="7" r="4" />
+                        </svg>
+                        <span>Profile</span>
+                    </span>
                 </a>
                 <a href="{{ url_for('logout') }}" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-sm">
-                    Logout
+                    <span class="inline-flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                            <path d="M16 17l5-5-5-5" />
+                            <path d="M21 12H9" />
+                        </svg>
+                        <span>Logout</span>
+                    </span>
                 </a>
             </div>
         </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="mb-8 space-y-2">
+                    {% for category, message in messages %}
+                        <div class="p-4 rounded-lg shadow-sm border {{ 'bg-green-100 text-green-800 border-green-200' if category in ['success', 'info'] else ('bg-yellow-100 text-yellow-900 border-yellow-200' if category == 'warning' else 'bg-red-100 text-red-800 border-red-200') }}">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
         
         <!-- Stats Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-10">
             <div class="bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition  border-l-2  border-blue-300">
                 <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Total Input</h3>
                 <div class="text-4xl font-bold mb-2" id="card-total-input">0.00</div>
@@ -33,6 +72,11 @@
             <div class="bg-gradient-to-br from-purple-600 to-purple-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-purple-300">
                 <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Total Output</h3>
                 <div class="text-4xl font-bold mb-2" id="card-total-output">0.00</div>
+                <div class="text-sm opacity-80">kg</div>
+            </div>
+            <div class="bg-gradient-to-br from-indigo-600 to-indigo-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-indigo-300">
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Remaining Stock</h3>
+                <div class="text-4xl font-bold mb-2" id="card-remaining-stock">0.00</div>
                 <div class="text-sm opacity-80">kg</div>
             </div>
             <div class="bg-gradient-to-br from-pink-600 to-pink-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-pink-300">
@@ -46,14 +90,14 @@
                 <div class="text-sm opacity-80">records</div>
             </div>
             <div class="bg-gradient-to-br from-orange-600 to-orange-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-orange-300">
-                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Moyenne</h3>
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Achieved Moyenne</h3>
                 <div class="text-4xl font-bold mb-2" id="card-moyenne">0.0000</div>
-                <div class="text-sm opacity-80">avg quality %</div>
+                <div class="text-sm opacity-80">Latest optimized batch quality %</div>
             </div>
             <div class="bg-gradient-to-br from-red-600 to-red-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-red-300">
-                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Moyenne NB</h3>
+                <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Achieved Moyenne NB</h3>
                 <div class="text-4xl font-bold mb-2" id="card-moyenne-nb">0.0000</div>
-                <div class="text-sm opacity-80">avg NB</div>
+                <div class="text-sm opacity-80">Latest optimized batch NB</div>
             </div>
             <div class="bg-gradient-to-br from-emerald-600 to-emerald-800 text-white p-6 rounded-lg shadow-lg hover:scale-105 transition border-l-2  border-emerald-300">
                 <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Gross Profit (Coltan)</h3>
@@ -85,7 +129,15 @@
 
         <!-- Date & Voucher Filter Form -->
 <div class="bg-blue-50 p-6 rounded-lg shadow-md mb-10 border-2 border-blue-200">
-    <h3 class="text-lg font-bold text-gray-900 mb-4">🗓️ Filter by Date Range & Voucher</h3>
+    <h3 class="text-lg font-bold text-gray-900 mb-4 inline-flex items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 2v4" />
+            <path d="M16 2v4" />
+            <rect x="3" y="4" width="18" height="18" rx="2" />
+            <path d="M3 10h18" />
+        </svg>
+        <span>Filter by Date Range & Voucher</span>
+    </h3>
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div>
             <label class="block text-sm font-semibold text-gray-700 mb-2">Start Date</label>
@@ -105,9 +157,34 @@
             </select>
         </div>
         <div class="flex items-end gap-2">
-            <button onclick="applyFilter(event)" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition">🔍 Filter</button>
-            <button onclick="exportFilteredData(event)" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition">📥 Export Excel</button>
-            <button onclick="resetFilter(event)" class="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg transition">↺ Reset</button>
+            <button onclick="applyFilter(event)" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition">
+                <span class="inline-flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M10 18a8 8 0 1 1 5.3-14" />
+                        <path d="M21 21l-5.2-5.2" />
+                    </svg>
+                    <span>Filter</span>
+                </span>
+            </button>
+            <button onclick="exportFilteredData(event)" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition">
+                <span class="inline-flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 3v12" />
+                        <path d="M7 10l5 5 5-5" />
+                        <path d="M5 21h14" />
+                    </svg>
+                    <span>Export Excel</span>
+                </span>
+            </button>
+            <button onclick="resetFilter(event)" class="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg transition">
+                <span class="inline-flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 12a9 9 0 1 1-3.1-6.7" />
+                        <path d="M21 3v6h-6" />
+                    </svg>
+                    <span>Reset</span>
+                </span>
+            </button>
         </div>
     </div>
 </div>
@@ -119,25 +196,103 @@
         <!-- Navigation Buttons -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-10">
             <a href="{{ url_for('copper.add_stock') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
-                ➕ Add Stock
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 5v14" />
+                        <path d="M5 12h14" />
+                    </svg>
+                    <span>Add Stock</span>
+                </span>
             </a>
             <a href="{{ url_for('copper.record_output') }}" class="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
-                📤 Record Output
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 3v12" />
+                        <path d="M7 10l5 5 5-5" />
+                        <path d="M5 21h14" />
+                    </svg>
+                    <span>Record Output</span>
+                </span>
             </a>
+            {% if current_user.role in ['negotiator', 'boss', 'admin'] %}
             <a href="{{ url_for('copper.track_debts') }}" class="bg-pink-600 hover:bg-pink-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
-                💳 Track Debts
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="2" y="5" width="20" height="14" rx="2" />
+                        <path d="M2 10h20" />
+                    </svg>
+                    <span>Track Debts</span>
+                </span>
             </a>
+            {% endif %}
             <a href="{{ url_for('copper.optimize_stocks') }}" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
-                ⚙️ Optimize Stocks
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 1v2" />
+                        <path d="M12 21v2" />
+                        <path d="M4.2 4.2l1.4 1.4" />
+                        <path d="M18.4 18.4l1.4 1.4" />
+                        <path d="M1 12h2" />
+                        <path d="M21 12h2" />
+                        <path d="M4.2 19.8l1.4-1.4" />
+                        <path d="M18.4 5.6l1.4-1.4" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    <span>Optimize Stocks</span>
+                </span>
             </a>
             <a href="{{ url_for('copper.pay_supplier') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
-                💰 Pay Supplier
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M7 10h10" />
+                        <path d="M7 14h10" />
+                        <rect x="3" y="6" width="18" height="12" rx="2" />
+                    </svg>
+                    <span>Pay Supplier</span>
+                </span>
+            </a>
+            <a href="{{ url_for('copper.pay_supplier_advance') }}" class="bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <ellipse cx="12" cy="5" rx="9" ry="3" />
+                        <path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5" />
+                        <path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6" />
+                    </svg>
+                    <span>Pay Advance Supplier</span>
+                </span>
             </a>
             <a href="{{ url_for('copper.export_stocks') }}" class="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
-                📥 Export Stocks
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 3v12" />
+                        <path d="M7 10l5 5 5-5" />
+                        <path d="M5 21h14" />
+                    </svg>
+                    <span>Export Stocks</span>
+                </span>
             </a>
-            <a href="{{ url_for('cassiterite.pay_worker') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
-                🧑‍🔧 Pay Worker (internal)
+            <a href="{{ url_for('cassiterite.manage_expenses') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M6 2h12v20l-6-3-6 3z" />
+                        <path d="M9 6h6" />
+                        <path d="M9 10h6" />
+                        <path d="M9 14h6" />
+                    </svg>
+                    <span>Manage Expenses</span>
+                </span>
+            </a>
+            <a href="{{ url_for('core.copper_customer_ledger_index') }}" class="bg-slate-700 hover:bg-slate-800 text-white font-semibold py-3 px-6 rounded-lg transition transform hover:scale-105 shadow-md">
+                <span class="inline-flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 19a2 2 0 0 0 2 2h14" />
+                        <path d="M6 2h14v20H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" />
+                        <path d="M8 6h8" />
+                        <path d="M8 10h8" />
+                        <path d="M8 14h8" />
+                    </svg>
+                    <span>Customer Ledgers</span>
+                </span>
             </a>
         </div>
 
@@ -209,7 +364,14 @@
                 </div>
             {% else %}
                 <div class="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
-                    <p class="text-gray-500 text-lg mb-4">📦 No copper stocks yet</p>
+                    <p class="text-gray-500 text-lg mb-4 inline-flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z" />
+                            <path d="M3.3 7l8.7 5 8.7-5" />
+                            <path d="M12 22V12" />
+                        </svg>
+                        <span>No coltan stocks yet</span>
+                    </p>
                     <a href="{{ url_for('copper.add_stock') }}" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg transition">Add First Stock</a>
                 </div>
             {% endif %}
@@ -220,7 +382,11 @@
         <div class="mt-8 bg-gray-50 border border-gray-200 rounded-lg p-6 shadow-sm">
             <div class="flex items-center mb-4 gap-3">
                 <h2 class="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                    🔔 Notifications
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-900" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M10.3 21a2 2 0 0 0 3.4 0" />
+                        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                    </svg>
+                    <span>Notifications</span>
                     <span class="text-xs font-semibold text-gray-500">(boss decisions & system alerts)</span>
                 </h2>
                 {% if unread_notifications_count is defined and unread_notifications_count > 0 %}
@@ -265,7 +431,12 @@
         <div class="bg-white rounded-lg shadow-xl w-full max-w-xl p-6">
             <div class="flex items-center justify-between mb-4">
                 <h3 class="text-xl font-bold text-gray-900">Edit Copper Stock</h3>
-                <button type="button" id="close-edit-copper" class="text-gray-500 hover:text-gray-800">✕</button>
+                <button type="button" id="close-edit-copper" class="text-gray-500 hover:text-gray-800" aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M18 6 6 18" />
+                        <path d="M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
             <form id="edit-copper-form" method="post">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -337,6 +508,7 @@
             
             document.getElementById('card-total-input').textContent = formatNumber(totalInput, 2);
             document.getElementById('card-total-output').textContent = formatNumber(totalOutput, 2);
+            document.getElementById('card-remaining-stock').textContent = formatNumber((Number(totalInput || 0) - Number(totalOutput || 0)), 2);
             document.getElementById('card-total-debt').textContent = formatNumber(totalDebt, 2);
             document.getElementById('card-total-stocks').textContent = formatNumber(totalStocks, 0);
             document.getElementById('card-moyenne').textContent = formatNumber(moyenneValue, 4);
@@ -480,16 +652,15 @@
             try {
                 document.getElementById('card-total-input').textContent = formatNumber(data.total_input, 2);
                 document.getElementById('card-total-output').textContent = formatNumber(data.total_output, 2);
+                document.getElementById('card-remaining-stock').textContent = formatNumber((Number(data.total_input || 0) - Number(data.total_output || 0)), 2);
                 document.getElementById('card-total-debt').textContent = formatNumber(data.total_debt, 2);
                 // Prefer the paged total returned by the API so the card shows
                 // the full number of matching rows (not just the current page).
                 const remainingCount = (data.stocks || []).filter(s => (s.local_balance ?? 0) > 0).length;
-                const totalRemaining = (typeof data.total === 'number') ? data.total : remainingCount;
-                document.getElementById('card-total-stocks').textContent = formatNumber(totalRemaining, 0);
+                document.getElementById('card-total-stocks').textContent = formatNumber(remainingCount, 0);
                 document.getElementById('card-moyenne').textContent = formatNumber(data.moyenne, 4);
                 document.getElementById('card-moyenne-nb').textContent = formatNumber(data.moyenne_nb, 4);
             } catch (err) {
-                // Log but continue to ensure gross profit is updated
                 console.warn('updateAllCards partial update failed', err);
             }
 
