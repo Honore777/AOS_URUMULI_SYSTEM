@@ -41,7 +41,7 @@
             <section class="bg-white rounded-2xl shadow-md border border-gray-200 p-5">
                 <h2 class="text-lg font-semibold text-gray-800 mb-3">Imbonerahamwe z’Abatanga</h2>
                 {% if suppliers %}
-                    <p class="text-xs text-gray-500 mb-3">Kanda izina ry’umutanga urebe imbonerahamwe ye ya kasiterite.</p>
+                    <p class="text-xs text-gray-500 mb-3">Kanda izina ry’utanga amabuye urebe imbonerahamwe ye ya kasiterite.</p>
                     <div class="space-y-2 max-h-96 overflow-y-auto pr-1">
                         {% for supplier in suppliers %}
                             <a href="{{ url_for('core.boss_cassiterite_supplier_ledger', supplier=supplier) }}" class="block px-3 py-2 text-sm font-medium rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-100">
@@ -50,7 +50,7 @@
                         {% endfor %}
                     </div>
                 {% else %}
-                    <p class="text-sm text-gray-500">Nta batanga bafite stock yanditswe kugeza ubu.</p>
+                    <p class="text-sm text-gray-500">Nta batanga gasegereti bafite stock yanditswe kugeza ubu.</p>
                 {% endif %}
             </section>
         </div>

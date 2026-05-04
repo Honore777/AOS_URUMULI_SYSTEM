@@ -349,10 +349,11 @@ def supplier_ledger(supplier):
         payment_amounts_total = 0.0
 
         payment_filters = [SupplierPayment.is_deleted.is_(False)]
-        supplier_conditions = [
-            SupplierPayment.supplier_id == getattr(supplier_row, 'id', None),
-            SupplierPayment.supplier_name == supplier_name,
-        ]
+        supplier_conditions = []
+        supplier_row_id = getattr(supplier_row, 'id', None)
+        if supplier_row_id is not None:
+            supplier_conditions.append(SupplierPayment.supplier_id == supplier_row_id)
+        supplier_conditions.append(SupplierPayment.supplier_name == supplier_name)
         if stock_ids:
             supplier_conditions.append(SupplierPayment.stock_id.in_(stock_ids))
 

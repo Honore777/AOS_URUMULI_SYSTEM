@@ -941,9 +941,25 @@ def boss_approve_payment(review_id: int):
                 payment_kind = (payload.get("payment_kind") or "settlement").strip().lower()
                 supplier_name = (payload.get("supplier_name") or review.customer or "").strip() or None
                 supplier_id = payload.get("supplier_id")
+                try:
+                    supplier_id = int(supplier_id) if supplier_id not in (None, "") else None
+                except Exception:
+                    supplier_id = None
 
                 if mineral in {"coltan", "copper"}:
-                    from copper.models import SupplierPayment, CopperStock
+                    from copper.models import SupplierPayment, CopperStock, CopperSupplier, CopperAdvanceAllocation
+
+                    def _resolve_copper_supplier_id(name):
+                        clean = (name or '').strip()
+                        if not clean:
+                            return None
+                        row = CopperSupplier.query.filter(func.lower(CopperSupplier.name) == clean.lower()).first()
+                        if row:
+                            return int(row.id)
+                        row = CopperSupplier(name=clean)
+                        db.session.add(row)
+                        db.session.flush()
+                        return int(row.id)
 
                     if payment_kind == "settlement":
                         stock_id = payload.get("stock_id")
@@ -955,6 +971,10 @@ def boss_approve_payment(review_id: int):
                         ).first_or_404()
                         if amount_rwf > stock.remaining_to_pay():
                             raise ValueError("Requested payment now exceeds remaining supplier debt.")
+
+                        if supplier_id is None:
+                            supplier_id = _resolve_copper_supplier_id(stock.supplier)
+
                         payment = SupplierPayment(
                             stock_id=stock.id,
                             supplier_id=supplier_id,
@@ -972,8 +992,30 @@ def boss_approve_payment(review_id: int):
                             advance_remaining=0.0,
                         )
                     else:
-                        remaining_advance = amount_rwf
-                        created_payments = []
+                        # Professional model: a single advance credit row + allocation joins.
+                        if supplier_id is None:
+                            supplier_id = _resolve_copper_supplier_id(supplier_name)
+
+                        payment = SupplierPayment(
+                            stock_id=None,
+                            supplier_id=supplier_id,
+                            supplier_name=supplier_name,
+                            amount=amount_rwf,
+                            input_amount=amount_input,
+                            currency=currency,
+                            exchange_rate=exchange_rate,
+                            amount_rwf=amount_rwf,
+                            method=method,
+                            reference=reference,
+                            note=note,
+                            payment_type='ADVANCE',
+                            is_advance=True,
+                            advance_remaining=float(amount_rwf or 0.0),
+                        )
+                        db.session.add(payment)
+                        db.session.flush()
+
+                        remaining_advance = float(amount_rwf or 0.0)
                         supplier_stocks = (
                             CopperStock.query
                             .filter(
@@ -984,6 +1026,7 @@ def boss_approve_payment(review_id: int):
                             .order_by(CopperStock.date.asc(), CopperStock.id.asc())
                             .all()
                         )
+
                         for stock in supplier_stocks:
                             if remaining_advance <= 0:
                                 break
@@ -991,50 +1034,36 @@ def boss_approve_payment(review_id: int):
                             if remaining_for_stock <= 0:
                                 continue
                             alloc = min(remaining_advance, remaining_for_stock)
-                            alloc_input = alloc / exchange_rate if currency == 'USD' and exchange_rate else alloc
-                            p = SupplierPayment(
+                            if alloc <= 0:
+                                continue
+                            db.session.add(CopperAdvanceAllocation(
                                 stock_id=stock.id,
-                                supplier_id=supplier_id,
-                                supplier_name=supplier_name,
-                                amount=alloc,
-                                input_amount=alloc_input,
-                                currency=currency,
-                                exchange_rate=exchange_rate,
-                                amount_rwf=alloc,
-                                method=method,
-                                reference=reference,
-                                note=note,
-                                payment_type='ADVANCE',
-                                is_advance=True,
-                                advance_remaining=0.0,
-                            )
-                            db.session.add(p)
-                            created_payments.append(p)
-                            remaining_advance -= alloc
-                        if remaining_advance > 0:
-                            remaining_input = remaining_advance / exchange_rate if currency == 'USD' and exchange_rate else remaining_advance
-                            p = SupplierPayment(
-                                stock_id=None,
-                                supplier_id=supplier_id,
-                                supplier_name=supplier_name,
-                                amount=remaining_advance,
-                                input_amount=remaining_input,
-                                currency=currency,
-                                exchange_rate=exchange_rate,
-                                amount_rwf=remaining_advance,
-                                method=method,
-                                reference=reference,
-                                note=note,
-                                payment_type='ADVANCE',
-                                is_advance=True,
-                                advance_remaining=remaining_advance,
-                            )
-                            db.session.add(p)
-                            created_payments.append(p)
-                        payment = created_payments[0] if created_payments else None
+                                supplier_payment_id=payment.id,
+                                applied_amount=float(alloc),
+                            ))
+                            remaining_advance -= float(alloc)
+
+                        payment.advance_remaining = max(float(remaining_advance), 0.0)
 
                 elif mineral == "cassiterite":
-                    from cassiterite.models import CassiteriteSupplierPayment, CassiteriteStock, CassiteriteAdvanceAllocation
+                    from cassiterite.models import (
+                        CassiteriteSupplierPayment,
+                        CassiteriteStock,
+                        CassiteriteAdvanceAllocation,
+                        CassiteriteSupplier,
+                    )
+
+                    def _resolve_cass_supplier_id(name):
+                        clean = (name or '').strip()
+                        if not clean:
+                            return None
+                        row = CassiteriteSupplier.query.filter(func.lower(CassiteriteSupplier.name) == clean.lower()).first()
+                        if row:
+                            return int(row.id)
+                        row = CassiteriteSupplier(name=clean)
+                        db.session.add(row)
+                        db.session.flush()
+                        return int(row.id)
 
                     if payment_kind == "settlement":
                         stock_id = payload.get("stock_id")
@@ -1046,6 +1075,10 @@ def boss_approve_payment(review_id: int):
                         ).first_or_404()
                         if amount_rwf > stock.remaining_to_pay():
                             raise ValueError("Requested payment now exceeds remaining supplier debt.")
+
+                        if supplier_id is None:
+                            supplier_id = _resolve_cass_supplier_id(stock.supplier)
+
                         payment = CassiteriteSupplierPayment(
                             stock_id=stock.id,
                             supplier_id=supplier_id,
@@ -1065,6 +1098,8 @@ def boss_approve_payment(review_id: int):
                     else:
                         # Model the advance as a single credit row, then apply it to
                         # existing supplier obligations via the allocation join table.
+                        if supplier_id is None:
+                            supplier_id = _resolve_cass_supplier_id(supplier_name)
                         payment = CassiteriteSupplierPayment(
                             stock_id=None,
                             supplier_id=supplier_id,
@@ -1693,7 +1728,7 @@ def _customer_batch_cards(mineral_type: str, customer: str) -> list[dict]:
         remaining = float(expected - paid)
 
         latest_plan = plans_for_batch[-1] if plans_for_batch else None
-        summary = _plan_summary(latest_plan) if latest_plan else {}
+        summary = _compute_plan_averages(latest_plan) if latest_plan else {}
 
         cards.append({
             'batch_id': batch_id,
@@ -1862,7 +1897,7 @@ def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None
     if visible_batches:
         plans = BulkOutputPlan.query.filter(BulkOutputPlan.batch_id.in_(visible_batches)).all()
         for p in plans:
-            plan_map[p.batch_id] = _plan_summary(p)
+            plan_map[p.batch_id] = _compute_plan_averages(p)
 
     # Build final ledger with running balance starting from start_balance
     ledger = []
@@ -2117,7 +2152,7 @@ def _batch_debt_options():
 
         p = plan_map.get((row['mineral_type'], row['batch_id']))
         if p:
-            summary = _plan_summary(p)
+            summary = _compute_plan_averages(p)
             row['moyenne'] = float(summary.get('moyenne') or 0.0)
             row['moyenne_nb'] = float(summary.get('moyenne_nb') or 0.0)
             row['qty'] = float(summary.get('total_qty') or 0.0)

@@ -54,19 +54,21 @@
                     <h2 class="text-sm font-bold text-slate-900 mb-4">{% if user_role == 'boss' %}Ibitabo by’Imyenda n’Ibyishyuwe{% else %}Debit / Credit Ledger{% endif %}</h2>
                     {% if ledger %}
                     <div class="overflow-auto">
-                        <table class="w-full text-xs">
+                        <table class="w-full text-sm">
                             <thead class="sticky top-0 bg-slate-800 text-white">
                                 <tr>
-                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Itariki{% else %}Date{% endif %}</th>
-                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Ubwoko bw’Amabuye{% else %}Mineral{% endif %}</th>
-                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Itsinda (Batch){% else %}Batch{% endif %}</th>
-                                    <th class="px-2 py-2 text-right">Qty (kg)</th>
-                                    <th class="px-2 py-2 text-right">Moyenne</th>
-                                    <th class="px-2 py-2 text-right">NB</th>
-                                    <th class="px-2 py-2 text-left">{% if user_role == 'boss' %}Ibisobanuro{% else %}Description{% endif %}</th>
-                                    <th class="px-2 py-2 text-right">{% if user_role == 'boss' %}Umwenda (Debit){% else %}Debit{% endif %}</th>
-                                    <th class="px-2 py-2 text-right">{% if user_role == 'boss' %}Ibyishyuwe (Credit){% else %}Credit{% endif %}</th>
-                                    <th class="px-2 py-2 text-right">{% if user_role == 'boss' %}Asigaye{% else %}Balance{% endif %}</th>
+                                    <th class="px-3 py-3 text-left">{% if user_role == 'boss' %}Itariki{% else %}Date{% endif %}</th>
+                                    <th class="px-3 py-3 text-left">{% if user_role == 'boss' %}Ubwoko bw’Amabuye{% else %}Mineral{% endif %}</th>
+                                    <th class="px-3 py-3 text-left">{% if user_role == 'boss' %}Itsinda (Batch){% else %}Batch{% endif %}</th>
+                                    <th class="px-3 py-3 text-right">Qty (kg)</th>
+                                    <th class="px-3 py-3 text-right">Moyenne</th>
+                                    {% if mineral_type != 'cassiterite' %}
+                                    <th class="px-3 py-3 text-right">NB</th>
+                                    {% endif %}
+                                    <th class="px-3 py-3 text-left">{% if user_role == 'boss' %}Ibisobanuro{% else %}Description{% endif %}</th>
+                                    <th class="px-3 py-3 text-right">{% if user_role == 'boss' %}Umwenda (Debit){% else %}Debit{% endif %}</th>
+                                    <th class="px-3 py-3 text-right">{% if user_role == 'boss' %}Ibyishyuwe (Credit){% else %}Credit{% endif %}</th>
+                                    <th class="px-3 py-3 text-right">{% if user_role == 'boss' %}Asigaye{% else %}Balance{% endif %}</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-200">
@@ -75,16 +77,18 @@
                                 {% set credit_amount = e.get('credit', 0) %}
                                 {% set balance_amount = e.get('balance', 0) %}
                                 <tr class="hover:bg-slate-50">
-                                    <td class="px-2 py-2 text-slate-600">{{ e.get('date').strftime('%Y-%m-%d %H:%M') if e.get('date') else '-' }}</td>
-                                    <td class="px-2 py-2 text-slate-700 uppercase">{{ e.get('mineral_type') or '-' }}</td>
-                                    <td class="px-2 py-2 text-slate-700">{{ e.get('batch_id') or '-' }}</td>
-                                    <td class="px-2 py-2 text-right text-slate-700">{{ '%.2f'|format(e.get('qty', 0) or 0) }}</td>
-                                    <td class="px-2 py-2 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne', 0) or 0) }}</td>
-                                    <td class="px-2 py-2 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne_nb', 0) or 0) }}</td>
-                                    <td class="px-2 py-2 font-semibold text-slate-900">{{ e.get('description') }}</td>
-                                    <td class="px-2 py-2 text-right font-bold text-red-700">{% if debit_amount %}{{ '{:,.0f}'.format(debit_amount or 0) }}{% else %}-{% endif %}</td>
-                                    <td class="px-2 py-2 text-right font-bold text-emerald-700">{% if credit_amount %}{{ '{:,.0f}'.format(credit_amount or 0) }}{% else %}-{% endif %}</td>
-                                    <td class="px-2 py-2 text-right font-bold text-slate-900">{{ '{:,.0f}'.format(balance_amount or 0) }}</td>
+                                    <td class="px-3 py-3 text-slate-600">{{ e.get('date').strftime('%Y-%m-%d %H:%M') if e.get('date') else '-' }}</td>
+                                    <td class="px-3 py-3 text-slate-700 uppercase">{{ e.get('mineral_type') or '-' }}</td>
+                                    <td class="px-3 py-3 text-slate-700">{{ e.get('batch_id') or '-' }}</td>
+                                    <td class="px-3 py-3 text-right text-slate-700">{{ '%.2f'|format(e.get('qty', 0) or 0) }}</td>
+                                    <td class="px-3 py-3 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne', 0) or 0) }}</td>
+                                    {% if mineral_type != 'cassiterite' %}
+                                    <td class="px-3 py-3 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne_nb', 0) or 0) }}</td>
+                                    {% endif %}
+                                    <td class="px-3 py-3 font-semibold text-slate-900">{{ e.get('description') }}</td>
+                                    <td class="px-3 py-3 text-right font-bold text-red-700">{% if debit_amount %}{{ '{:,.0f}'.format(debit_amount or 0) }}{% else %}-{% endif %}</td>
+                                    <td class="px-3 py-3 text-right font-bold text-emerald-700">{% if credit_amount %}{{ '{:,.0f}'.format(credit_amount or 0) }}{% else %}-{% endif %}</td>
+                                    <td class="px-3 py-3 text-right font-bold text-slate-900">{{ '{:,.0f}'.format(balance_amount or 0) }}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

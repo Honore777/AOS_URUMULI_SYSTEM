@@ -38,18 +38,18 @@
     <!-- Summary Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="bg-white shadow rounded-lg p-4">
-            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Umwenda (Stock Net yose){% else %}Total Owed (sum of stock net){% endif %}</p>
+            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Ayo tugomba kumwishyura{% else %}Total Owed (sum of stock net){% endif %}</p>
             <p class="text-2xl font-bold text-red-600">{{ '{:,.2f}'.format(total_owed or 0) }}</p>
         </div>
         <div class="bg-white shadow rounded-lg p-4">
-            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Amafaranga Yishyuwe (Advance + Settlements){% else %}Total Paid (advances + settlements){% endif %}</p>
+            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Amafaranga Twamwishyuye (Advance + Settlements){% else %}Total Paid (advances + settlements){% endif %}</p>
             <p class="text-2xl font-bold text-green-600">{{ '{:,.2f}'.format(total_paid or 0) }}</p>
         </div>
         <div class="bg-white shadow rounded-lg p-4">
-            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Asigaye / Cyangwa Umwenda wacu (niba ari negative){% else %}Balance (negative means supplier credit){% endif %}</p>
+            <p class="text-md text-gray-900">{% if user_role == 'boss' %}Asigaye / Cyangwa Ayo adusigayemo (niba ari negative){% else %}Balance (negative means supplier credit){% endif %}</p>
             <p class="text-2xl font-bold {{ 'text-gray-900' if (balance or 0) >= 0 else 'text-indigo-700' }}">{{ '{:,.2f}'.format(balance or 0) }}</p>
             {% if (balance or 0) < 0 %}
-                <p class="mt-1 text-sm text-indigo-700">{% if user_role == 'boss' %}Uyu mutanga afite amafaranga yacu (twamurenzeho).{% else %}Supplier owes you (advance credit).{% endif %}</p>
+                <p class="mt-1 text-sm text-indigo-700">{% if user_role == 'boss' %}Utanga ibicuruzwa atubereyemwo umwenda.{% else %}Supplier owes you (advance credit).{% endif %}</p>
             {% endif %}
         </div>
     </div>
