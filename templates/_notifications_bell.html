@@ -1,0 +1,70 @@
+{# Notifications bell (top bar) expects nav_notifications + nav_unread_notifications_count from context processor #}
+<div class="relative" data-notif-bell>
+  <button type="button" class="relative inline-flex items-center justify-center rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2 text-amber-700 hover:bg-amber-100 shadow-md" aria-label="Notifications" onclick="(function(btn){const root=btn.closest('[data-notif-bell]');const panel=root.querySelector('[data-notif-panel]');if(panel)panel.classList.toggle('hidden');})(this)">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M10.3 21a2 2 0 0 0 3.4 0" />
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+    </svg>
+    {% if nav_unread_notifications_count is defined and nav_unread_notifications_count|int > 0 %}
+      <span class="absolute -right-1 -top-1 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-red-600 px-1 text-xs font-bold text-white">
+        {{ nav_unread_notifications_count }}
+      </span>
+    {% endif %}
+  </button>
+
+  <div class="hidden absolute right-0 mt-2 w-96 max-w-[90vw] rounded-xl border border-slate-200 bg-white shadow-xl" data-notif-panel>
+    <div class="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
+      <div class="text-sm font-extrabold text-slate-900">Notifications</div>
+      <div class="ml-auto">
+        <form method="post" action="{{ url_for('core.mark_all_notifications_read') }}">
+          <button type="submit" class="text-xs font-semibold text-slate-600 hover:text-slate-900">Mark all read</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="max-h-80 overflow-y-auto">
+      {% if nav_notifications is defined and nav_notifications %}
+        <ul class="divide-y divide-slate-100">
+          {% for n in nav_notifications %}
+            <li class="px-4 py-3 text-sm">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-900 break-words">{{ n.message }}</div>
+                  <div class="mt-0.5 text-xs text-slate-500">{{ n.created_at|kigali_datetime('%Y-%m-%d %H:%M') if n.created_at else 'N/A' }}</div>
+                </div>
+                <div class="shrink-0">
+                  {% if n.read_at %}
+                    <span class="text-xs text-slate-400">Read</span>
+                  {% else %}
+                    <form method="post" action="{{ url_for('core.mark_notification_read', notification_id=n.id) }}">
+                      <button type="submit" class="text-xs font-semibold text-emerald-700 hover:text-emerald-900">Mark read</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="px-4 py-6 text-sm text-slate-500">No notifications yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const roots = document.querySelectorAll('[data-notif-bell]');
+    if (!roots || roots.length === 0) return;
+
+    document.addEventListener('click', function (e) {
+      roots.forEach(root => {
+        if (root.contains(e.target)) return;
+        const panel = root.querySelector('[data-notif-panel]');
+        if (panel && !panel.classList.contains('hidden')) {
+          panel.classList.add('hidden');
+        }
+      });
+    });
+  })();
+</script>

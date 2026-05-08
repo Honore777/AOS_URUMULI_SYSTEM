@@ -250,6 +250,28 @@
                 </a>
             {% endif %}
 
+            {% if current_user.role in ['accountant', 'boss', 'admin'] %}
+                <a href="{{ url_for('core.accountant_lenders') }}" class="module-card">
+                    <div class="module-icon" style="color:#1d4ed8;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 1v22"/>
+                            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                        </svg>
+                    </div>
+                    <h2>Pay Lenders</h2>
+                    <p>Request lender repayments for boss approval, then cashier disbursement, with a full loan ledger trail.</p>
+                    <div class="features">
+                        <ul class="feature-list">
+                            <li>Lender autocomplete</li>
+                            <li>Boss approval workflow</li>
+                            <li>Cashier disbursement</li>
+                            <li>Ledger + receipt trail</li>
+                        </ul>
+                    </div>
+                    <button class="btn" style="background-color:#1d4ed8;color:#ffffff;">Open Lenders →</button>
+                </a>
+            {% endif %}
+
                 {% if current_user.role == 'negotiator' %}
                     <a href="{{ url_for('core.customer_receipts') }}" class="module-card">
                         <div class="module-icon" style="color:#2563eb;">
@@ -271,6 +293,66 @@
                             </ul>
                         </div>
                         <button class="btn btn-coltan">Open Receipts →</button>
+                    </a>
+
+                    <a href="{{ url_for('core.customer_unearned_receipts') }}" class="module-card">
+                        <div class="module-icon" style="color:#0f766e;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M12 1v22"/>
+                                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                            </svg>
+                        </div>
+                        <h2>Customer Unearned</h2>
+                        <p>Record customer advances where stock is not yet delivered and later allocate them to batches.</p>
+                        <div class="features">
+                            <ul class="feature-list">
+                                <li>Advance without stock</li>
+                                <li>Allocation to batch later</li>
+                                <li>Audit trail + proof</li>
+                                <li>Cash handover to cashier</li>
+                            </ul>
+                        </div>
+                        <button class="btn" style="background-color:#0f766e;color:#ffffff;">Open Unearned →</button>
+                    </a>
+
+                    <a href="{{ url_for('core.consolidated_customer_ledger_index') }}" class="module-card">
+                        <div class="module-icon" style="color:#111827;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M3 3v18h18"/>
+                                <path d="M7 14l3-3 3 2 5-6"/>
+                            </svg>
+                        </div>
+                        <h2>Customer Ledgers</h2>
+                        <p>View consolidated customer ledgers across minerals with clickable references and balances.</p>
+                        <div class="features">
+                            <ul class="feature-list">
+                                <li>Consolidated (all minerals)</li>
+                                <li>Batch-level drill-down</li>
+                                <li>Clickable receipt references</li>
+                                <li>Running balance</li>
+                            </ul>
+                        </div>
+                        <button class="btn" style="background-color:#111827;color:#ffffff;">Open Ledgers →</button>
+                    </a>
+
+                    <a href="{{ url_for('core.negotiator_loans') }}" class="module-card">
+                        <div class="module-icon" style="color:#7c3aed;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M12 2v20"/>
+                                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                            </svg>
+                        </div>
+                        <h2>Loans</h2>
+                        <p>Request loan disbursements for boss approval and track the loan ledger entries.</p>
+                        <div class="features">
+                            <ul class="feature-list">
+                                <li>Boss approval workflow</li>
+                                <li>Cashier posting after approval</li>
+                                <li>Loan ledger entries</li>
+                                <li>Traceable references</li>
+                            </ul>
+                        </div>
+                        <button class="btn" style="background-color:#7c3aed;color:#ffffff;">Open Loans →</button>
                     </a>
                 {% endif %}
 

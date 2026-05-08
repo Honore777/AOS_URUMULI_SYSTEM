@@ -56,6 +56,10 @@
           <input name="customer" type="text" value="{{ customer_filter or '' }}" class="border px-2 py-1 rounded">
         </div>
         <div>
+          <label class="block text-sm font-semibold">Batch</label>
+          <input name="batch_id" type="text" value="{{ batch_filter or '' }}" class="border px-2 py-1 rounded" placeholder="e.g. SSM/TA/2496">
+        </div>
+        <div>
           <label class="block text-sm font-semibold">From</label>
           <input name="from" type="date" value="{{ date_from or '' }}" class="border px-2 py-1 rounded">
         </div>
@@ -74,39 +78,88 @@
     <!-- Existing outputs table -->
     <div class="mt-6 bg-white p-4 rounded shadow overflow-x-auto">
         <h2 class="font-bold mb-2">Recent Outputs</h2>
-        <table class="min-w-full table-auto border">
-            <thead>
-            <tr class="bg-gray-200">
-                <th class="px-4 py-2">Date</th>
-                <th class="px-4 py-2">Stock</th>
-                <th class="px-4 py-2">Customer</th>
-                <th class="px-4 py-2">Output(kg)</th>
-                <th class="px-4 py-2">output_amount</th>
-                <th class="px-4 py-2">amount_paid</th>
-                <th class="px-4 py-2">currency</th>
-                <th class="px-4 py-2">payment_stage</th>
-                <th class="px-4 py-2">debt_remaining</th>
-                <th class="px-4 py-2">Note</th>
-            </tr>
-            </thead>
-            <tbody>
-            {% for out in outputs %}
-                <tr class="border-b">
-                    <td class="px-4 py-2">{{ out.date.strftime("%Y-%m-%d") }}</td>
-                    <td class="px-4 py-2">{{ out.stock.voucher_no }}</td>
-                    <td class="px-4 py-2">{{ out.customer }}</td>
-                    <td class="px-4 py-2">{{ out.output_kg }}</td>
-                    <td class="px-4 py-2">{{ out.output_amount_rwf or out.output_amount }}</td>
-                    <td class="px-4 py-2">{{ out.amount_paid_rwf or out.amount_paid }}</td>
-                    <td class="px-4 py-2">{{ out.currency }}</td>
-                    <td class="px-4 py-2">{{ out.payment_stage }}</td>
-                    <td class="px-4 py-2">{{ out.debt_remaining }}</td>
-                    <td class="px-4 py-2">{{ out.note }}</td>
-                </tr>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
+        {% if batch_filter %}
+          <div class="mb-3 text-sm text-slate-700">
+            Showing details for batch <span class="font-bold">{{ batch_filter }}</span>
+            <a href="{{ url_for('copper.record_output') }}" class="ml-2 text-blue-600 hover:underline">Back to batches</a>
+          </div>
+          <table class="min-w-full table-auto border">
+              <thead>
+              <tr class="bg-gray-200">
+                  <th class="px-4 py-2">Date</th>
+                  <th class="px-4 py-2">Stock</th>
+                  <th class="px-4 py-2">Customer</th>
+                  <th class="px-4 py-2">Output(kg)</th>
+                  <th class="px-4 py-2">output_amount</th>
+                  <th class="px-4 py-2">amount_paid</th>
+                  <th class="px-4 py-2">currency</th>
+                  <th class="px-4 py-2">payment_stage</th>
+                  <th class="px-4 py-2">debt_remaining</th>
+                  <th class="px-4 py-2">Note</th>
+              </tr>
+              </thead>
+              <tbody>
+              {% for out in outputs %}
+                  <tr class="border-b">
+                      <td class="px-4 py-2">{{ out.date.strftime("%Y-%m-%d") if out.date else '-' }}</td>
+                      <td class="px-4 py-2">{{ out.stock.voucher_no if out.stock else '-' }}</td>
+                      <td class="px-4 py-2">{{ out.customer }}</td>
+                      <td class="px-4 py-2">{{ out.output_kg }}</td>
+                      <td class="px-4 py-2">{{ out.output_amount_rwf or out.output_amount }}</td>
+                      <td class="px-4 py-2">{{ out.amount_paid_rwf or out.amount_paid }}</td>
+                      <td class="px-4 py-2">{{ out.currency }}</td>
+                      <td class="px-4 py-2">{{ out.payment_stage }}</td>
+                      <td class="px-4 py-2">{{ out.debt_remaining }}</td>
+                      <td class="px-4 py-2">{{ out.note }}</td>
+                  </tr>
+              {% endfor %}
+              </tbody>
+          </table>
+        {% else %}
+          <table class="min-w-full table-auto border">
+              <thead>
+              <tr class="bg-gray-200">
+                  <th class="px-4 py-2">Last Date</th>
+                  <th class="px-4 py-2">Batch</th>
+                  <th class="px-4 py-2">Customer</th>
+                  <th class="px-4 py-2 text-right">Total Output(kg)</th>
+                  <th class="px-4 py-2 text-right">Paid</th>
+                  <th class="px-4 py-2 text-right">Remaining</th>
+                  <th class="px-4 py-2 text-right">Action</th>
+              </tr>
+              </thead>
+              <tbody>
+              {% for b in (batch_summaries or []) %}
+                  <tr class="border-b">
+                      <td class="px-4 py-2">{{ b.last_date.strftime('%Y-%m-%d') if b.last_date else '-' }}</td>
+                      <td class="px-4 py-2 font-mono text-sm">{{ b.batch_id }}</td>
+                      <td class="px-4 py-2">{{ b.customer or '-' }}</td>
+                      <td class="px-4 py-2 text-right">{{ '%.2f'|format(b.total_kg or 0) }}</td>
+                      <td class="px-4 py-2 text-right text-green-700">{{ '{:,.0f}'.format(b.total_paid or 0) }}</td>
+                      <td class="px-4 py-2 text-right font-semibold {{ 'text-red-700' if (b.total_debt or 0) > 0 else 'text-slate-700' }}">{{ '{:,.0f}'.format(b.total_debt or 0) }}</td>
+                      <td class="px-4 py-2 text-right">
+                        <a class="inline-flex items-center rounded bg-blue-600 px-3 py-1 text-white text-xs font-semibold hover:bg-blue-700"
+                           href="{{ url_for('copper.record_output', batch_id=b.batch_id) }}">
+                          View Details
+                        </a>
+                      </td>
+                  </tr>
+              {% endfor %}
+
+              {% for out in (single_outputs or []) %}
+                  <tr class="border-b bg-slate-50">
+                      <td class="px-4 py-2">{{ out.date.strftime("%Y-%m-%d") if out.date else '-' }}</td>
+                      <td class="px-4 py-2 font-mono text-sm">-</td>
+                      <td class="px-4 py-2">{{ out.customer or '-' }}</td>
+                      <td class="px-4 py-2 text-right">{{ out.output_kg or 0 }}</td>
+                      <td class="px-4 py-2 text-right text-green-700">{{ '{:,.0f}'.format(out.amount_paid_rwf or out.amount_paid or 0) }}</td>
+                      <td class="px-4 py-2 text-right font-semibold {{ 'text-red-700' if (out.debt_remaining or 0) > 0 else 'text-slate-700' }}">{{ '{:,.0f}'.format(out.debt_remaining or 0) }}</td>
+                      <td class="px-4 py-2 text-right text-xs text-slate-500">No batch</td>
+                  </tr>
+              {% endfor %}
+              </tbody>
+          </table>
+        {% endif %}
     </div>
 </div>
 

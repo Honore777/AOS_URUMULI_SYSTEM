@@ -11,7 +11,7 @@ import pandas as pd
 from config import db
 from copper.models import CopperStock, CopperOutput, SupplierPayment, CopperAdvanceAllocation
 from copper import copper_bp
-from core.models import Notification, create_notification, User, fetch_user_notifications, BulkOutputPlan, BulkPlanStatus, CustomerReceipt
+from core.models import Notification, create_notification, User, fetch_user_notifications, BulkOutputPlan, BulkPlanStatus, CustomerReceipt, StockChangeLog
 from sqlalchemy.orm import joinedload, selectinload
 from flask_login import current_user
 from sqlalchemy import func
@@ -89,6 +89,18 @@ def delete_stock(stock_id):
         stock = CopperStock.query.get_or_404(stock_id)
         voucher = stock.voucher_no
         try:
+            before_snapshot = {
+                'id': int(stock.id),
+                'date': str(stock.date) if getattr(stock, 'date', None) else None,
+                'voucher_no': stock.voucher_no,
+                'supplier': stock.supplier,
+                'input_kg': float(stock.input_kg or 0.0),
+                'percentage': float(stock.percentage or 0.0),
+                'nb': float(getattr(stock, 'nb', 0.0) or 0.0),
+                'net_balance': float(getattr(stock, 'net_balance', 0.0) or 0.0),
+                'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
+            }
+
             # Compute and remove this stock's contribution from the aggregate
             try:
                 contrib_q, contrib_wp, contrib_t = CopperStock.contribution(stock)
@@ -100,6 +112,22 @@ def delete_stock(stock_id):
             stock.deleted_by_id = getattr(current_user, 'id', None)
             stock.delete_reason = request.form.get('delete_reason') or 'Deleted from dashboard.'
             db.session.add(stock)
+
+            try:
+                log_row = StockChangeLog(
+                    mineral_type='copper',
+                    stock_id=int(stock.id),
+                    action='DELETE',
+                    reason=stock.delete_reason,
+                    before_json=before_snapshot,
+                    after_json={'is_deleted': True},
+                    created_by_id=getattr(current_user, 'id', None),
+                )
+                db.session.add(log_row)
+                db.session.flush()
+            except Exception:
+                logger.exception('delete_stock: failed to create StockChangeLog')
+                log_row = None
 
             # Apply delta to the single-row aggregate (remove contribution)
             try:
@@ -115,8 +143,8 @@ def delete_stock(stock_id):
                     user_id=boss_id,
                     type_="stock_delete",
                     message=f"Accountant {getattr(current_user, 'username', 'unknown')} deleted copper stock {voucher}.",
-                    related_type="copper_stock",
-                    related_id=stock_id
+                    related_type="stock_change_log" if log_row else "copper_stock",
+                    related_id=(int(getattr(log_row, 'id', 0)) if log_row else stock_id)
                 )
 
             db.session.commit()
@@ -148,6 +176,21 @@ def edit_stock(stock_id):
     try:
         logger.info("edit_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CopperStock.query.get_or_404(stock_id)
+
+        before_snapshot = {
+            'id': int(stock.id),
+            'date': str(stock.date) if getattr(stock, 'date', None) else None,
+            'voucher_no': stock.voucher_no,
+            'supplier': stock.supplier,
+            'input_kg': float(stock.input_kg or 0.0),
+            'percentage': float(stock.percentage or 0.0),
+            'nb': float(getattr(stock, 'nb', 0.0) or 0.0),
+            'u_price': float(getattr(stock, 'u_price', 0.0) or 0.0),
+            'exchange': float(getattr(stock, 'exchange', 0.0) or 0.0),
+            'transport_tag': float(getattr(stock, 'transport_tag', 0.0) or 0.0),
+        }
+
+        change_reason = (request.form.get('change_reason') or '').strip() or None
 
         # Parse incoming fields
         date = _parse_date(request.form.get("date")) or stock.date
@@ -212,6 +255,35 @@ def edit_stock(stock_id):
             except Exception:
                 logger.exception("edit_stock: failed to apply aggregate delta")
 
+            log_row = None
+            try:
+                after_snapshot = {
+                    'id': int(stock.id),
+                    'date': str(stock.date) if getattr(stock, 'date', None) else None,
+                    'voucher_no': stock.voucher_no,
+                    'supplier': stock.supplier,
+                    'input_kg': float(stock.input_kg or 0.0),
+                    'percentage': float(stock.percentage or 0.0),
+                    'nb': float(getattr(stock, 'nb', 0.0) or 0.0),
+                    'u_price': float(getattr(stock, 'u_price', 0.0) or 0.0),
+                    'exchange': float(getattr(stock, 'exchange', 0.0) or 0.0),
+                    'transport_tag': float(getattr(stock, 'transport_tag', 0.0) or 0.0),
+                }
+                log_row = StockChangeLog(
+                    mineral_type='copper',
+                    stock_id=int(stock.id),
+                    action='EDIT',
+                    reason=change_reason,
+                    before_json=before_snapshot,
+                    after_json=after_snapshot,
+                    created_by_id=getattr(current_user, 'id', None),
+                )
+                db.session.add(log_row)
+                db.session.flush()
+            except Exception:
+                logger.exception('edit_stock: failed to create StockChangeLog')
+                log_row = None
+
             # Notify all bosses (fetch ids only to avoid hydrating full User objects)
             boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
             for (boss_id,) in boss_rows:
@@ -219,11 +291,10 @@ def edit_stock(stock_id):
                     user_id=boss_id,
                     type_="stock_edit",
                     message=f"Accountant {getattr(current_user, 'username', 'unknown')} edited copper stock {voucher}.",
-                    related_type="copper_stock",
-                    related_id=stock_id
+                    related_type="stock_change_log" if log_row else "copper_stock",
+                    related_id=(int(getattr(log_row, 'id', 0)) if log_row else stock_id)
                 )
 
-            db.session.commit()
             db.session.commit()
             # Invalidate dashboard cache so clients see updated aggregates immediately
             try:
@@ -251,22 +322,23 @@ def edit_stock(stock_id):
 def add_stock():
     """Add new copper stock entry"""
     from copper.forms import CopperStockForm
+    from utils import close_name_matches, normalize_counterparty_name
 
     form = CopperStockForm()
     advance_choices = []
+    from core.models import UnifiedSupplierAdvance
     advance_rows = (
         db.session.query(
-            SupplierPayment.id,
-            SupplierPayment.supplier_name,
-            SupplierPayment.advance_remaining,
-            SupplierPayment.paid_at,
+            UnifiedSupplierAdvance.id,
+            UnifiedSupplierAdvance.supplier_name,
+            UnifiedSupplierAdvance.advance_remaining,
+            UnifiedSupplierAdvance.paid_at,
         )
         .filter(
-            SupplierPayment.is_advance.is_(True),
-            SupplierPayment.is_deleted.is_(False),
-            SupplierPayment.advance_remaining > 0,
+            UnifiedSupplierAdvance.is_deleted.is_(False),
+            UnifiedSupplierAdvance.advance_remaining > 0,
         )
-        .order_by(SupplierPayment.paid_at.desc(), SupplierPayment.id.desc())
+        .order_by(UnifiedSupplierAdvance.paid_at.desc(), UnifiedSupplierAdvance.id.desc())
         .all()
     )
     for row in advance_rows:
@@ -280,6 +352,7 @@ def add_stock():
             date = _parse_date(request.form.get("date")) or datetime.utcnow().date()
             voucher = request.form.get("voucher_no")
             supplier = request.form.get("supplier")
+            supplier_norm = normalize_counterparty_name(supplier)
             input_kg = float(request.form.get("input_kg") or 0)
             percentage = float(request.form.get("percentage") or 0)
             nb = float(request.form.get("nb") or 0)
@@ -311,6 +384,51 @@ def add_stock():
             if existing:
                 return jsonify({"error": f"Voucher number {voucher} already exists."}), 400
 
+            confirm_new_supplier = (request.form.get('confirm_new_supplier') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+            try:
+                from copper.models import CopperSupplier
+                from cassiterite.models import CassiteriteSupplier
+                existing_names = [r[0] for r in db.session.query(CopperSupplier.name).filter(CopperSupplier.is_deleted.is_(False)).all()]
+                existing_names += [r[0] for r in db.session.query(CassiteriteSupplier.name).filter(CassiteriteSupplier.is_deleted.is_(False)).all()]
+            except Exception:
+                existing_names = []
+
+            if supplier_norm:
+                exact_exists = any(normalize_counterparty_name(n) == supplier_norm for n in existing_names)
+                if not exact_exists:
+                    close = close_name_matches(supplier, existing_names, limit=5, cutoff=0.86)
+                    if close and not confirm_new_supplier:
+                        flash(f"Supplier name looks similar to existing supplier(s): {', '.join(close[:3])}. Select the existing supplier or confirm you want to create a new one.", "warning")
+                        return render_template("copper/add_stock.html", form=form)
+
+            # Ensure supplier exists in master tables so it becomes selectable everywhere.
+            clean_supplier = (supplier or '').strip()
+            if clean_supplier:
+                try:
+                    from sqlalchemy import func
+                    from copper.models import CopperSupplier
+                    from cassiterite.models import CassiteriteSupplier
+
+                    exists_copper = (
+                        CopperSupplier.query
+                        .filter(CopperSupplier.is_deleted.is_(False), func.lower(func.trim(CopperSupplier.name)) == clean_supplier.lower())
+                        .first()
+                    )
+                    if not exists_copper:
+                        db.session.add(CopperSupplier(name=clean_supplier))
+                        db.session.flush()
+
+                    exists_cass = (
+                        CassiteriteSupplier.query
+                        .filter(CassiteriteSupplier.is_deleted.is_(False), func.lower(func.trim(CassiteriteSupplier.name)) == clean_supplier.lower())
+                        .first()
+                    )
+                    if not exists_cass:
+                        db.session.add(CassiteriteSupplier(name=clean_supplier))
+                        db.session.flush()
+                except Exception:
+                    pass
+
             # Create stock object
             s = CopperStock(
                 date=date,
@@ -337,13 +455,19 @@ def add_stock():
                 db.session.flush()
 
                 if requested_advance_ids:
+                    from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+
+                    def _norm(nm):
+                        return ' '.join((nm or '').strip().lower().split())
+
                     advance_rows = (
-                        SupplierPayment.query.filter(
-                            SupplierPayment.id.in_(requested_advance_ids),
-                            SupplierPayment.is_advance.is_(True),
-                            SupplierPayment.is_deleted.is_(False),
+                        UnifiedSupplierAdvance.query
+                        .filter(
+                            UnifiedSupplierAdvance.id.in_(requested_advance_ids),
+                            UnifiedSupplierAdvance.is_deleted.is_(False),
+                            UnifiedSupplierAdvance.advance_remaining > 0,
                         )
-                        .order_by(SupplierPayment.paid_at.asc(), SupplierPayment.id.asc())
+                        .order_by(UnifiedSupplierAdvance.paid_at.asc(), UnifiedSupplierAdvance.id.asc())
                         .with_for_update()
                         .all()
                     )
@@ -354,7 +478,7 @@ def add_stock():
 
                     total_allocated = 0.0
                     for advance_payment in advance_rows:
-                        if advance_payment.supplier_name and advance_payment.supplier_name.strip().lower() != supplier.strip().lower():
+                        if _norm(advance_payment.supplier_name) != _norm(supplier):
                             flash("Selected advances must belong to the same supplier as the stock.", "danger")
                             db.session.rollback()
                             return render_template("copper/add_stock.html", form=form)
@@ -372,11 +496,27 @@ def add_stock():
 
                         total_allocated += apply_amount
                         advance_payment.advance_remaining = max(advance_available - apply_amount, 0.0)
-                        db.session.add(CopperAdvanceAllocation(
-                            stock_id=s.id,
-                            supplier_payment_id=advance_payment.id,
-                            applied_amount=apply_amount,
-                        ))
+                        if (advance_payment.source_mineral_type or '').strip().lower() not in {'copper', 'coltan'}:
+                            db.session.add(UnifiedSupplierAdvanceAllocation(
+                                advance_id=advance_payment.id,
+                                stock_mineral_type='copper',
+                                stock_id=int(s.id),
+                                applied_amount=float(apply_amount),
+                            ))
+
+                        if (advance_payment.source_mineral_type or '').strip().lower() in {'copper', 'coltan'} and advance_payment.source_payment_id:
+                            try:
+                                src = SupplierPayment.query.get(int(advance_payment.source_payment_id))
+                                if src and src.is_advance and not src.is_deleted:
+                                    src.advance_remaining = float(advance_payment.advance_remaining or 0.0)
+                                    db.session.add(src)
+                                    db.session.add(CopperAdvanceAllocation(
+                                        stock_id=s.id,
+                                        supplier_payment_id=src.id,
+                                        applied_amount=float(apply_amount),
+                                    ))
+                            except Exception:
+                                pass
 
                     if total_allocated <= 0 and requested_advance_ids:
                         flash("Selected advances could not be applied to this stock.", "danger")
@@ -1309,18 +1449,25 @@ SELECT
         if 'rows' in locals() and isinstance(rows, list) and rows and 'id' in rows[0]:
             for r in rows:
                 dt = r.get('date')
+                input_kg_val = float(r.get('input_kg') or 0)
+                transport_val = float(r.get('transport_tag') or 0)
+                tot_amount_tag_val = r.get('tot_amount_tag')
+                computed_tag_total = transport_val * input_kg_val
+                if tot_amount_tag_val is None or float(tot_amount_tag_val or 0) <= 0:
+                    tot_amount_tag_val = computed_tag_total
                 stocks_data.append({
                     'id': int(r.get('id')),
                     'date': dt.strftime('%Y-%m-%d') if dt is not None else None,
                     'voucher_no': r.get('voucher_no'),
                     'supplier': r.get('supplier'),
-                    'input_kg': round(float(r.get('input_kg') or 0), 2),
+                    'input_kg': round(input_kg_val, 2),
                     'percentage': round(float(r.get('percentage') or 0), 2),
                     'nb': round(float(r.get('nb') or 0), 2),
                     'u_price': round(float(r.get('u_price') or 0), 2),
                     'amount': round(float(r.get('amount') or 0), 2),
                     'exchange': round(float(r.get('exchange') or 0), 2),
-                    'transport_tag': round(float(r.get('transport_tag') or 0), 2),
+                    'transport_tag': round(transport_val, 2),
+                    'tot_amount_tag': round(float(tot_amount_tag_val or 0), 2),
                     'rma': round(float(r.get('rma') or 0), 2),
                     'inkomane': round(float(r.get('inkomane') or 0), 2),
                     'local_balance': round(float(r.get('local_balance') or 0), 2),
@@ -1336,18 +1483,25 @@ SELECT
         else:
             # Fallback to ORM objects
             for stock in filtered_stocks:
+                input_kg_val = float(stock.input_kg or 0)
+                transport_val = float(stock.transport_tag or 0)
+                tot_amount_tag_val = stock.tot_amount_tag
+                computed_tag_total = transport_val * input_kg_val
+                if tot_amount_tag_val is None or float(tot_amount_tag_val or 0) <= 0:
+                    tot_amount_tag_val = computed_tag_total
                 stocks_data.append({
                     'id': stock.id,
                     'date': stock.date.strftime('%Y-%m-%d'),
                     'voucher_no': stock.voucher_no,
                     'supplier': stock.supplier,
-                    'input_kg': round(stock.input_kg or 0, 2),
+                    'input_kg': round(input_kg_val, 2),
                     'percentage': round(stock.percentage or 0, 2),
                     'nb': round(stock.nb or 0, 2),
                     'u_price': round(stock.u_price or 0, 2),
                     'amount': round(stock.amount or 0, 2),
                     'exchange': round(stock.exchange or 0, 2),
-                    'transport_tag': round(stock.transport_tag or 0, 2),
+                    'transport_tag': round(transport_val, 2),
+                    'tot_amount_tag': round(float(tot_amount_tag_val or 0), 2),
                     'rma': round(stock.rma or 0, 2),
                     'inkomane': round(stock.inkomane or 0, 2),
                     'local_balance': round(stock.local_balance or 0, 2),

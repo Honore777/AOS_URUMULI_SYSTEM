@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lenders</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-slate-800">Pay Lenders</h1>
+            <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="text-lg font-extrabold text-slate-900">Request Lender Payment (Boss Approval)</h2>
+            <form method="post" action="{{ url_for('core.accountant_request_lender_payment') }}" class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div class="md:col-span-2">
+                    <label class="mb-1 block text-sm font-semibold text-slate-700">Lender</label>
+                    <div class="relative">
+                        <input id="lender-name" name="lender_name" type="text" autocomplete="off" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" placeholder="Start typing lender name" required>
+                        <div id="lender-suggestions" class="absolute z-20 mt-1 hidden w-full rounded-xl border border-slate-200 bg-white shadow-lg"></div>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-semibold text-slate-700">Amount (RWF)</label>
+                    <input name="amount" type="number" step="0.01" min="0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" placeholder="0.00" required>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-semibold text-slate-700">Method</label>
+                    <select name="method" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" required>
+                        <option value="CASH">Cash</option>
+                        <option value="BANK">Bank</option>
+                        <option value="MOMO">MoMo</option>
+                    </select>
+                </div>
+
+                <div class="md:col-span-2">
+                    <label class="mb-1 block text-sm font-semibold text-slate-700">Note</label>
+                    <input name="note" type="text" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" placeholder="Optional">
+                </div>
+
+                <div class="md:col-span-2">
+                    <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-lg transition hover:bg-slate-800">Submit Request</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table class="min-w-full border-collapse">
+                <thead class="bg-slate-900 text-white">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Lender</th>
+                        <th class="px-4 py-3 text-right text-sm font-semibold">Outstanding (RWF)</th>
+                        <th class="px-4 py-3 text-right text-sm font-semibold">Disbursed (RWF)</th>
+                        <th class="px-4 py-3 text-right text-sm font-semibold">Repaid (RWF)</th>
+                        <th class="px-4 py-3 text-right text-sm font-semibold">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200">
+                    {% for row in lenders %}
+                    <tr class="hover:bg-slate-50 text-sm">
+                        <td class="px-4 py-3 text-slate-800 font-semibold">{{ row.lender_name }}</td>
+                        <td class="px-4 py-3 text-right text-slate-800">{{ '{:,.2f}'.format(row.outstanding_rwf or 0) }}</td>
+                        <td class="px-4 py-3 text-right text-slate-800">{{ '{:,.2f}'.format(row.disbursed_rwf or 0) }}</td>
+                        <td class="px-4 py-3 text-right text-slate-800">{{ '{:,.2f}'.format(row.repaid_rwf or 0) }}</td>
+                        <td class="px-4 py-3 text-right">
+                            <a href="{{ url_for('core.lender_loans', lender_norm=row.lender_name_norm) }}" class="text-xs font-bold text-indigo-700 hover:text-indigo-900">Ledger</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const input = document.getElementById('lender-name');
+            const box = document.getElementById('lender-suggestions');
+            if (!input || !box) return;
+
+            let lastQuery = '';
+
+            function hide() {
+                box.classList.add('hidden');
+                box.innerHTML = '';
+            }
+
+            function show(items) {
+                if (!items || items.length === 0) {
+                    hide();
+                    return;
+                }
+                box.innerHTML = items.map((nm, idx) => (
+                    `<button type="button" data-idx="${idx}" data-name="${encodeURIComponent(nm)}" class="block w-full px-3 py-2 text-left text-sm hover:bg-indigo-50">${nm}</button>`
+                )).join('');
+                box.classList.remove('hidden');
+            }
+
+            async function fetchLenders(q) {
+                const res = await fetch(`{{ url_for('core.lenders_autocomplete') }}?q=${encodeURIComponent(q)}`);
+                if (!res.ok) return [];
+                const data = await res.json();
+                return data && Array.isArray(data.results) ? data.results : [];
+            }
+
+            input.addEventListener('input', async () => {
+                const q = (input.value || '').trim();
+                lastQuery = q;
+                if (q.length < 2) {
+                    hide();
+                    return;
+                }
+                const items = await fetchLenders(q);
+                if (lastQuery !== q) return;
+                show(items);
+            });
+
+            box.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-name]');
+                if (!btn) return;
+                const nm = decodeURIComponent(btn.getAttribute('data-name') || '');
+                if (nm) input.value = nm;
+                hide();
+            });
+
+            document.addEventListener('click', (e) => {
+                if (e.target === input || box.contains(e.target)) return;
+                hide();
+            });
+        })();
+    </script>
+</body>
+</html>

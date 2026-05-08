@@ -15,7 +15,7 @@ copper_bp = Blueprint(
 
 @copper_bp.before_request
 @login_required
-@role_required('accountant')
+@role_required('accountant', 'cashier', 'boss', 'admin')
 def copper_role_protect():
     pass
 # Import routes module after blueprint is defined

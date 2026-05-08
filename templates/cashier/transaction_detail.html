@@ -1,0 +1,63 @@
+{% extends 'cashier/base.html' %}
+
+{% block title %}Cash Transaction {{ tx.id }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control</p>
+        <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Cash Transaction Detail</h1>
+        <p class="mt-2 text-sm text-slate-600">Reference: <span class="font-bold">{{ tx.reference or '-' }}</span></p>
+    </div>
+
+    <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="grid gap-4 sm:grid-cols-2 text-sm">
+            <div><span class="font-semibold text-slate-700">Transaction ID:</span> {{ tx.id }}</div>
+            <div><span class="font-semibold text-slate-700">Created at:</span> {{ tx.created_at }}</div>
+            <div><span class="font-semibold text-slate-700">Direction:</span> {{ tx.direction }}</div>
+            <div><span class="font-semibold text-slate-700">Amount:</span> {{ '{:,.2f}'.format(tx.amount or 0) }} {{ tx.currency or 'RWF' }}</div>
+            <div><span class="font-semibold text-slate-700">Account:</span> {{ account.name if account else '-' }}</div>
+            <div><span class="font-semibold text-slate-700">Created by:</span> {{ created_by.username if created_by else '-' }}</div>
+            <div class="sm:col-span-2"><span class="font-semibold text-slate-700">Note:</span> {{ tx.note or '-' }}</div>
+        </div>
+
+        {% if siblings %}
+        <div class="mt-8 overflow-hidden rounded-2xl border border-slate-200">
+            <div class="bg-slate-50 px-4 py-3">
+                <h2 class="text-sm font-extrabold text-slate-900">Related Transactions (Same Reference)</h2>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-white text-slate-700">
+                        <tr>
+                            <th class="px-4 py-3 text-left font-semibold">Date</th>
+                            <th class="px-4 py-3 text-left font-semibold">Account</th>
+                            <th class="px-4 py-3 text-left font-semibold">Direction</th>
+                            <th class="px-4 py-3 text-right font-semibold">Amount</th>
+                            <th class="px-4 py-3 text-left font-semibold">Link</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 bg-white">
+                        {% for s in siblings %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-4 py-3 text-slate-600">{{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '-' }}</td>
+                            <td class="px-4 py-3 font-medium text-slate-900">{{ s.account.name if s.account else 'N/A' }}</td>
+                            <td class="px-4 py-3 text-slate-700">{{ s.direction }}</td>
+                            <td class="px-4 py-3 text-right font-semibold text-slate-900">{{ '{:,.2f}'.format(s.amount or 0) }} {{ s.currency or 'RWF' }}</td>
+                            <td class="px-4 py-3">
+                                <a class="font-semibold text-emerald-700 hover:text-emerald-900" href="{{ url_for('core.cash_transaction_detail', tx_id=s.id) }}">tx:{{ s.id }}</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="mt-6">
+            <a href="{{ url_for('core.cashier_transactions') }}" class="inline-flex items-center rounded-xl bg-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-300">Back to Transactions</a>
+        </div>
+    </section>
+</div>
+{% endblock %}

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Supplier Settlement Statement</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <style>
+        @media print {
+            @page { size: A4 portrait; margin: 10mm; }
+            .no-print { display: none !important; }
+            body { background: white; margin: 0; }
+            .form-wrapper { width: 100%; margin: 0; padding: 0; }
+        }
+        .form-wrapper { max-width: 900px; margin: 0 auto; padding: 20px; }
+        .header-band { background: linear-gradient(90deg, #0f766e 0%, #1e293b 100%); padding: 1rem; display: flex; align-items: center; }
+        .header-band img { height: 3rem; margin-right: 1rem; }
+        .header-text h2 { color: white; font-size: 1.125rem; font-weight: bold; }
+        .header-text p { color: white; font-size: 0.75rem; }
+        .form-table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        .form-table th { background-color: #f3f4f6; text-align: left; padding: 0.55rem; border: 1px solid #d1d5db; font-weight: 700; font-size: 0.85rem; }
+        .form-table td { padding: 0.55rem; border: 1px solid #d1d5db; font-size: 0.85rem; }
+        .form-table tr:nth-child(even) { background-color: #fafafa; }
+        .section-title { font-weight: 800; font-size: 0.95rem; margin-top: 1.25rem; margin-bottom: 0.35rem; color: #0f172a; border-bottom: 2px solid #0f766e; padding-bottom: 0.35rem; }
+        .signature-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1.75rem; margin-top: 2.5rem; }
+        .signature-box { text-align: center; }
+        .signature-line { border-top: 1px solid #374151; width: 100%; margin-bottom: 0.5rem; }
+        .signature-label { font-size: 0.8rem; font-weight: 700; color: #374151; }
+        .signature-date { font-size: 0.75rem; color: #6b7280; }
+        .detail-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+        .detail-label { font-size: 0.8rem; font-weight: 700; color: #64748b; }
+        .detail-value { font-size: 0.9rem; color: #0f172a; font-weight: 700; }
+    </style>
+</head>
+<body class="bg-white">
+    <div class="form-wrapper shadow-lg border border-gray-300">
+        <div class="header-band">
+            <img src="/static/logo.png" alt="Company Logo" />
+            <div class="header-text">
+                <h2>INYANDIKO Y'IHITAMO - UTANGA IBICURUZWA</h2>
+                <p>Igiteranyo cy'amavoucher / alote mu Coltan & Gasegereti</p>
+            </div>
+        </div>
+
+        <div style="padding: 1.25rem; background-color: #f8fafc; border-bottom: 1px solid #e5e7eb;">
+            <div class="detail-row">
+                <div>
+                    <div class="detail-label">Izina ry'Utanga Ibicuruzwa:</div>
+                    <div class="detail-value">{{ supplier_name }}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Itariki y'Inyandiko:</div>
+                    <div class="detail-value">{{ statement_date.strftime('%d %B %Y') if statement_date else '' }}</div>
+                </div>
+            </div>
+            <div class="detail-row">
+                <div>
+                    <div class="detail-label">Inzira:</div>
+                    <div class="detail-value">{{ reference or ('supplier-statement:' ~ supplier_norm) }}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Ubwanya:</div>
+                    <div class="detail-value">Amavoucher / alote atari gusigara gusa</div>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding: 1.25rem;">
+            <div class="section-title">UBWANYA BW'IMARI YACIKIRIWE (BRI MU MAVOUCHER / ALOTE)</div>
+            <table class="form-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Mineral</th>
+                        <th>Voucher / Lot</th>
+                        <th style="text-align:right;">Input (kg)</th>
+                        <th style="text-align:right;">Gross</th>
+                        <th style="text-align:right;">Transport</th>
+                        <th style="text-align:right;">RMA</th>
+                        <th style="text-align:right;">Inkomane</th>
+                        <th style="text-align:right;">RRA 3%</th>
+                        <th style="text-align:right;">Net</th>
+                        <th style="text-align:right;">Outstanding</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                    <tr>
+                        <td>{{ r.date.strftime('%Y-%m-%d') if r.date else '-' }}</td>
+                        <td class="font-bold">{{ r.mineral }}</td>
+                        <td>{{ r.voucher_no }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.input_kg or 0) }}</td>
+                        <td style="text-align:right; font-weight: 700;">{{ '{:,.2f}'.format(r.gross or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.transport or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.rma or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.inkomane or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.rra_3_percent or 0) }}</td>
+                        <td style="text-align:right; font-weight: 800; color: #0f766e;">{{ '{:,.2f}'.format(r.net or 0) }}</td>
+                        <td style="text-align:right; font-weight: 800; color: #dc2626;">{{ '{:,.2f}'.format(r.outstanding or 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <div class="section-title">SUMMARY TOTALS</div>
+            <table class="form-table">
+                <tr>
+                    <th>Total Gross</th>
+                    <td style="text-align:right; font-weight: 800;">{{ '{:,.2f}'.format(summary.gross or 0) }} RWF</td>
+                    <th>Total Deductions</th>
+                    <td style="text-align:right; font-weight: 800; color: #dc2626;">{{ '{:,.2f}'.format(summary.deductions or 0) }} RWF</td>
+                </tr>
+                <tr>
+                    <th>Total Net</th>
+                    <td style="text-align:right; font-weight: 900; color: #0f766e;">{{ '{:,.2f}'.format(summary.net or 0) }} RWF</td>
+                    <th>Total Outstanding</th>
+                    <td style="text-align:right; font-weight: 900; color: #dc2626;">{{ '{:,.2f}'.format(summary.outstanding or 0) }} RWF</td>
+                </tr>
+            </table>
+
+            <div class="signature-row">
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Supplier Signature</div>
+                    <div class="signature-date">Date: ______________</div>
+                </div>
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Accountant / Prepared By</div>
+                    <div class="signature-date">Date: ______________</div>
+                </div>
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Cashier / Verified By</div>
+                    <div class="signature-date">Date: ______________</div>
+                </div>
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Boss / Approved By</div>
+                    <div class="signature-date">Date: ______________</div>
+                </div>
+            </div>
+
+            <div style="margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; text-align: center; font-size: 0.8rem; color: #6b7280;">
+                <p>This statement summarizes supplier deductions and outstanding balances across minerals for settlement purposes.</p>
+                <button onclick="window.print()" class="no-print mt-4 px-4 py-2 bg-slate-800 text-white rounded hover:bg-slate-900 transition text-sm">Print Statement</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

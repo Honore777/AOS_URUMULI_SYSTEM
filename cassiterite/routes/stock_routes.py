@@ -9,7 +9,7 @@ from datetime import datetime
 from flask import render_template, request, redirect, url_for, flash, jsonify
 from config import db
 from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
-from core.models import BulkOutputPlan, BulkPlanStatus, CustomerReceipt
+from core.models import BulkOutputPlan, BulkPlanStatus, CustomerReceipt, StockChangeLog
 from sqlalchemy import func
 from cassiterite.forms import AddCassiteriteStockForm
 from cassiterite.routes import cassiterite_bp
@@ -18,6 +18,7 @@ from core.models import Notification, create_notification, User, fetch_user_noti
 from sqlalchemy.orm import joinedload, selectinload
 from flask_login import current_user
 from utils import trace_time
+from utils import close_name_matches, normalize_counterparty_name
 import logging
 logger= logging.getLogger(__name__)
 
@@ -32,19 +33,19 @@ def add_stock():
 
         # Populate available advance-payment choices (unallocated advances only).
         try:
+            from core.models import UnifiedSupplierAdvance
             advance_rows = (
                 db.session.query(
-                    CassiteriteSupplierPayment.id,
-                    CassiteriteSupplierPayment.supplier_name,
-                    CassiteriteSupplierPayment.advance_remaining,
-                    CassiteriteSupplierPayment.paid_at,
+                    UnifiedSupplierAdvance.id,
+                    UnifiedSupplierAdvance.supplier_name,
+                    UnifiedSupplierAdvance.advance_remaining,
+                    UnifiedSupplierAdvance.paid_at,
                 )
                 .filter(
-                    CassiteriteSupplierPayment.is_advance.is_(True),
-                    CassiteriteSupplierPayment.is_deleted.is_(False),
-                    CassiteriteSupplierPayment.advance_remaining > 0,
+                    UnifiedSupplierAdvance.is_deleted.is_(False),
+                    UnifiedSupplierAdvance.advance_remaining > 0,
                 )
-                .order_by(CassiteriteSupplierPayment.paid_at.desc(), CassiteriteSupplierPayment.id.desc())
+                .order_by(UnifiedSupplierAdvance.paid_at.desc(), UnifiedSupplierAdvance.id.desc())
                 .all()
             )
         except Exception:
@@ -60,6 +61,52 @@ def add_stock():
         form.advance_payment_ids.choices = advance_choices
 
         if form.validate_on_submit():
+            supplier_norm = normalize_counterparty_name(form.supplier.data)
+
+            confirm_new_supplier = (request.form.get('confirm_new_supplier') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+            try:
+                from copper.models import CopperSupplier
+                from cassiterite.models import CassiteriteSupplier
+                existing_names = [r[0] for r in db.session.query(CopperSupplier.name).filter(CopperSupplier.is_deleted.is_(False)).all()]
+                existing_names += [r[0] for r in db.session.query(CassiteriteSupplier.name).filter(CassiteriteSupplier.is_deleted.is_(False)).all()]
+            except Exception:
+                existing_names = []
+
+            if supplier_norm:
+                exact_exists = any(normalize_counterparty_name(n) == supplier_norm for n in existing_names)
+                if not exact_exists:
+                    close = close_name_matches(form.supplier.data, existing_names, limit=5, cutoff=0.86)
+                    if close and not confirm_new_supplier:
+                        flash(f"Supplier name looks similar to existing supplier(s): {', '.join(close[:3])}. Select the existing supplier or confirm you want to create a new one.", "warning")
+                        return render_template('cassiterite/add_entry.html', form=form)
+
+            # Ensure supplier exists in master tables so it becomes selectable everywhere.
+            clean_supplier = (form.supplier.data or '').strip()
+            if clean_supplier:
+                try:
+                    from copper.models import CopperSupplier
+                    from cassiterite.models import CassiteriteSupplier
+
+                    exists_cass = (
+                        CassiteriteSupplier.query
+                        .filter(CassiteriteSupplier.is_deleted.is_(False), func.lower(func.trim(CassiteriteSupplier.name)) == clean_supplier.lower())
+                        .first()
+                    )
+                    if not exists_cass:
+                        db.session.add(CassiteriteSupplier(name=clean_supplier))
+                        db.session.flush()
+
+                    exists_copper = (
+                        CopperSupplier.query
+                        .filter(CopperSupplier.is_deleted.is_(False), func.lower(func.trim(CopperSupplier.name)) == clean_supplier.lower())
+                        .first()
+                    )
+                    if not exists_copper:
+                        db.session.add(CopperSupplier(name=clean_supplier))
+                        db.session.flush()
+                except Exception:
+                    pass
+
             # Check if voucher already exists
             existing = CassiteriteStock.query.filter_by(voucher_no=form.voucher_no.data).first()
             if existing:
@@ -99,17 +146,20 @@ def add_stock():
                 db.session.flush()
 
                 if requested_advance_ids:
-                    # Lock selected advances and apply them to this stock.
+                    from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+
+                    def _norm(nm):
+                        return ' '.join((nm or '').strip().lower().split())
+
                     advance_payments = (
-                        CassiteriteSupplierPayment.query
+                        UnifiedSupplierAdvance.query
                         .filter(
-                            CassiteriteSupplierPayment.id.in_(requested_advance_ids),
-                            CassiteriteSupplierPayment.is_deleted.is_(False),
-                            CassiteriteSupplierPayment.is_advance.is_(True),
-                            CassiteriteSupplierPayment.advance_remaining > 0,
+                            UnifiedSupplierAdvance.id.in_(requested_advance_ids),
+                            UnifiedSupplierAdvance.is_deleted.is_(False),
+                            UnifiedSupplierAdvance.advance_remaining > 0,
                         )
                         .with_for_update()
-                        .order_by(CassiteriteSupplierPayment.paid_at.asc(), CassiteriteSupplierPayment.id.asc())
+                        .order_by(UnifiedSupplierAdvance.paid_at.asc(), UnifiedSupplierAdvance.id.asc())
                         .all()
                     )
 
@@ -121,8 +171,7 @@ def add_stock():
                     total_allocated = 0.0
                     for advance_payment in advance_payments:
                         # Supplier safety: only allow applying advances that belong to the same supplier.
-                        adv_supplier = (advance_payment.supplier_name or '').strip().lower()
-                        if adv_supplier and adv_supplier != (stock.supplier or '').strip().lower():
+                        if _norm(advance_payment.supplier_name) != _norm(stock.supplier):
                             flash("Selected advances must belong to the same supplier as the stock.", "danger")
                             db.session.rollback()
                             return render_template('cassiterite/add_entry.html', form=form)
@@ -144,11 +193,27 @@ def add_stock():
 
                         total_allocated += apply_amount
                         advance_payment.advance_remaining = max(available - apply_amount, 0.0)
-                        db.session.add(CassiteriteAdvanceAllocation(
-                            stock_id=stock.id,
-                            supplier_payment_id=advance_payment.id,
-                            applied_amount=apply_amount,
-                        ))
+                        if (advance_payment.source_mineral_type or '').strip().lower() != 'cassiterite':
+                            db.session.add(UnifiedSupplierAdvanceAllocation(
+                                advance_id=advance_payment.id,
+                                stock_mineral_type='cassiterite',
+                                stock_id=int(stock.id),
+                                applied_amount=float(apply_amount),
+                            ))
+
+                        if (advance_payment.source_mineral_type or '').strip().lower() == 'cassiterite' and advance_payment.source_payment_id:
+                            try:
+                                src = CassiteriteSupplierPayment.query.get(int(advance_payment.source_payment_id))
+                                if src and src.is_advance and not src.is_deleted:
+                                    src.advance_remaining = float(advance_payment.advance_remaining or 0.0)
+                                    db.session.add(src)
+                                    db.session.add(CassiteriteAdvanceAllocation(
+                                        stock_id=stock.id,
+                                        supplier_payment_id=src.id,
+                                        applied_amount=float(apply_amount),
+                                    ))
+                            except Exception:
+                                pass
 
                     if total_allocated <= 0:
                         flash("Selected advances could not be applied to this stock.", "danger")
@@ -190,6 +255,16 @@ def delete_stock(stock_id):
         stock = CassiteriteStock.query.get_or_404(stock_id)
         voucher = stock.voucher_no
         try:
+            before_snapshot = {
+                'id': int(stock.id),
+                'date': str(stock.date) if getattr(stock, 'date', None) else None,
+                'voucher_no': stock.voucher_no,
+                'supplier': stock.supplier,
+                'input_kg': float(getattr(stock, 'input_kg', 0.0) or 0.0),
+                'percentage': float(getattr(stock, 'percentage', 0.0) or 0.0),
+                'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
+                't_unity': float(getattr(stock, 't_unity', 0.0) or 0.0),
+            }
             # Compute and remove this stock's contribution from the aggregate
             try:
                 contrib_q, contrib_wp, contrib_t = CassiteriteStock.contribution(stock)
@@ -201,6 +276,22 @@ def delete_stock(stock_id):
             stock.deleted_by_id = getattr(current_user, 'id', None)
             stock.delete_reason = request.form.get('delete_reason') or 'Deleted from dashboard.'
             db.session.add(stock)
+
+            try:
+                log_row = StockChangeLog(
+                    mineral_type='cassiterite',
+                    stock_id=int(stock.id),
+                    action='DELETE',
+                    reason=stock.delete_reason,
+                    before_json=before_snapshot,
+                    after_json={'is_deleted': True},
+                    created_by_id=getattr(current_user, 'id', None),
+                )
+                db.session.add(log_row)
+                db.session.flush()
+            except Exception:
+                logger.exception('cassiterite.delete_stock: failed to create StockChangeLog')
+                log_row = None
 
             # Apply delta to the single-row aggregate (remove contribution)
             try:
@@ -215,8 +306,8 @@ def delete_stock(stock_id):
                     user_id=boss_id,
                     type_="stock_delete",
                     message=f"Accountant {getattr(current_user, 'username', 'unknown')} deleted cassiterite stock {voucher}.",
-                    related_type="cassiterite_stock",
-                    related_id=stock_id
+                    related_type="stock_change_log" if log_row else "cassiterite_stock",
+                    related_id=(int(getattr(log_row, 'id', 0)) if log_row else stock_id)
                 )
 
             db.session.commit()
@@ -243,6 +334,19 @@ def edit_stock(stock_id):
     try:
         logger.info("cassiterite.edit_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CassiteriteStock.query.get_or_404(stock_id)
+
+        before_snapshot = {
+            'id': int(stock.id),
+            'date': str(stock.date) if getattr(stock, 'date', None) else None,
+            'voucher_no': stock.voucher_no,
+            'supplier': stock.supplier,
+            'input_kg': float(getattr(stock, 'input_kg', 0.0) or 0.0),
+            'percentage': float(getattr(stock, 'percentage', 0.0) or 0.0),
+            'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
+            't_unity': float(getattr(stock, 't_unity', 0.0) or 0.0),
+        }
+
+        change_reason = (request.form.get('change_reason') or '').strip() or None
 
         from datetime import datetime as _dt2
 
@@ -311,9 +415,35 @@ def edit_stock(stock_id):
                     user_id=boss_id,
                     type_="stock_edit",
                     message=f"Accountant {getattr(current_user, 'username', 'unknown')} edited cassiterite stock {voucher}.",
-                    related_type="cassiterite_stock",
-                    related_id=stock_id
+                    related_type="stock_change_log" if log_row else "cassiterite_stock",
+                    related_id=(int(getattr(log_row, 'id', 0)) if log_row else stock_id)
                 )
+
+            try:
+                after_snapshot = {
+                    'id': int(stock.id),
+                    'date': str(stock.date) if getattr(stock, 'date', None) else None,
+                    'voucher_no': stock.voucher_no,
+                    'supplier': stock.supplier,
+                    'input_kg': float(getattr(stock, 'input_kg', 0.0) or 0.0),
+                    'percentage': float(getattr(stock, 'percentage', 0.0) or 0.0),
+                    'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
+                    't_unity': float(getattr(stock, 't_unity', 0.0) or 0.0),
+                }
+                log_row = StockChangeLog(
+                    mineral_type='cassiterite',
+                    stock_id=int(stock.id),
+                    action='EDIT',
+                    reason=change_reason,
+                    before_json=before_snapshot,
+                    after_json=after_snapshot,
+                    created_by_id=getattr(current_user, 'id', None),
+                )
+                db.session.add(log_row)
+                db.session.flush()
+            except Exception:
+                logger.exception('cassiterite.edit_stock: failed to create StockChangeLog')
+                log_row = None
 
             db.session.commit()
             logger.info("cassiterite.edit_stock: completed id=%s voucher=%s", stock_id, voucher)

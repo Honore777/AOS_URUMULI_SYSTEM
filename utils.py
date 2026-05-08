@@ -5,6 +5,8 @@ import time
 import logging
 import functools
 from flask import current_app
+import difflib
+import re
 
 # Configure simple app-wide logging. Control level with the LOG_LEVEL env var.
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -13,6 +15,34 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def normalize_counterparty_name(name: str) -> str:
+    raw = (name or '').strip().lower()
+    if not raw:
+        return ''
+    # Replace punctuation and separators with spaces so "jean-paul" and "jean paul" normalize equally.
+    raw = re.sub(r"[^a-z0-9]+", " ", raw)
+    return ' '.join(raw.split())
+
+
+def close_name_matches(input_name: str, candidates: list[str], limit: int = 5, cutoff: float = 0.86) -> list[str]:
+    needle = normalize_counterparty_name(input_name)
+    if not needle:
+        return []
+    mapping = {}
+    keys = []
+    for c in candidates or []:
+        key = normalize_counterparty_name(c)
+        if not key:
+            continue
+        if key not in mapping:
+            mapping[key] = c
+            keys.append(key)
+    if not keys:
+        return []
+    matches = difflib.get_close_matches(needle, keys, n=limit, cutoff=cutoff)
+    return [mapping[m] for m in matches if m in mapping]
 
 
 def trace_time(func):

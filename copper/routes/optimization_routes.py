@@ -530,7 +530,6 @@ def confirm_bulk_output():
         return redirect(url_for('copper.optimize_stocks'))
 
     from flask_login import current_user
-    from datetime import datetime
 
     # Compute achieved quality deterministically from the quantities being submitted.
     # This avoids relying on session state and prevents zeros in negotiator views.

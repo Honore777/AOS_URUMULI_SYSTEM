@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supplier Ledger - {{ supplier_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 text-slate-100">
+<div class="mx-auto max-w-7xl px-4 py-6 lg:px-8">
+    <div class="rounded-3xl border border-white/10 bg-white/95 p-6 shadow-2xl backdrop-blur-sm text-slate-900">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Inyandiko y'Abatanga Ibicuruzwa</p>
+                <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">{{ supplier_name }}</h1>
+                <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">ibitabo mbaruramari byabatanga ibicuruzwa.</p>
+            </div>
+            <div class="flex gap-2 justify-end">
+                <a href="{{ url_for('core.boss_dashboard') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 shadow-sm">
+                    Subira inyuma
+                </a>
+                <a href="{{ url_for('core.supplier_settlement_statement', supplier_norm=supplier_norm) }}" target="_blank" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 shadow-sm">
+                    Urutonde rw'ibyabaye mukwishyura
+                </a>
+                <a href="{{ url_for('entry_point') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-900 text-white font-semibold hover:bg-slate-800 shadow-sm">
+                    Menyu
+                </a>
+            </div>
+        </div>
+
+        <div class="mt-6 grid gap-4 md:grid-cols-4">
+            <div class="rounded-2xl bg-emerald-600 p-4 text-white shadow-lg">
+                <div class="text-xs font-semibold uppercase tracking-wide text-emerald-100">Advance asigajemwo</div>
+                <div class="mt-2 text-3xl font-black">{{ '{:,.2f}'.format(wallet_remaining or 0) }}</div>
+                <div class="text-sm opacity-90">RWF</div>
+            </div>
+            <div class="rounded-2xl bg-slate-900 p-4 text-white shadow-lg">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-300">Advance yose yahawe</div>
+                <div class="mt-2 text-3xl font-black">{{ '{:,.2f}'.format(total_advanced or 0) }}</div>
+                <div class="text-sm opacity-90">RWF</div>
+            </div>
+            <div class="rounded-2xl bg-amber-600 p-4 text-white shadow-lg">
+                <div class="text-xs font-semibold uppercase tracking-wide text-amber-100">Advance yadusibije</div>
+                <div class="mt-2 text-3xl font-black">{{ '{:,.2f}'.format(total_refunded or 0) }}</div>
+                <div class="text-sm opacity-90">RWF</div>
+            </div>
+            <div class="rounded-2xl bg-red-600 p-4 text-white shadow-lg">
+                <div class="text-xs font-semibold uppercase tracking-wide text-red-100">Ayo tumusigayemo</div>
+                <div class="mt-2 text-3xl font-black">{{ '{:,.2f}'.format((copper_debt or 0) + (cassiterite_debt or 0)) }}</div>
+                <div class="text-sm opacity-90">RWF (Coltan + Gasegereti)</div>
+            </div>
+        </div>
+
+        <div class="mt-6 grid gap-6 lg:grid-cols-2">
+            <section class="rounded-3xl border border-slate-200 bg-white shadow-sm">
+                <div class="border-b border-slate-200 px-6 py-4">
+                    <h2 class="text-xl font-extrabold text-slate-900">Umwenda kuri buri buye</h2>
+                </div>
+                <div class="p-6">
+                    <div class="flex items-center justify-between rounded-2xl bg-slate-50 p-4">
+                        <div class="font-bold text-slate-900">Coltan</div>
+                        <div class="text-right font-extrabold text-red-700">{{ '{:,.2f}'.format(copper_debt or 0) }} RWF</div>
+                    </div>
+                    <div class="mt-3 flex items-center justify-between rounded-2xl bg-slate-50 p-4">
+                        <div class="font-bold text-slate-900">Gasegereti</div>
+                        <div class="text-right font-extrabold text-red-700">{{ '{:,.2f}'.format(cassiterite_debt or 0) }} RWF</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="rounded-3xl border border-slate-200 bg-white shadow-sm">
+                <div class="border-b border-slate-200 px-6 py-4">
+                    <h2 class="text-xl font-extrabold text-slate-900">Incamake y'Uko Advance yakoreshejwe</h2>
+                    <p class="mt-1 text-sm text-slate-500">Uko amafaranga yakoreshejwe.</p>
+                </div>
+                <div class="p-6">
+                    {% if allocation_rows|length == 0 %}
+                        <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">No allocations yet.</div>
+                    {% else %}
+                        <ul class="space-y-3">
+                            {% for kind, amt in allocation_rows %}
+                            <li class="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3">
+                                <div class="font-bold text-slate-900">{{ kind }}</div>
+                                <div class="font-extrabold text-slate-900">{{ '{:,.2f}'.format(amt or 0) }} RWF</div>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                </div>
+            </section>
+        </div>
+
+        <div class="mt-8 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-200 px-6 py-4">
+                <h2 class="text-xl font-extrabold text-slate-900">Inyandiko y'Ibiciro by'Utanga Ibicuruzwa</h2>
+                <p class="mt-1 text-sm text-slate-500">Igitabo mbaruramari.</p>
+                <div class="mt-4 flex flex-col gap-3">
+                    <div class="flex flex-wrap gap-2">
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='30d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '30d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 30 days</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='90d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '90d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 90 days</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='month') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'month' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">This month</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='all') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'all' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">All time</a>
+                    </div>
+
+                    <form method="GET" action="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm) }}" class="grid grid-cols-1 gap-3 md:grid-cols-5">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600">From</label>
+                            <input type="date" name="from" value="{{ filter_from.strftime('%Y-%m-%d') if filter_from else '' }}" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600">To</label>
+                            <input type="date" name="to" value="{{ filter_to.strftime('%Y-%m-%d') if filter_to else '' }}" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600">Voucher / Ref</label>
+                            <input type="text" name="voucher" value="{{ filter_voucher or '' }}" placeholder="e.g. VCH-001" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600">Mineral</label>
+                            <select name="mineral" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                                <option value="all" {% if (filter_mineral or 'all') == 'all' %}selected{% endif %}>All</option>
+                                <option value="coltan" {% if filter_mineral == 'coltan' %}selected{% endif %}>Coltan</option>
+                                <option value="cassiterite" {% if filter_mineral == 'cassiterite' %}selected{% endif %}>Cassiterite</option>
+                            </select>
+                        </div>
+                        <div class="flex items-end gap-2">
+                            <button type="submit" class="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Apply</button>
+                        </div>
+                    </form>
+
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div class="rounded-2xl bg-slate-50 px-4 py-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Period Debit</div>
+                            <div class="mt-1 text-lg font-black text-red-700">{{ '{:,.2f}'.format(period_debit or 0) }} RWF</div>
+                        </div>
+                        <div class="rounded-2xl bg-slate-50 px-4 py-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Period Credit</div>
+                            <div class="mt-1 text-lg font-black text-emerald-700">{{ '{:,.2f}'.format(period_credit or 0) }} RWF</div>
+                        </div>
+                        <div class="rounded-2xl bg-slate-50 px-4 py-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Period Net</div>
+                            <div class="mt-1 text-lg font-black text-slate-900">{{ '{:,.2f}'.format(period_net or 0) }} RWF</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-100 text-slate-700">
+                        <tr>
+                            <th class="px-4 py-3 text-left font-semibold">Date</th>
+                            <th class="px-4 py-3 text-left font-semibold">Mineral</th>
+                            <th class="px-4 py-3 text-left font-semibold">Description</th>
+                            <th class="px-4 py-3 text-right font-semibold">Debit (RWF)</th>
+                            <th class="px-4 py-3 text-right font-semibold">Credit (RWF)</th>
+                            <th class="px-4 py-3 text-right font-semibold">Running Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 bg-white">
+                        {% for row in ledger_entries %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-4 py-3 text-slate-600">{{ row.date.strftime('%Y-%m-%d %H:%M') if row.date else '-' }}</td>
+                            <td class="px-4 py-3 text-slate-700 font-semibold">{{ row.mineral }}</td>
+                            <td class="px-4 py-3 text-slate-600">{{ row.description }}</td>
+                            <td class="px-4 py-3 text-right font-extrabold text-red-700">{% if row.debit %}{{ '{:,.2f}'.format(row.debit) }}{% endif %}</td>
+                            <td class="px-4 py-3 text-right font-extrabold text-emerald-700">{% if row.credit %}{{ '{:,.2f}'.format(row.credit) }}{% endif %}</td>
+                            <td class="px-4 py-3 text-right font-bold text-slate-900">{{ '{:,.2f}'.format(row.balance or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -50,6 +50,12 @@
                         {% endfor %}
                     </div>
                 {% endif %}
+                <div class="flex items-start gap-2 mt-2">
+                    <input id="confirm_new_supplier" name="confirm_new_supplier" type="checkbox" class="mt-1">
+                    <label for="confirm_new_supplier" class="text-sm text-gray-700">
+                        Confirm new supplier name (use only if you are sure this is not an existing supplier)
+                    </label>
+                </div>
             </div>
             <div>
                 {{ form.input_kg.label(class="block text-gray-700 font-medium mb-2") }}
@@ -182,6 +188,12 @@
 
         <div>
             {{ form.advance_payment_ids.label(class="block text-gray-700 font-medium mb-2") }}
+            <input
+                type="text"
+                id="advance_payment_search"
+                placeholder="Search advances (e.g. supplier name)"
+                class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2"
+            />
             {{ form.advance_payment_ids(class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500") }}
             {% if form.advance_payment_ids.errors %}
                 <div class="text-red-500 text-sm mt-1">
@@ -200,5 +212,113 @@
         </div>
     </form>
 </div>
+
+<script>
+  (function() {
+    const input = document.querySelector('input[name="supplier"]');
+    if (!input) return;
+
+    const advanceSelect = document.querySelector('select[name="advance_payment_ids"]');
+    const advanceSearch = document.getElementById('advance_payment_search');
+
+    function filterAdvanceOptions(q) {
+      if (!advanceSelect) return;
+      const needle = (q || '').trim().toLowerCase();
+      const opts = Array.from(advanceSelect.options || []);
+      opts.forEach(opt => {
+        const text = (opt.text || '').toLowerCase();
+        const show = !needle || text.includes(needle);
+        opt.hidden = !show;
+      });
+    }
+
+    if (advanceSearch) {
+      advanceSearch.addEventListener('input', () => {
+        filterAdvanceOptions(advanceSearch.value);
+      });
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'relative';
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+
+    const list = document.createElement('div');
+    list.className = 'absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded shadow-sm hidden';
+    wrap.appendChild(list);
+
+    let lastQ = '';
+    let inflight = null;
+
+    function hide() {
+      list.classList.add('hidden');
+      list.innerHTML = '';
+    }
+
+    function show(items) {
+      list.innerHTML = '';
+      if (!items || !items.length) {
+        hide();
+        return;
+      }
+      items.forEach(it => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'block w-full text-left px-3 py-2 text-sm hover:bg-gray-50';
+        btn.textContent = it.name;
+        btn.addEventListener('mousedown', (e) => {
+          try { e.preventDefault(); } catch (err) {}
+          input.value = it.name;
+          if (advanceSearch) {
+            advanceSearch.value = it.name;
+            filterAdvanceOptions(it.name);
+          }
+          hide();
+        });
+        list.appendChild(btn);
+      });
+      list.classList.remove('hidden');
+    }
+
+    async function fetchSuggest(q) {
+      if (inflight) {
+        try { inflight.abort(); } catch (e) {}
+      }
+      inflight = new AbortController();
+      const resp = await fetch(`{{ url_for('core.supplier_name_suggest') }}?q=${encodeURIComponent(q)}`, {
+        signal: inflight.signal,
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return (data && data.results) ? data.results : [];
+    }
+
+    let t = null;
+    input.addEventListener('input', () => {
+      const q = (input.value || '').trim();
+      if (q === lastQ) return;
+      lastQ = q;
+
+      if (advanceSearch) {
+        advanceSearch.value = q;
+        filterAdvanceOptions(q);
+      }
+      if (t) clearTimeout(t);
+      if (!q) {
+        hide();
+        return;
+      }
+      t = setTimeout(async () => {
+        const items = await fetchSuggest(q);
+        show(items);
+      }, 180);
+    });
+
+    input.addEventListener('blur', () => {
+      setTimeout(hide, 150);
+    });
+  })();
+</script>
 </body>
 </html>

@@ -11,6 +11,7 @@ from core.auth import role_required
 from flask import url_for, flash
 from config import db
 from sqlalchemy import func, or_
+from utils import normalize_counterparty_name, close_name_matches
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -154,6 +155,23 @@ def pay_supplier():
 	from utils import send_brevo_email_async
 
 	form = CassiteriteSupplierPaymentForm()
+
+	# Defaults so template rendering never crashes on GET or failed POST.
+	supplier_summaries = []
+	recent_suppliers = []
+	suppliers_pagination = {
+		'page': 1,
+		'per_page': 15,
+		'total': 0,
+		'pages': 1,
+		'has_prev': False,
+		'has_next': False,
+		'prev_num': 0,
+		'next_num': 0,
+		'query': '',
+	}
+	supplier_query = (request.args.get('supplier') or '').strip()
+
 	if request.method == 'GET':
 		requested_kind = (request.args.get('payment_kind') or '').strip().lower()
 		if requested_kind == 'advance':
@@ -276,135 +294,132 @@ def pay_supplier():
 		except Exception as e:  # pragma: no cover - defensive
 			db.session.rollback()
 			flash(f"Error saving payment: {e}", "danger")
-		# Build supplier summaries using DB-level aggregation and pagination
-		supplier_query = (request.args.get('supplier') or '').strip()
-		per_page = 15
-		try:
-			page = int(request.args.get('page', 1))
-		except (TypeError, ValueError):
-			page = 1
-		if page < 1:
-			page = 1
 
-		# Subquery: total net balance (owed) per supplier from stocks
-		stock_net_subq = (
-			db.session.query(
-				CassiteriteStock.supplier.label('supplier'),
-				func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0).label('total_net')
-			)
-			.filter(CassiteriteStock.is_deleted.is_(False))
-			.group_by(CassiteriteStock.supplier)
-			.subquery()
+	# Build supplier summaries using DB-level aggregation and pagination
+	per_page = 15
+	try:
+		page = int(request.args.get('page', 1))
+	except (TypeError, ValueError):
+		page = 1
+	if page < 1:
+		page = 1
+
+	# Subquery: total net balance (owed) per supplier from stocks
+	stock_net_subq = (
+		db.session.query(
+			CassiteriteStock.supplier.label('supplier'),
+			func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0).label('total_net')
 		)
+		.filter(CassiteriteStock.is_deleted.is_(False))
+		.group_by(CassiteriteStock.supplier)
+		.subquery()
+	)
 
-		# Subquery: payments aggregated by supplier (map stock payments to stock.supplier)
-		payments_subq = (
-			db.session.query(
-				func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name).label('supplier'),
-				func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0).label('total_paid'),
-				func.max(CassiteriteSupplierPayment.paid_at).label('latest_paid_at')
-			)
+	# Subquery: payments aggregated by supplier (map stock payments to stock.supplier)
+	payments_subq = (
+		db.session.query(
+			func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name).label('supplier'),
+			func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0).label('total_paid'),
+			func.max(CassiteriteSupplierPayment.paid_at).label('latest_paid_at')
+		)
+		.outerjoin(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
+		.filter(CassiteriteSupplierPayment.is_deleted.is_(False))
+		.group_by(func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name))
+		.subquery()
+	)
+
+	# Subquery: vouchers per supplier
+	vouchers_subq = (
+		db.session.query(
+			CassiteriteStock.supplier.label('supplier'),
+			func.coalesce(func.string_agg(func.distinct(CassiteriteStock.voucher_no), ', '), '').label('vouchers')
+		)
+		.filter(CassiteriteStock.is_deleted.is_(False))
+		.group_by(CassiteriteStock.supplier)
+		.subquery()
+	)
+
+	base_q = (
+		db.session.query(
+			stock_net_subq.c.supplier.label('supplier'),
+			stock_net_subq.c.total_net.label('net_balance'),
+			func.coalesce(payments_subq.c.total_paid, 0).label('total_paid'),
+			payments_subq.c.latest_paid_at.label('latest_paid_at'),
+			func.coalesce(vouchers_subq.c.vouchers, '').label('vouchers')
+		)
+		.outerjoin(payments_subq, payments_subq.c.supplier == stock_net_subq.c.supplier)
+		.outerjoin(vouchers_subq, vouchers_subq.c.supplier == stock_net_subq.c.supplier)
+	)
+
+	if supplier_query:
+		base_q = base_q.filter(stock_net_subq.c.supplier.ilike(f"%{supplier_query}%"))
+
+	# Count and paginate
+	count_q = db.session.query(func.count()).select_from(base_q.subquery())
+	total_suppliers = int(count_q.scalar() or 0)
+	total_pages = (total_suppliers + per_page - 1) // per_page if total_suppliers else 1
+	if page > total_pages:
+		page = total_pages
+	offset_val = (page - 1) * per_page
+
+	rows = base_q.order_by(
+		(payments_subq.c.latest_paid_at.is_(None)).asc(),
+		payments_subq.c.latest_paid_at.desc(),
+		stock_net_subq.c.supplier.asc()
+	).limit(per_page).offset(offset_val).all()
+
+	# Build recent payments map for suppliers on this page so templates can render
+	# per-supplier receipt links if needed (restore regression where they disappeared).
+	page_supplier_names = [((r.supplier or '').strip()) for r in rows if (r.supplier or '').strip()]
+	payments_map = {}
+	if page_supplier_names:
+		payment_rows = (
+			db.session.query(CassiteriteSupplierPayment, CassiteriteStock.supplier.label('stock_supplier'))
 			.outerjoin(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
 			.filter(CassiteriteSupplierPayment.is_deleted.is_(False))
-			.group_by(func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name))
-			.subquery()
+			.filter(func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name).in_(page_supplier_names))
+			.order_by(CassiteriteSupplierPayment.paid_at.desc(), CassiteriteSupplierPayment.id.desc())
+			.all()
 		)
-
-		# Subquery: vouchers per supplier
-		vouchers_subq = (
-			db.session.query(
-				CassiteriteStock.supplier.label('supplier'),
-				func.coalesce(func.string_agg(func.distinct(CassiteriteStock.voucher_no), ', '), '').label('vouchers')
-			)
-			.filter(CassiteriteStock.is_deleted.is_(False))
-			.group_by(CassiteriteStock.supplier)
-			.subquery()
-		)
-
-		base_q = (
-			db.session.query(
-				stock_net_subq.c.supplier.label('supplier'),
-				stock_net_subq.c.total_net.label('net_balance'),
-				func.coalesce(payments_subq.c.total_paid, 0).label('total_paid'),
-				payments_subq.c.latest_paid_at.label('latest_paid_at'),
-				func.coalesce(vouchers_subq.c.vouchers, '').label('vouchers')
-			)
-			.outerjoin(payments_subq, payments_subq.c.supplier == stock_net_subq.c.supplier)
-			.outerjoin(vouchers_subq, vouchers_subq.c.supplier == stock_net_subq.c.supplier)
-		)
-
-		if supplier_query:
-			base_q = base_q.filter(stock_net_subq.c.supplier.ilike(f"%{supplier_query}%"))
-
-		# Count and paginate
-		count_q = db.session.query(func.count()).select_from(base_q.subquery())
-		total_suppliers = int(count_q.scalar() or 0)
-		total_pages = (total_suppliers + per_page - 1) // per_page if total_suppliers else 1
-		if page > total_pages:
-			page = total_pages
-		offset_val = (page - 1) * per_page
-
-		rows = base_q.order_by(
-			(payments_subq.c.latest_paid_at.is_(None)).asc(),
-			payments_subq.c.latest_paid_at.desc(),
-			stock_net_subq.c.supplier.asc()
-		).limit(per_page).offset(offset_val).all()
-
-		# Build recent payments map for suppliers on this page so templates can render
-		# per-supplier receipt links if needed (restore regression where they disappeared).
-		supplier_summaries = []
-		recent_suppliers = []
-
-		page_supplier_names = [((r.supplier or '').strip()) for r in rows if (r.supplier or '').strip()]
-		payments_map = {}
-		if page_supplier_names:
-			payment_rows = (
-				db.session.query(CassiteriteSupplierPayment, CassiteriteStock.supplier.label('stock_supplier'))
-				.outerjoin(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
-				.filter(CassiteriteSupplierPayment.is_deleted.is_(False))
-				.filter(func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name).in_(page_supplier_names))
-				.order_by(CassiteriteSupplierPayment.paid_at.desc(), CassiteriteSupplierPayment.id.desc())
-				.all()
-			)
-			for payment, stock_supplier in payment_rows:
-				key = (payment.supplier_name or stock_supplier or '').strip()
-				if not key:
-					continue
-				payments_map.setdefault(key, []).append({
-					'id': payment.id,
-					'date': payment.paid_at.strftime('%Y-%m-%d %H:%M') if getattr(payment, 'paid_at', None) else '',
-					'amount': float(payment.amount_rwf or payment.amount or 0),
-				})
-			for k in list(payments_map.keys()):
-				payments_map[k] = payments_map[k][:5]
-
-		for r in rows:
-			supplier_name = (r.supplier or '').strip()
-			net_balance = float(r.net_balance or 0.0)
-			total_paid = float(r.total_paid or 0.0)
-			remaining = float(net_balance - total_paid)
-			latest_paid_at = getattr(r, 'latest_paid_at', None)
-			supplier_summaries.append({
-				'supplier': supplier_name,
-				'vouchers': r.vouchers or '',
-				'owed': net_balance,
-				'paid': total_paid,
-				'remaining': remaining,
-				'latest_paid_at': latest_paid_at,
-				'payments': payments_map.get(supplier_name, []),
+		for payment, stock_supplier in payment_rows:
+			key = (payment.supplier_name or stock_supplier or '').strip()
+			if not key:
+				continue
+			payments_map.setdefault(key, []).append({
+				'id': payment.id,
+				'date': payment.paid_at.strftime('%Y-%m-%d %H:%M') if getattr(payment, 'paid_at', None) else '',
+				'amount': float(payment.amount_rwf or payment.amount or 0),
 			})
-			recent_suppliers.append({'supplier': supplier_name, 'latest_paid_at': latest_paid_at})
-		suppliers_pagination = {
-			'page': page,
-			'per_page': per_page,
-			'total': total_suppliers,
-			'pages': total_pages,
-			'has_prev': page > 1,
-			'has_next': page < total_pages,
-			'prev_num': page - 1,
-			'next_num': page + 1,
-			'query': supplier_query,
-		}
+		for k in list(payments_map.keys()):
+			payments_map[k] = payments_map[k][:5]
+
+	for r in rows:
+		supplier_name = (r.supplier or '').strip()
+		net_balance = float(r.net_balance or 0.0)
+		total_paid = float(r.total_paid or 0.0)
+		remaining = float(net_balance - total_paid)
+		latest_paid_at = getattr(r, 'latest_paid_at', None)
+		supplier_summaries.append({
+			'supplier': supplier_name,
+			'vouchers': r.vouchers or '',
+			'owed': net_balance,
+			'paid': total_paid,
+			'remaining': remaining,
+			'latest_paid_at': latest_paid_at,
+			'payments': payments_map.get(supplier_name, []),
+		})
+		recent_suppliers.append({'supplier': supplier_name, 'latest_paid_at': latest_paid_at})
+	suppliers_pagination = {
+		'page': page,
+		'per_page': per_page,
+		'total': total_suppliers,
+		'pages': total_pages,
+		'has_prev': page > 1,
+		'has_next': page < total_pages,
+		'prev_num': page - 1,
+		'next_num': page + 1,
+		'query': supplier_query,
+	}
 
 	from core.models import PaymentReview, PaymentReviewStatus
 	pending_reviews = PaymentReview.query.filter_by(
@@ -537,11 +552,35 @@ def pay_supplier_advance():
 			flash(str(exc), 'danger')
 			pending_reviews = PaymentReview.query.filter_by(created_by_id=getattr(current_user, 'id', None), status=PaymentReviewStatus.PENDING_REVIEW.value).order_by(PaymentReview.created_at.desc()).limit(10).all()
 			return render_template('cassiterite/pay_supplier_advance.html', form=form, pending_reviews=pending_reviews, recent_advances=recent_advances)
-		supplier = (form.new_supplier.data or form.existing_supplier.data or '').strip()
+		typed_new = (form.new_supplier.data or '').strip()
+		selected_existing = (form.existing_supplier.data or '').strip()
+		supplier = (typed_new or selected_existing or '').strip()
 		if not supplier:
 			flash('Please select an existing supplier or enter a new supplier name for advance payment.', 'danger')
 			pending_reviews = PaymentReview.query.filter_by(created_by_id=getattr(current_user, 'id', None), status=PaymentReviewStatus.PENDING_REVIEW.value).order_by(PaymentReview.created_at.desc()).limit(10).all()
 			return render_template('cassiterite/pay_supplier_advance.html', form=form, pending_reviews=pending_reviews, recent_advances=recent_advances)
+
+		# Guard: prevent accidental near-duplicate supplier identities.
+		if typed_new:
+			confirm_new_supplier = (request.form.get('confirm_new_supplier') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+			try:
+				from copper.models import CopperSupplier
+				from cassiterite.models import CassiteriteSupplier
+				existing_names = [r[0] for r in db.session.query(CopperSupplier.name).filter(CopperSupplier.is_deleted.is_(False)).all()]
+				existing_names += [r[0] for r in db.session.query(CassiteriteSupplier.name).filter(CassiteriteSupplier.is_deleted.is_(False)).all()]
+			except Exception:
+				existing_names = []
+			norm_new = normalize_counterparty_name(supplier)
+			exact_exists = any(normalize_counterparty_name(n) == norm_new for n in existing_names)
+			if not exact_exists:
+				close = close_name_matches(supplier, existing_names, limit=5, cutoff=0.86)
+				if close and not confirm_new_supplier:
+					flash(
+						f"Supplier name looks similar to existing supplier(s): {', '.join(close[:3])}. Select the existing supplier or confirm you want to create a new one.",
+						'warning',
+					)
+					pending_reviews = PaymentReview.query.filter_by(created_by_id=getattr(current_user, 'id', None), status=PaymentReviewStatus.PENDING_REVIEW.value).order_by(PaymentReview.created_at.desc()).limit(10).all()
+					return render_template('cassiterite/pay_supplier_advance.html', form=form, pending_reviews=pending_reviews, recent_advances=recent_advances)
 
 		supplier_id = _get_or_create_supplier_id(supplier)
 		payload = {
@@ -612,12 +651,61 @@ def pay_supplier_advance():
 	)
 
 
+def calculate_supplier_remaining_balance(supplier_name):
+	"""
+	Calculate a supplier's remaining balance across all their stocks.
+	Formula: Total Owed = SUM(stock.balance_to_pay - allocations) for all stocks
+	         Total Paid = SUM(settlement payments only)
+	         Remaining = Total Owed - Total Paid
+	"""
+	from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
+	
+	# Get all stocks for this supplier
+	stocks = CassiteriteStock.query.filter(
+		CassiteriteStock.supplier == supplier_name,
+		CassiteriteStock.is_deleted.is_(False)
+	).all()
+	
+	if not stocks:
+		return 0.0
+	
+	stock_ids = [s.id for s in stocks]
+	
+	# Calculate total allocated advances from cassiterite_advance_allocation
+	allocations = db.session.query(
+		CassiteriteAdvanceAllocation.stock_id,
+		func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0).label('allocated')
+	).filter(
+		CassiteriteAdvanceAllocation.stock_id.in_(stock_ids)
+	).group_by(CassiteriteAdvanceAllocation.stock_id).all()
+	
+	allocation_map = {a.stock_id: float(a.allocated) for a in allocations}
+	
+	# Calculate total owed (balance_to_pay minus allocations)
+	total_owed = sum(
+		max((s.balance_to_pay or 0.0) - allocation_map.get(s.id, 0.0), 0.0)
+		for s in stocks
+	)
+	
+	# Calculate total paid (settlements only, NOT advances)
+	total_paid = db.session.query(
+		func.coalesce(func.sum(CassiteriteSupplierPayment.amount_rwf), 0)
+	).filter(
+		CassiteriteSupplierPayment.supplier_name == supplier_name,
+		CassiteriteSupplierPayment.is_advance.is_(False),
+		CassiteriteSupplierPayment.is_deleted.is_(False)
+	).scalar() or 0.0
+	
+	# Calculate remaining
+	return max(total_owed - total_paid, 0.0)
+
 
 @cassiterite_bp.route('/supplier/payment/<int:payment_id>/receipt')
-@role_required('accountant')
+@role_required('accountant', 'cashier', 'boss', 'admin')
 def supplier_receipt(payment_id):
 	"""
 	Shows a printable receipt for a supplier payment.
+	Shows ALL stocks for the supplier + cumulative balance.
 	"""
 	payment = CassiteriteSupplierPayment.query.filter(
 		CassiteriteSupplierPayment.id == payment_id,
@@ -634,41 +722,103 @@ def supplier_receipt(payment_id):
 		stock = None
 	supplier_name = getattr(payment, 'supplier_name', None) or (stock.supplier if stock else None) or 'Unknown'
 
-	# compute totals for remaining balances (include this payment)
-	total_paid_for_stock = db.session.query(
-		func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)
-	).filter(CassiteriteSupplierPayment.stock_id == (stock.id if stock else None)).scalar() or 0.0
-
 	# allocations applied (for stock remaining and advance receipt details)
 	allocated_from_this_advance = 0.0
-	allocated_for_stock = 0.0
 	try:
 		from cassiterite.models import CassiteriteAdvanceAllocation
 		allocated_from_this_advance = db.session.query(
 			func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0)
 		).filter(CassiteriteAdvanceAllocation.supplier_payment_id == payment.id).scalar() or 0.0
-
-		if stock:
-			allocated_for_stock = db.session.query(
-				func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0)
-			).filter(CassiteriteAdvanceAllocation.stock_id == stock.id).scalar() or 0.0
 	except Exception:
 		try:
 			db.session.rollback()
 		except Exception:
 			pass
 		allocated_from_this_advance = 0.0
-		allocated_for_stock = 0.0
 
-	remaining_after = (
-		((stock.balance_to_pay or 0.0) - total_paid_for_stock - allocated_for_stock)
-		if stock
-		else max(float(payment.advance_remaining or 0.0), 0.0)
+	# Advance receipt: do not compute stock balances using stock_id == None aggregates.
+	if bool(payment.is_advance or not payment.stock_id) and not stock:
+		remaining_before = 0.0
+		remaining_after = max(float(payment.advance_remaining or 0.0), 0.0)
+		applied_to_stock = float(allocated_from_this_advance or 0.0)
+		deductions_rows = []
+		deductions_summary = None
+		previous_payments = []
+		previous_payments_total = 0.0
+	else:
+		# Fetch ALL stocks for this supplier to show cumulative balance
+		all_supplier_stocks = CassiteriteStock.query.filter(
+			CassiteriteStock.supplier == supplier_name,
+			CassiteriteStock.is_deleted.is_(False)
+		).all()
+		
+		# Get allocations per stock (advance deductions)
+		allocations = db.session.query(
+			CassiteriteAdvanceAllocation.stock_id,
+			func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0).label('allocated')
+		).filter(
+			CassiteriteAdvanceAllocation.stock_id.in_([s.id for s in all_supplier_stocks])
+		).group_by(CassiteriteAdvanceAllocation.stock_id).all()
+		
+		allocation_map = {a.stock_id: float(a.allocated) for a in allocations}
+		
+		# Build deductions rows for ALL stocks
+		deductions_rows = []
+		deductions_summary = {
+			'gross': 0.0,
+			'transport': 0.0,
+			'rma': 0.0,
+			'inkomane': 0.0,
+			'rra_3_percent': 0.0,
+			'net': 0.0,
+		}
+		
+		for s in all_supplier_stocks:
+			gross = float(getattr(s, 'amount_with_taxes', None) or getattr(s, 'amount', 0.0) or 0.0)
+			transport = float(getattr(s, 'tot_amount_tag', 0.0) or 0.0)
+			rma = float(getattr(s, 'rma', 0.0) or 0.0)
+			inkomane = float(getattr(s, 'inkomane', 0.0) or 0.0)
+			rra = float(getattr(s, 'rra_3_percent', 0.0) or 0.0)
+			net = float(getattr(s, 'balance_to_pay', None) or getattr(s, 'net_balance', 0.0) or 0.0)
+			
+			deductions_rows.append({
+				'voucher_no': getattr(s, 'voucher_no', None) or str(getattr(s, 'id', '')),
+				'input_kg': float(getattr(s, 'input_kg', 0.0) or 0.0),
+				'gross': gross,
+				'transport': transport,
+				'rma': rma,
+				'inkomane': inkomane,
+				'rra_3_percent': rra,
+				'net': net,
+			})
+			
+			deductions_summary['gross'] += gross
+			deductions_summary['transport'] += transport
+			deductions_summary['rma'] += rma
+			deductions_summary['inkomane'] += inkomane
+			deductions_summary['rra_3_percent'] += rra
+			deductions_summary['net'] += net
+		
+		# Supplier-wide remaining balance using utility function
+		remaining_before = calculate_supplier_remaining_balance(supplier_name)
+		remaining_after = remaining_before - (payment.amount_rwf or payment.amount or 0.0)
+		remaining_after = max(remaining_after, 0.0)
+		applied_to_stock = 0.0
+		
+		# All payments to this supplier (not just one stock)
+		previous_payments = CassiteriteSupplierPayment.query.filter(
+			CassiteriteSupplierPayment.supplier_name == supplier_name,
+			CassiteriteSupplierPayment.is_deleted.is_(False),
+			CassiteriteSupplierPayment.is_advance.is_(False),
+			CassiteriteSupplierPayment.id != payment.id,
+		).order_by(CassiteriteSupplierPayment.paid_at.desc()).all()
+	
+	previous_payments_total = float(
+		sum(float(p.amount_rwf or p.amount or 0.0) for p in previous_payments)
 	)
-	remaining_before = remaining_after + (payment.amount_rwf or payment.amount or 0.0)
-	applied_to_stock = float(allocated_from_this_advance or 0.0)
+	
 	template_name = 'receipts/advance_payment_form.html' if bool(payment.is_advance or not payment.stock_id) else 'receipts/settlement_payment_form.html'
-
+	
 	return render_template(
 		template_name,
 		payment=payment,
@@ -677,42 +827,13 @@ def supplier_receipt(payment_id):
 		remaining_after=remaining_after,
 		applied_to_stock=applied_to_stock,
 		is_advance=bool(payment.is_advance or not payment.stock_id),
-	)
-
-
-@cassiterite_bp.route('/worker/payment/<int:payment_id>/form')
-@role_required('accountant', 'boss', 'admin')
-def expense_approval_form(payment_id):
-	"""Render professional expense printable form for executed expense rows."""
-	payment = CassiteriteWorkerPayment.query.filter(
-		CassiteriteWorkerPayment.id == payment_id,
-		CassiteriteWorkerPayment.is_deleted.is_(False),
-	).first()
-	if not payment:
-		return render_template('404.html'), 404
-
-	worker_name = getattr(payment, 'worker_name', None) or getattr(payment, 'payee_name', None) or 'N/A'
-	return render_template(
-		'receipts/expense_approval_form.html',
-		payment=payment,
-		worker_name=worker_name,
-		category=getattr(payment, 'category', None),
-		amount=getattr(payment, 'amount', 0),
-		reference=getattr(payment, 'reference', None),
-		method=getattr(payment, 'method', None),
-		note=getattr(payment, 'note', None),
-	)
-
-
-@cassiterite_bp.route('/worker/payment/<int:payment_id>/receipt')
-@role_required('accountant')
-def worker_receipt(payment_id):
-	"""
-	Shows a printable receipt for a worker payment.
-	"""
-	payment = CassiteriteWorkerPayment.query.filter(
-		CassiteriteWorkerPayment.id == payment_id,
-		CassiteriteWorkerPayment.is_deleted.is_(False),
+		stock=stock,
+		deductions_rows=deductions_rows,
+		deductions_summary=deductions_summary,
+		previous_payments=previous_payments,
+		previous_payments_total=previous_payments_total,
+	currency=payment.currency or 'RWF',
+	exchange_rate=payment.exchange_rate or 1.0,
 	).first()
 	if not payment:
 		return render_template('404.html'), 404
@@ -819,7 +940,7 @@ def edit_supplier_payment(payment_id):
 				pass
 
 			flash('Supplier payment updated; boss has been notified to review the change.', 'success')
-			return redirect(url_for('cassiterite.cassiterite_supplier_ledger', supplier=stock.supplier))
+			return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=stock.supplier))
 		except Exception as e:
 			db.session.rollback()
 			flash(f'Error updating payment: {e}', 'danger')
@@ -849,7 +970,7 @@ def delete_supplier_payment(payment_id):
 	reason = request.form.get('change_reason', '')
 	if not reason or not reason.strip():
 		flash('Delete reason is required.', 'danger')
-		return redirect(url_for('cassiterite.cassiterite_supplier_ledger', supplier=supplier) if supplier else url_for('cassiterite.pay_supplier'))
+		return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier) if supplier else url_for('cassiterite.pay_supplier'))
 
 	try:
 		# Soft-delete payment and keep an auditable record for boss review/notification.
@@ -910,7 +1031,7 @@ def delete_supplier_payment(payment_id):
 		flash(f'Error submitting delete request: {e}', 'danger')
 
 	if supplier:
-		return redirect(url_for('cassiterite.cassiterite_supplier_ledger', supplier=supplier))
+		return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier))
 	return redirect(url_for('cassiterite.pay_supplier'))
 
 
@@ -1069,116 +1190,8 @@ def delete_worker_payment(payment_id):
 @cassiterite_bp.route("/supplier/<supplier>/ledger")
 @role_required("accountant")
 def cassiterite_supplier_ledger(supplier):
-	"""Detailed ledger view for a single cassiterite supplier."""
-
-	# All stocks and payments for this supplier: select only required columns and batch-load payments
-	stock_rows = db.session.query(
-		CassiteriteStock.id,
-		CassiteriteStock.date,
-		CassiteriteStock.voucher_no,
-		CassiteriteStock.balance_to_pay,
-	).filter(CassiteriteStock.supplier == supplier).order_by(CassiteriteStock.date).all()
-
-	stock_ids = [r.id for r in stock_rows]
-	payment_rows = []
-	advance_payments = []
-	if stock_ids or supplier:
-		payment_rows = []
-		seen_payment_ids = set()
-		if stock_ids:
-			payment_rows.extend(
-				db.session.query(CassiteriteSupplierPayment, CassiteriteStock.supplier.label('stock_supplier'))
-				.outerjoin(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
-				.filter(
-					CassiteriteSupplierPayment.is_deleted.is_(False),
-					CassiteriteSupplierPayment.stock_id.in_(stock_ids),
-				)
-				.order_by(CassiteriteSupplierPayment.paid_at)
-				.all()
-			)
-		payment_rows.extend(
-			db.session.query(CassiteriteSupplierPayment, CassiteriteStock.supplier.label('stock_supplier'))
-			.outerjoin(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
-			.filter(
-				CassiteriteSupplierPayment.is_deleted.is_(False),
-				CassiteriteSupplierPayment.stock_id.is_(None),
-				CassiteriteSupplierPayment.supplier_name == supplier,
-			)
-			.order_by(CassiteriteSupplierPayment.paid_at)
-			.all()
-		)
-
-	# Build combined ledger entries (stocks = debit, payments = credit)
-	# Ensure chronological order also respects business order on same date:
-	# advance -> stock -> settlement
-	ledger_entries = []
-	for r in stock_rows:
-		ledger_entries.append({
-			"date": r.date,
-			"sort_key": 1,
-			"description": f"Purchase {r.voucher_no}",
-			"debit": float(r.balance_to_pay or 0),
-			"credit": 0.0,
-			"is_payment": False,
-		})
-
-	for payment, stock_supplier in payment_rows:
-		if payment.id in seen_payment_ids:
-			continue
-		seen_payment_ids.add(payment.id)
-		is_advance = bool((getattr(payment, 'is_advance', False) is True) or (payment.stock_id is None))
-		payment_label = "Advance Payment" if is_advance else "Payment"
-		ledger_entries.append({
-			"date": payment.paid_at,
-			"sort_key": 0 if is_advance else 2,
-			"description": f"{payment_label} (ref: {payment.reference or 'N/A'})",
-			"debit": 0.0,
-			"credit": float(payment.amount_rwf or payment.amount or 0),
-			"is_payment": True,
-			"payment_id": payment.id,
-		})
-
-	def _sort_dt(value):
-		if not value:
-			return datetime.min
-		if isinstance(value, datetime):
-			return value
-		# assume date
-		try:
-			return datetime.combine(value, datetime.min.time())
-		except Exception:
-			return datetime.min
-
-	ledger_entries.sort(key=lambda x: (_sort_dt(x.get('date')), x.get('sort_key', 1)))
-
-	# Compute running balance and totals (Model B)
-	# - Total owed: sum of stock balances
-	# - Total paid: sum of all payments (advance + settlement)
-	# - Balance can be negative (supplier credit)
-	balance = 0.0
-	for entry in ledger_entries:
-		balance += float(entry.get("debit") or 0.0) - float(entry.get("credit") or 0.0)
-		entry["balance"] = balance
-
-	total_owed = sum(float(r.balance_to_pay or 0.0) for r in stock_rows)
-	total_paid = sum(float((p.amount_rwf or p.amount or 0.0)) for (p, _stock_supplier) in payment_rows if not getattr(p, 'is_deleted', False))
-	# best-effort breakdown (useful for cards/UI)
-	total_advances = sum(
-		float((p.amount_rwf or p.amount or 0.0))
-		for (p, _stock_supplier) in payment_rows
-		if (not getattr(p, 'is_deleted', False)) and (bool((getattr(p, 'is_advance', False) is True) or (p.stock_id is None)))
-	)
-	total_settlements = float(total_paid - total_advances)
-	balance = float((total_owed or 0.0) - (total_paid or 0.0))
-
-	return render_template(
-		"cassiterite/supplier_ledger.html",
-		supplier=supplier,
-		ledger_entries=ledger_entries,
-		total_owed=total_owed,
-		total_paid=total_paid,
-		total_advances=total_advances,
-		total_settlements=total_settlements,
-		balance=balance,
-		user_role=getattr(current_user, 'role', None),
-	)
+	supplier_name = (supplier or '').strip()
+	if not supplier_name:
+		flash('Supplier is required.', 'warning')
+		return redirect(url_for('cassiterite.pay_supplier'))
+	return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier_name))

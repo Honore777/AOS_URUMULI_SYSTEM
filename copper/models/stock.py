@@ -100,10 +100,34 @@ class CopperStock(db.Model):
             SupplierPayment.stock_id == self.id,
             SupplierPayment.is_deleted.is_(False),
         ).scalar() or 0
-        advance_applied = db.session.query(func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0)).filter(
-            CopperAdvanceAllocation.stock_id == self.id,
-        ).scalar() or 0
-        return max((self.net_balance or 0) - total_paid - float(advance_applied or 0.0), 0)
+        unified_applied = 0.0
+        try:
+            from core.models import UnifiedSupplierAdvanceAllocation
+            unified_applied = (
+                db.session.query(func.coalesce(func.sum(UnifiedSupplierAdvanceAllocation.applied_amount), 0))
+                .filter(
+                    UnifiedSupplierAdvanceAllocation.stock_mineral_type == 'copper',
+                    UnifiedSupplierAdvanceAllocation.stock_id == self.id,
+                )
+                .scalar()
+                or 0.0
+            )
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            unified_applied = 0.0
+
+        # Backward compatibility: if the unified allocation layer is not yet
+        # populated for this stock, fall back to the legacy allocation table.
+        advance_applied = 0.0
+        if float(unified_applied or 0.0) <= 0.0:
+            advance_applied = db.session.query(func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0)).filter(
+                CopperAdvanceAllocation.stock_id == self.id,
+            ).scalar() or 0.0
+
+        return max((self.net_balance or 0) - total_paid - float(advance_applied or 0.0) - float(unified_applied or 0.0), 0)
 
     def update_calculations(self):
         """

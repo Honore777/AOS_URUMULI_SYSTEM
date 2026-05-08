@@ -127,7 +127,31 @@ class CassiteriteStock(db.Model):
                 pass
             advance_applied = 0.0
 
-        return (self.balance_to_pay or 0) - float(total_paid or 0.0) - float(advance_applied or 0.0)
+        unified_applied = 0.0
+        try:
+            from core.models import UnifiedSupplierAdvanceAllocation
+            unified_applied = (
+                db.session.query(func.coalesce(func.sum(UnifiedSupplierAdvanceAllocation.applied_amount), 0))
+                .filter(
+                    UnifiedSupplierAdvanceAllocation.stock_mineral_type == 'cassiterite',
+                    UnifiedSupplierAdvanceAllocation.stock_id == self.id,
+                )
+                .scalar()
+                or 0.0
+            )
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            unified_applied = 0.0
+
+        # Backward compatibility: if unified allocations are not present for
+        # this stock, fall back to the legacy allocation table.
+        if float(unified_applied or 0.0) > 0.0:
+            advance_applied = 0.0
+
+        return (self.balance_to_pay or 0) - float(total_paid or 0.0) - float(advance_applied or 0.0) - float(unified_applied or 0.0)
 
     @trace_time
     def update_calculations(self):

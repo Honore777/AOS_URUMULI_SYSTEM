@@ -160,4 +160,31 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         clearFilters();
     });
+
+    // Poll for approval table changes so boss sees updates without manual refresh.
+    // This only reloads when counts change.
+    const POLL_MS = 10000;
+    let last = (window.__BOSS_REFRESH_STATE__ || { pending_reviews: 0, cash_account_requests: 0 });
+
+    async function pollBossSummary() {
+        if (document.hidden) return;
+        try {
+            const res = await fetch('/api/boss/dashboard/summary', { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data) return;
+            const next = {
+                pending_reviews: Number(data.pending_reviews || 0),
+                cash_account_requests: Number(data.cash_account_requests || 0),
+            };
+            if (next.pending_reviews !== Number(last.pending_reviews || 0) || next.cash_account_requests !== Number(last.cash_account_requests || 0)) {
+                window.location.reload();
+                return;
+            }
+        } catch (e) {
+            return;
+        }
+    }
+
+    setInterval(pollBossSummary, POLL_MS);
 });

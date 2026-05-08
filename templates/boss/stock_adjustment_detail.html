@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adjustment Detail</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900">Adjustment #{{ row.id }}</h1>
+                <p class="text-sm text-slate-600 mt-1">{{ (row.mineral_type or '-')|upper }} · {{ row.action }} · Stock {{ row.stock_id }}</p>
+            </div>
+            <a href="{{ url_for('core.boss_stock_adjustments') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back</a>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <aside class="lg:col-span-4 rounded-xl bg-white p-5 shadow border border-slate-200 h-fit">
+                <div class="space-y-2 text-sm">
+                    <div><span class="font-semibold text-slate-700">Date:</span> {{ row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else '-' }}</div>
+                    <div><span class="font-semibold text-slate-700">Reason:</span> {{ row.reason or '-' }}</div>
+                    <div><span class="font-semibold text-slate-700">By:</span> {{ row.created_by.username if row.created_by else '-' }}</div>
+                </div>
+            </aside>
+
+            <section class="lg:col-span-8 space-y-6">
+                <div class="rounded-xl bg-white p-5 shadow border border-slate-200">
+                    <h2 class="text-sm font-bold text-slate-900 mb-3">Before</h2>
+                    <pre class="text-xs bg-slate-900 text-slate-100 p-4 rounded overflow-auto">{{ (row.before_json or {}) | tojson(indent=2) }}</pre>
+                </div>
+
+                <div class="rounded-xl bg-white p-5 shadow border border-slate-200">
+                    <h2 class="text-sm font-bold text-slate-900 mb-3">After</h2>
+                    <pre class="text-xs bg-slate-900 text-slate-100 p-4 rounded overflow-auto">{{ (row.after_json or {}) | tojson(indent=2) }}</pre>
+                </div>
+            </section>
+        </div>
+    </div>
+</body>
+</html>

@@ -44,7 +44,7 @@
                     <p class="text-xs text-gray-500 mb-3">Kanda izina ry’utanga amabuye urebe imbonerahamwe ye ya kasiterite.</p>
                     <div class="space-y-2 max-h-96 overflow-y-auto pr-1">
                         {% for supplier in suppliers %}
-                            <a href="{{ url_for('core.boss_cassiterite_supplier_ledger', supplier=supplier) }}" class="block px-3 py-2 text-sm font-medium rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-100">
+                            <a href="{{ url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier) }}" class="block px-3 py-2 text-sm font-medium rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-100">
                                 {{ supplier }}
                             </a>
                         {% endfor %}

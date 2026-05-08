@@ -630,12 +630,15 @@ def list_outputs():
     # Support simple GET filters: customer, from, to - apply before limiting
     from flask import request
     customer_filter = request.args.get('customer') or ''
+    batch_filter = (request.args.get('batch_id') or '').strip()
     date_from = request.args.get('from') or ''
     date_to = request.args.get('to') or ''
 
     q = CassiteriteOutput.query
     if customer_filter:
         q = q.filter(CassiteriteOutput.customer == customer_filter)
+    if batch_filter:
+        q = q.filter(CassiteriteOutput.batch_id == batch_filter)
     from datetime import datetime
     try:
         if date_from:
@@ -647,6 +650,52 @@ def list_outputs():
     except Exception:
         pass
 
-    outputs = q.order_by(CassiteriteOutput.date.desc()).limit(60).all()
-    return render_template('cassiterite/outputs.html', outputs=outputs,
-                           customer_filter=customer_filter, date_from=date_from, date_to=date_to)
+    outputs = q.order_by(CassiteriteOutput.date.desc()).limit(200).all()
+
+    batch_summaries = []
+    single_outputs = []
+    if not batch_filter:
+        batches = {}
+        for out in outputs:
+            bid = (out.batch_id or '').strip()
+            if not bid:
+                single_outputs.append(out)
+                continue
+            if bid not in batches:
+                batches[bid] = {
+                    'batch_id': bid,
+                    'customer': out.customer,
+                    'first_date': out.date,
+                    'last_date': out.date,
+                    'total_kg': 0.0,
+                    'total_paid': 0.0,
+                    'total_debt': 0.0,
+                    'count': 0,
+                }
+            b = batches[bid]
+            if out.date and (not b['first_date'] or out.date < b['first_date']):
+                b['first_date'] = out.date
+            if out.date and (not b['last_date'] or out.date > b['last_date']):
+                b['last_date'] = out.date
+            b['customer'] = b['customer'] or out.customer
+            b['total_kg'] += float(out.output_kg or 0.0)
+            b['total_paid'] += float(out.amount_paid_rwf or out.amount_paid or 0.0)
+            b['total_debt'] += float(out.debt_remaining or 0.0)
+            b['count'] += 1
+
+        batch_summaries = sorted(
+            list(batches.values()),
+            key=lambda r: (r.get('last_date') or datetime.utcnow().date()),
+            reverse=True,
+        )
+
+    return render_template(
+        'cassiterite/outputs.html',
+        outputs=outputs,
+        customer_filter=customer_filter,
+        batch_filter=batch_filter,
+        batch_summaries=batch_summaries,
+        single_outputs=single_outputs,
+        date_from=date_from,
+        date_to=date_to,
+    )

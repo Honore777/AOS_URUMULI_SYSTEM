@@ -39,6 +39,11 @@
                     </span>
                 </a>
                 <a href="{{ url_for('logout') }}" class="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm">Sohoka</a>
+
+                <a href="{{ url_for('core.cash_reconciliations') }}" class="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm">Gufunga ikasiyeri</a>
+                {% if current_user.role in ['boss', 'admin'] %}
+                <a href="{{ url_for('core.cashier_cash_accounts') }}" class="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-slate-800 hover:bg-slate-900 rounded-lg shadow-sm">Konti z'Amafaranga</a>
+                {% endif %}
             </div>
         </div>
 
@@ -304,6 +309,27 @@
             </div>
         </section>
 
+        {% if show_payment_reviews %}
+        <section class="mb-10">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">Cash Account Requests</h2>
+            {% if cash_account_requests is defined and cash_account_requests|length > 0 %}
+                <div class="space-y-3">
+                    {% for n in cash_account_requests %}
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                            <div class="text-sm font-semibold text-amber-900">Request</div>
+                            <div class="mt-1 text-sm text-amber-800">{{ n.message }}</div>
+                            <div class="mt-2">
+                                <a href="{{ url_for('core.cashier_cash_accounts') }}" class="inline-flex items-center rounded bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800">Open Cash Accounts</a>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="text-gray-500 text-sm">No new cash account requests.</p>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <!-- Pending Payment Reviews (boss/admin only) -->
         {% if show_payment_reviews %}
         <section class="mb-10">
@@ -317,6 +343,7 @@
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Mineral</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Type</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umukiriya</th>
+                                <th class="px-4 py-3 text-left text-sm font-semibold">Reference</th>
                                         <th class="px-4 py-3 text-left text-sm font-semibold">Impamvu</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umubare w'amafaranga</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Status </th>
@@ -330,6 +357,14 @@
                                     <td class="px-4 py-3 text-sm text-gray-700 uppercase">{{ r.mineral_type|translate_mineral }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.type|translate_review_type }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.customer }}</td>
+                                    <td class="px-4 py-3 text-sm text-slate-700">
+                                        <a class="font-semibold text-indigo-700 hover:text-indigo-900" href="{{ url_for('core.print_payment_review', review_id=r.id) }}" target="_blank">{{ r.request_payload_reference or ('review:' ~ r.id) }}</a>
+                                        {% if r.related_url and r.related_label %}
+                                            <div class="mt-1 text-[11px] font-semibold">
+                                                <a class="text-emerald-700 hover:text-emerald-900" href="{{ r.related_url }}">{{ r.related_label }}</a>
+                                            </div>
+                                        {% endif %}
+                                    </td>
                                             <td class="px-4 py-3 text-sm text-gray-700">{{ r.display_comment or r.boss_comment or '-' }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700 font-semibold">
                                         <div>{{ r.display_amount or ('{:,.2f}'.format(r.amount or 0) ~ ' ' ~ (r.currency or 'RWF')) }}</div>
@@ -373,6 +408,7 @@
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Mineral</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Type</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umukiriya</th>
+                                <th class="px-4 py-3 text-left text-sm font-semibold">Reference</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Impamvu</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umubare w'amafaranga</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
@@ -385,6 +421,14 @@
                                     <td class="px-4 py-3 text-sm text-gray-700 uppercase">{{ r.mineral_type|translate_mineral }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.type|translate_review_type }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.customer }}</td>
+                                    <td class="px-4 py-3 text-sm text-slate-700">
+                                        <a class="font-semibold text-indigo-700 hover:text-indigo-900" href="{{ url_for('core.print_payment_review', review_id=r.id) }}" target="_blank">{{ r.request_payload_reference or ('review:' ~ r.id) }}</a>
+                                        {% if r.related_url and r.related_label %}
+                                            <div class="mt-1 text-[11px] font-semibold">
+                                                <a class="text-emerald-700 hover:text-emerald-900" href="{{ r.related_url }}">{{ r.related_label }}</a>
+                                            </div>
+                                        {% endif %}
+                                    </td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.display_comment or r.boss_comment or '-' }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700 font-semibold">
                                         <div>{{ r.display_amount or ('{:,.2f}'.format(r.amount or 0) ~ ' ' ~ (r.currency or 'RWF')) }}</div>
@@ -447,6 +491,12 @@
             {% endif %}
         </section>
     </div>
+    <script>
+        window.__BOSS_REFRESH_STATE__ = {{ {
+            'pending_reviews': (pending_reviews|length if pending_reviews is defined else 0),
+            'cash_account_requests': (cash_account_requests|length if cash_account_requests is defined else 0)
+        }|tojson }};
+    </script>
     <script src="{{ url_for('static', filename='js/boss_dashboard.js') }}"></script>
 </body>
 </html>

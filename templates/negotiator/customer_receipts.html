@@ -50,7 +50,10 @@
                 <a href="{{ url_for('logout') }}" class="rounded bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700">Logout</a>
             </div>
         </div>
-
+                        <div class="relative">
+                            <input id="customer-input" type="text" name="customer" autocomplete="off" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                            <div id="customer-suggestions" class="absolute z-20 mt-1 hidden w-full rounded-lg border border-slate-200 bg-white shadow-lg"></div>
+                        </div>
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
         <div class="space-y-2">
@@ -68,8 +71,10 @@
                 <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
                 <nav class="space-y-2">
                     <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.customer_unearned_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Unearned</a>
                     <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
-                    <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Ledgers</a>
+                    <a href="{{ url_for('core.consolidated_customer_ledger_index') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Ledgers</a>
+                    <a href="{{ url_for('core.negotiator_loans') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Loans</a>
                 </nav>
             </aside>
 
@@ -216,6 +221,82 @@
         document.getElementById('batch-moyenne-nb').textContent = moyenneNb.toFixed(2);
         document.getElementById('batch-created').textContent = selectedOption.dataset.created;
     });
+
+    (function () {
+        const input = document.getElementById('customer-input');
+        const box = document.getElementById('customer-suggestions');
+        if (!input || !box) return;
+
+        let lastQuery = '';
+        let t = null;
+        let inflight = null;
+
+        function hide() {
+            box.classList.add('hidden');
+            box.innerHTML = '';
+        }
+
+        function show(items) {
+            if (!items || items.length === 0) {
+                hide();
+                return;
+            }
+            box.innerHTML = items.map((nm, idx) => (
+                `<button type="button" data-idx="${idx}" data-name="${encodeURIComponent(nm)}" class="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50">${nm}</button>`
+            )).join('');
+            box.classList.remove('hidden');
+        }
+
+        async function fetchCustomers(q) {
+            if (inflight) {
+                try { inflight.abort(); } catch (e) {}
+            }
+            inflight = new AbortController();
+            const res = await fetch(`{{ url_for('core.customers_autocomplete') }}?q=${encodeURIComponent(q)}`, {
+                signal: inflight.signal,
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!res.ok) return [];
+            const data = await res.json();
+            return data && Array.isArray(data.results) ? data.results : [];
+        }
+
+        input.addEventListener('input', () => {
+            const q = (input.value || '').trim();
+            lastQuery = q;
+            if (t) clearTimeout(t);
+            if (q.length < 2) {
+                hide();
+                return;
+            }
+            t = setTimeout(async () => {
+                try {
+                    const items = await fetchCustomers(q);
+                    if (lastQuery !== q) return;
+                    show(items);
+                } catch (e) {
+                    hide();
+                }
+            }, 160);
+        });
+
+        box.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-name]');
+            if (!btn) return;
+            const nm = decodeURIComponent(btn.getAttribute('data-name') || '');
+            if (nm) input.value = nm;
+            hide();
+        });
+
+        input.addEventListener('blur', () => {
+            setTimeout(hide, 120);
+        });
+
+        document.addEventListener('click', (e) => {
+            if (e.target === input || box.contains(e.target)) return;
+            hide();
+        });
+    })();
     </script>
 </body>
 </html>

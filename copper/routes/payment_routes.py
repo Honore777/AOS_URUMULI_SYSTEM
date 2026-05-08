@@ -4,6 +4,8 @@ Handles supplier and worker payment recording for copper.
 """
 import json
 
+from datetime import datetime
+
 from flask import render_template, redirect, url_for, flash, abort
 
 from config import db
@@ -13,6 +15,7 @@ from copper import copper_bp
 from core.auth import role_required
 from flask import request
 from sqlalchemy import func, or_
+from utils import normalize_counterparty_name, close_name_matches
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -94,18 +97,11 @@ def calculate_supplier_remaining_balance(supplier_name):
 
 
 @copper_bp.route('/supplier/payment/<int:payment_id>/receipt')
-@role_required('accountant')
+@role_required('accountant', 'cashier', 'boss', 'admin')
 def supplier_receipt(payment_id):
     """
     Shows a printable receipt for a copper supplier payment.
-    
-    For ADVANCE payments (no stock):
-      - Shows amount paid as advance
-      - Shows remaining from this advance
-      
-    For SETTLEMENT payments (linked to stock):
-      - Shows payment against stock balance
-      - Shows remaining on that stock after payment
+    Shows ALL stocks for the supplier + cumulative balance.
     """
     payment = SupplierPayment.query.get(payment_id)
     if not payment:
@@ -121,30 +117,92 @@ def supplier_receipt(payment_id):
 
     # For ADVANCE payments (no stock linked)
     if payment.is_advance and not stock:
-        # Get total allocated from this advance to any stocks
         allocated = db.session.query(
             func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0)
         ).filter(
             CopperAdvanceAllocation.supplier_payment_id == payment.id
         ).scalar() or 0.0
         
-        remaining_before = 0.0  # Advance doesn't have "before" - it's new money
+        remaining_before = 0.0
         remaining_after = float(payment.advance_remaining or 0.0)
         applied_to_stock = float(allocated)
+        deductions_rows = []
+        deductions_summary = None
+        previous_payments = []
+        previous_payments_total = 0.0
     
     # For SETTLEMENT payments (linked to stock)
     else:
-        # Total paid for this stock (all payments, including this one)
-        total_paid = db.session.query(
-            func.coalesce(func.sum(func.coalesce(SupplierPayment.amount_rwf, SupplierPayment.amount)), 0)
-        ).filter(SupplierPayment.stock_id == stock.id).scalar() if stock else 0.0
-
-        # Remaining after this payment has been applied
-        remaining_after = ((stock.net_balance or 0.0) - total_paid) if stock else 0.0
-
-        # Remaining before this payment (useful to show previous balance)
-        remaining_before = remaining_after + (payment.amount_rwf or payment.amount or 0.0)
+        # Fetch ALL stocks for this supplier to show cumulative balance
+        all_supplier_stocks = CopperStock.query.filter(
+            CopperStock.supplier == supplier_name,
+            CopperStock.is_deleted.is_(False)
+        ).all()
+        
+        # Get allocations per stock (advance deductions)
+        allocations = db.session.query(
+            CopperAdvanceAllocation.stock_id,
+            func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('allocated')
+        ).filter(
+            CopperAdvanceAllocation.stock_id.in_([s.id for s in all_supplier_stocks])
+        ).group_by(CopperAdvanceAllocation.stock_id).all()
+        
+        allocation_map = {a.stock_id: float(a.allocated) for a in allocations}
+        
+        # Build deductions rows for ALL stocks
+        deductions_rows = []
+        deductions_summary = {
+            'gross': 0.0,
+            'transport': 0.0,
+            'rma': 0.0,
+            'inkomane': 0.0,
+            'rra_3_percent': 0.0,
+            'net': 0.0,
+        }
+        
+        for s in all_supplier_stocks:
+            gross = float(getattr(s, 'amount', 0.0) or 0.0)
+            transport = float(getattr(s, 'tot_amount_tag', 0.0) or 0.0)
+            rma = float(getattr(s, 'rma', 0.0) or 0.0)
+            inkomane = float(getattr(s, 'inkomane', 0.0) or 0.0)
+            rra = float(getattr(s, 'rra_3_percent', 0.0) or 0.0)
+            net = float(getattr(s, 'net_balance', 0.0) or 0.0)
+            
+            deductions_rows.append({
+                'voucher_no': getattr(s, 'voucher_no', None) or str(getattr(s, 'id', '')),
+                'input_kg': float(getattr(s, 'input_kg', 0.0) or 0.0),
+                'gross': gross,
+                'transport': transport,
+                'rma': rma,
+                'inkomane': inkomane,
+                'rra_3_percent': rra,
+                'net': net,
+            })
+            
+            deductions_summary['gross'] += gross
+            deductions_summary['transport'] += transport
+            deductions_summary['rma'] += rma
+            deductions_summary['inkomane'] += inkomane
+            deductions_summary['rra_3_percent'] += rra
+            deductions_summary['net'] += net
+        
+        # Supplier-wide remaining balance
+        remaining_before = calculate_supplier_remaining_balance(supplier_name)
+        remaining_after = remaining_before - (payment.amount_rwf or payment.amount or 0.0)
+        remaining_after = max(remaining_after, 0.0)
         applied_to_stock = 0.0
+        
+        # All payments to this supplier (not just one stock)
+        previous_payments = SupplierPayment.query.filter(
+            SupplierPayment.supplier_name == supplier_name,
+            SupplierPayment.is_deleted.is_(False),
+            SupplierPayment.is_advance.is_(False),
+            SupplierPayment.id != payment.id,
+        ).order_by(SupplierPayment.paid_at.desc()).all()
+        
+        previous_payments_total = float(
+            sum(float(p.amount_rwf or p.amount or 0.0) for p in previous_payments)
+        )
 
     template_name = 'receipts/advance_payment_form.html' if bool(payment.is_advance or not payment.stock_id) else 'receipts/settlement_payment_form.html'
 
@@ -156,11 +214,18 @@ def supplier_receipt(payment_id):
         remaining_after=remaining_after,
         applied_to_stock=applied_to_stock,
         is_advance=bool(payment.is_advance or not payment.stock_id),
+        stock=stock,
+        deductions_rows=deductions_rows,
+        deductions_summary=deductions_summary,
+        previous_payments=previous_payments,
+        previous_payments_total=previous_payments_total,
+        currency=payment.currency or 'RWF',
+        exchange_rate=payment.exchange_rate or 1.0,
     )
 
 
 @copper_bp.route('/worker/payment/<int:payment_id>/receipt')
-@role_required('accountant')
+@role_required('accountant', 'cashier', 'boss', 'admin')
 def worker_receipt(payment_id):
     """
     Shows a printable receipt for a copper worker payment.
@@ -335,7 +400,7 @@ def pay_supplier():
             return render_template('copper/pay_supplier.html', form=form, pending_reviews=pending_reviews)
 
     # GET or not-submitted
-    # Build supplier summaries using DB-level aggregation and pagination
+    # Build supplier summaries consolidated across minerals (copper + cassiterite).
     supplier_query = (request.args.get('supplier') or '').strip()
     per_page = 15
     try:
@@ -345,90 +410,169 @@ def pay_supplier():
     if page < 1:
         page = 1
 
-    # Subquery: total net balance per supplier (only active stocks)
-    stock_net_subq = (
+    # Copper (Coltan) owed per supplier = sum(net_balance) - sum(allocations)
+    copper_stock_net = (
         db.session.query(
             CopperStock.supplier.label('supplier'),
-            func.coalesce(func.sum(CopperStock.net_balance), 0).label('total_net')
+            func.coalesce(func.sum(CopperStock.net_balance), 0).label('total_net'),
         )
         .filter(CopperStock.is_deleted.is_(False), CopperStock.net_balance > 0)
         .group_by(CopperStock.supplier)
-        .subquery()
+        .all()
     )
-
-    # Subquery: total allocations applied per supplier (join allocations -> stock)
-    alloc_subq = (
+    copper_alloc = (
         db.session.query(
             CopperStock.supplier.label('supplier'),
-            func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('total_alloc')
+            func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('total_alloc'),
         )
         .join(CopperStock, CopperStock.id == CopperAdvanceAllocation.stock_id)
         .filter(CopperStock.is_deleted.is_(False))
         .group_by(CopperStock.supplier)
-        .subquery()
+        .all()
     )
+    copper_alloc_map = {(r.supplier or '').strip(): float(r.total_alloc or 0.0) for r in copper_alloc}
 
-    # Subquery: payments aggregated by supplier (use stock.supplier when linked)
-    payments_subq = (
+    copper_paid = (
         db.session.query(
             func.coalesce(CopperStock.supplier, SupplierPayment.supplier_name).label('supplier'),
             func.coalesce(func.sum(func.coalesce(SupplierPayment.amount_rwf, SupplierPayment.amount)), 0).label('total_paid'),
-            func.max(SupplierPayment.paid_at).label('latest_paid_at')
+            func.max(SupplierPayment.paid_at).label('latest_paid_at'),
         )
         .outerjoin(CopperStock, CopperStock.id == SupplierPayment.stock_id)
-        .filter(SupplierPayment.is_deleted.is_(False))
+        .filter(SupplierPayment.is_deleted.is_(False), SupplierPayment.is_advance.is_(False))
         .group_by(func.coalesce(CopperStock.supplier, SupplierPayment.supplier_name))
-        .subquery()
+        .all()
     )
 
-    # Subquery: vouchers per supplier (string_agg)
-    vouchers_subq = (
-        db.session.query(
-            CopperStock.supplier.label('supplier'),
-            func.coalesce(func.string_agg(func.distinct(CopperStock.voucher_no), ', '), '').label('vouchers')
+    # Cassiterite owed per supplier = sum(balance_to_pay)
+    try:
+        from cassiterite.models import CassiteriteStock
+        from cassiterite.models.payment import CassiteriteSupplierPayment
+    except Exception:
+        CassiteriteStock = None
+        CassiteriteSupplierPayment = None
+
+    cass_stock_net = []
+    cass_paid = []
+    if CassiteriteStock is not None and CassiteriteSupplierPayment is not None:
+        cass_stock_net = (
+            db.session.query(
+                CassiteriteStock.supplier.label('supplier'),
+                func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0).label('total_net'),
+            )
+            .filter(CassiteriteStock.is_deleted.is_(False), CassiteriteStock.balance_to_pay > 0)
+            .group_by(CassiteriteStock.supplier)
+            .all()
         )
-        .filter(CopperStock.is_deleted.is_(False))
-        .group_by(CopperStock.supplier)
-        .subquery()
-    )
-
-    # Join the subqueries to produce supplier-level rows
-    base_q = (
-        db.session.query(
-            stock_net_subq.c.supplier.label('supplier'),
-            (stock_net_subq.c.total_net - func.coalesce(alloc_subq.c.total_alloc, 0)).label('net_balance'),
-            func.coalesce(payments_subq.c.total_paid, 0).label('total_paid'),
-            payments_subq.c.latest_paid_at.label('latest_paid_at'),
-            func.coalesce(vouchers_subq.c.vouchers, '').label('vouchers')
+        cass_paid = (
+            db.session.query(
+                func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name).label('supplier'),
+                func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0).label('total_paid'),
+                func.max(CassiteriteSupplierPayment.paid_at).label('latest_paid_at'),
+            )
+            .outerjoin(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
+            .filter(CassiteriteSupplierPayment.is_deleted.is_(False), CassiteriteSupplierPayment.is_advance.is_(False))
+            .group_by(func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name))
+            .all()
         )
-        .outerjoin(alloc_subq, alloc_subq.c.supplier == stock_net_subq.c.supplier)
-        .outerjoin(payments_subq, payments_subq.c.supplier == stock_net_subq.c.supplier)
-        .outerjoin(vouchers_subq, vouchers_subq.c.supplier == stock_net_subq.c.supplier)
-    )
 
-    if supplier_query:
-        base_q = base_q.filter(stock_net_subq.c.supplier.ilike(f"%{supplier_query}%"))
+    # Merge by normalized supplier name so the user sees a single row per supplier.
+    merged = {}
+    def _ensure(name: str | None) -> dict:
+        clean = (name or '').strip()
+        norm = normalize_counterparty_name(clean)
+        if not norm:
+            return {}
+        row = merged.get(norm)
+        if not row:
+            merged[norm] = {
+                'supplier': clean,
+                'net_balance': 0.0,
+                'total_paid': 0.0,
+                'latest_paid_at': None,
+                'minerals': set(),
+            }
+            row = merged[norm]
+        if clean and len(clean) > len(row.get('supplier') or ''):
+            row['supplier'] = clean
+        return row
 
-    # Total count for pagination
-    count_q = db.session.query(func.count()).select_from(base_q.subquery())
-    total_suppliers = int(count_q.scalar() or 0)
+    for r in copper_stock_net:
+        name = (r.supplier or '').strip()
+        row = _ensure(name)
+        if not row:
+            continue
+        owed = float(r.total_net or 0.0) - float(copper_alloc_map.get(name, 0.0) or 0.0)
+        row['net_balance'] += max(owed, 0.0)
+        row['minerals'].add('Coltan')
+
+    for r in cass_stock_net:
+        name = (r.supplier or '').strip()
+        row = _ensure(name)
+        if not row:
+            continue
+        row['net_balance'] += max(float(r.total_net or 0.0), 0.0)
+        row['minerals'].add('Cassiterite')
+
+    for r in copper_paid:
+        name = (r.supplier or '').strip()
+        row = _ensure(name)
+        if not row:
+            continue
+        row['total_paid'] += max(float(r.total_paid or 0.0), 0.0)
+        if r.latest_paid_at and (row['latest_paid_at'] is None or r.latest_paid_at > row['latest_paid_at']):
+            row['latest_paid_at'] = r.latest_paid_at
+        row['minerals'].add('Coltan')
+
+    for r in cass_paid:
+        name = (r.supplier or '').strip()
+        row = _ensure(name)
+        if not row:
+            continue
+        row['total_paid'] += max(float(r.total_paid or 0.0), 0.0)
+        if r.latest_paid_at and (row['latest_paid_at'] is None or r.latest_paid_at > row['latest_paid_at']):
+            row['latest_paid_at'] = r.latest_paid_at
+        row['minerals'].add('Cassiterite')
+
+    rows = []
+    for norm, r in merged.items():
+        supplier_name = (r.get('supplier') or '').strip()
+        if not supplier_name:
+            continue
+        if supplier_query and supplier_query.lower() not in supplier_name.lower():
+            continue
+        net_balance = float(r.get('net_balance') or 0.0)
+        total_paid = float(r.get('total_paid') or 0.0)
+        remaining = max(net_balance - total_paid, 0.0)
+        if remaining <= 0 and net_balance <= 0 and total_paid <= 0:
+            continue
+        rows.append({
+            'supplier': supplier_name,
+            'net_balance': net_balance,
+            'total_paid': total_paid,
+            'remaining': remaining,
+            'latest_paid_at': r.get('latest_paid_at'),
+            'minerals': ', '.join(sorted(list(r.get('minerals') or set())))
+        })
+
+    rows.sort(key=lambda x: (
+        x.get('latest_paid_at') is None,
+        x.get('latest_paid_at') or datetime.min,
+        (x.get('supplier') or '').lower(),
+    ), reverse=False)
+
+    total_suppliers = len(rows)
     total_pages = (total_suppliers + per_page - 1) // per_page if total_suppliers else 1
     if page > total_pages:
         page = total_pages
     offset_val = (page - 1) * per_page
-
-    rows = base_q.order_by(
-        # Put suppliers with recent payments first, nulls last
-        (payments_subq.c.latest_paid_at.is_(None)).asc(),
-        payments_subq.c.latest_paid_at.desc(),
-        stock_net_subq.c.supplier.asc()
-    ).limit(per_page).offset(offset_val).all()
+    rows = rows[offset_val:offset_val + per_page]
     # Build a map of recent payments for suppliers on this page so templates
     # can render per-supplier View/Print receipt links (restore regression).
     supplier_summaries = []
     recent_suppliers = []
 
-    page_supplier_names = [((r.supplier or '').strip()) for r in rows if (r.supplier or '').strip()]
+    page_supplier_names = [((r.get('supplier') or '').strip()) for r in rows if (r.get('supplier') or '').strip()]
     payments_map = {}
     if page_supplier_names:
         payment_rows = (
@@ -453,19 +597,21 @@ def pay_supplier():
             payments_map[k] = payments_map[k][:5]
 
     for r in rows:
-        supplier_name = (r.supplier or '').strip()
-        net_balance = float(r.net_balance or 0.0)
-        total_paid = float(r.total_paid or 0.0)
-        remaining = float(net_balance - total_paid)
-        latest_paid_at = getattr(r, 'latest_paid_at', None)
+        supplier_name = (r.get('supplier') or '').strip()
+        if not supplier_name:
+            continue
+        net_balance = float(r.get('net_balance') or 0.0)
+        total_paid = float(r.get('total_paid') or 0.0)
+        remaining = float(r.get('remaining') or 0.0)
+        latest_paid_at = r.get('latest_paid_at')
         supplier_summaries.append({
             'supplier': supplier_name,
-            'vouchers': r.vouchers or '',
+            'vouchers': r.get('minerals') or '',
             'net_balance': net_balance,
             'total_paid': total_paid,
             'remaining': remaining,
-            'payments': payments_map.get(supplier_name, []),
             'latest_paid_at': latest_paid_at,
+            'payments': payments_map.get(supplier_name, [])
         })
         recent_suppliers.append({'supplier': supplier_name, 'latest_paid_at': latest_paid_at})
 
@@ -594,11 +740,35 @@ def pay_supplier_advance():
             flash(str(exc), 'danger')
             pending_reviews = PaymentReview.query.filter_by(created_by_id=getattr(current_user, 'id', None), status=PaymentReviewStatus.PENDING_REVIEW.value).order_by(PaymentReview.created_at.desc()).limit(10).all()
             return render_template('copper/pay_supplier_advance.html', form=form, pending_reviews=pending_reviews, recent_advances=recent_advances)
-        supplier = (form.new_supplier.data or form.existing_supplier.data or '').strip()
+        typed_new = (form.new_supplier.data or '').strip()
+        selected_existing = (form.existing_supplier.data or '').strip()
+        supplier = (typed_new or selected_existing or '').strip()
         if not supplier:
             flash('Please select an existing supplier or enter a new supplier name for advance payment.', 'danger')
             pending_reviews = PaymentReview.query.filter_by(created_by_id=getattr(current_user, 'id', None), status=PaymentReviewStatus.PENDING_REVIEW.value).order_by(PaymentReview.created_at.desc()).limit(10).all()
             return render_template('copper/pay_supplier_advance.html', form=form, pending_reviews=pending_reviews, recent_advances=recent_advances)
+
+        # Guard: prevent accidental near-duplicate supplier identities.
+        if typed_new:
+            confirm_new_supplier = (request.form.get('confirm_new_supplier') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+            try:
+                from copper.models import CopperSupplier
+                from cassiterite.models import CassiteriteSupplier
+                existing_names = [r[0] for r in db.session.query(CopperSupplier.name).filter(CopperSupplier.is_deleted.is_(False)).all()]
+                existing_names += [r[0] for r in db.session.query(CassiteriteSupplier.name).filter(CassiteriteSupplier.is_deleted.is_(False)).all()]
+            except Exception:
+                existing_names = []
+            norm_new = normalize_counterparty_name(supplier)
+            exact_exists = any(normalize_counterparty_name(n) == norm_new for n in existing_names)
+            if not exact_exists:
+                close = close_name_matches(supplier, existing_names, limit=5, cutoff=0.86)
+                if close and not confirm_new_supplier:
+                    flash(
+                        f"Supplier name looks similar to existing supplier(s): {', '.join(close[:3])}. Select the existing supplier or confirm you want to create a new one.",
+                        'warning',
+                    )
+                    pending_reviews = PaymentReview.query.filter_by(created_by_id=getattr(current_user, 'id', None), status=PaymentReviewStatus.PENDING_REVIEW.value).order_by(PaymentReview.created_at.desc()).limit(10).all()
+                    return render_template('copper/pay_supplier_advance.html', form=form, pending_reviews=pending_reviews, recent_advances=recent_advances)
 
         supplier_id = _get_or_create_supplier_id(supplier)
         payload = {
@@ -747,7 +917,9 @@ def pay_worker():
             ).order_by(PaymentReview.created_at.desc()).limit(10).all()
             return render_template('copper/pay_worker.html', form=form, pending_reviews=pending_reviews)
 
-    recent_payments = WorkerPayment.query.order_by(WorkerPayment.paid_at.desc()).limit(15).all()
+    recent_payments = WorkerPayment.query.filter(
+        WorkerPayment.is_deleted.is_(False)
+    ).order_by(WorkerPayment.paid_at.desc()).limit(15).all()
     pending_reviews = PaymentReview.query.filter_by(
         created_by_id=getattr(current_user, 'id', None),
         status=PaymentReviewStatus.PENDING_REVIEW.value,

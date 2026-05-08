@@ -52,6 +52,10 @@
                 <input name="customer" type="text" value="{{ customer_filter or '' }}" class="border px-2 py-1 rounded">
             </div>
             <div>
+                <label class="block text-sm font-semibold">Batch</label>
+                <input name="batch_id" type="text" value="{{ batch_filter or '' }}" class="border px-2 py-1 rounded" placeholder="e.g. SSM/TA/2496">
+            </div>
+            <div>
                 <label class="block text-sm font-semibold">From</label>
                 <input name="from" type="date" value="{{ date_from or '' }}" class="border px-2 py-1 rounded">
             </div>
@@ -70,36 +74,87 @@
         <!-- Outputs Table -->
         {% if outputs %}
             <div class="bg-white rounded-lg shadow-md overflow-hidden">
-                <table class="w-full border-collapse">
-                    <thead class="bg-teal-600 text-white">
-                        <tr>
-                            <th class="px-6 py-4 text-left font-semibold">Date</th>
-                            <th class="px-6 py-4 text-left font-semibold">Batch ID</th>
-                            <th class="px-6 py-4 text-left font-semibold">Voucher</th>
-                            <th class="px-6 py-4 text-left font-semibold">Customer</th>
-                            <th class="px-6 py-4 text-left font-semibold">Output (kg)</th>
-                            <th class="px-6 py-4 text-left font-semibold">Output Amount</th>
-                            <th class="px-6 py-4 text-left font-semibold">Amount Paid</th>
-                            <th class="px-6 py-4 text-left font-semibold">Debt Remaining</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200">
-                        {% for output in outputs %}
-                            <tr class="hover:bg-gray-50 transition">
-                                <td class="px-6 py-4 text-gray-700">{{ output.date.strftime('%Y-%m-%d') if output.date else '-' }}</td>
-                                <td class="px-6 py-4 text-gray-700 font-mono text-sm">{{ output.batch_id or '-' }}</td>
-                                <td class="px-6 py-4 text-gray-700 font-semibold">{{ output.voucher_no }}</td>
-                                <td class="px-6 py-4 text-gray-700">{{ output.customer }}</td>
-                                <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_kg or 0) }}</td>
-                                <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_amount or 0) }}</td>
-                                <td class="px-6 py-4 text-gray-700 text-right font-semibold text-green-600">{{ "%.2f"|format(output.amount_paid or 0) }}</td>
-                                <td class="px-6 py-4 text-gray-700 text-right font-semibold {% if output.debt_remaining > 0 %}text-red-600{% else %}text-green-600{% endif %}">
-                                    {{ "%.2f"|format(output.debt_remaining or 0) }}
-                                </td>
+                {% if batch_filter %}
+                    <div class="border-b border-slate-200 px-6 py-4 text-sm text-slate-700">
+                        Showing details for batch <span class="font-bold">{{ batch_filter }}</span>
+                        <a href="{{ url_for('cassiterite.list_outputs') }}" class="ml-2 text-blue-600 hover:underline">Back to batches</a>
+                    </div>
+                    <table class="w-full border-collapse">
+                        <thead class="bg-teal-600 text-white">
+                            <tr>
+                                <th class="px-6 py-4 text-left font-semibold">Date</th>
+                                <th class="px-6 py-4 text-left font-semibold">Batch ID</th>
+                                <th class="px-6 py-4 text-left font-semibold">Voucher</th>
+                                <th class="px-6 py-4 text-left font-semibold">Customer</th>
+                                <th class="px-6 py-4 text-left font-semibold">Output (kg)</th>
+                                <th class="px-6 py-4 text-left font-semibold">Output Amount</th>
+                                <th class="px-6 py-4 text-left font-semibold">Amount Paid</th>
+                                <th class="px-6 py-4 text-left font-semibold">Debt Remaining</th>
                             </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            {% for output in outputs %}
+                                <tr class="hover:bg-gray-50 transition">
+                                    <td class="px-6 py-4 text-gray-700">{{ output.date.strftime('%Y-%m-%d') if output.date else '-' }}</td>
+                                    <td class="px-6 py-4 text-gray-700 font-mono text-sm">{{ output.batch_id or '-' }}</td>
+                                    <td class="px-6 py-4 text-gray-700 font-semibold">{{ output.voucher_no }}</td>
+                                    <td class="px-6 py-4 text-gray-700">{{ output.customer }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_kg or 0) }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_amount_rwf or output.output_amount or 0) }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold text-green-600">{{ "%.2f"|format(output.amount_paid_rwf or output.amount_paid or 0) }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold {% if output.debt_remaining > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+                                        {{ "%.2f"|format(output.debt_remaining or 0) }}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <table class="w-full border-collapse">
+                        <thead class="bg-teal-600 text-white">
+                            <tr>
+                                <th class="px-6 py-4 text-left font-semibold">Last Date</th>
+                                <th class="px-6 py-4 text-left font-semibold">Batch</th>
+                                <th class="px-6 py-4 text-left font-semibold">Customer</th>
+                                <th class="px-6 py-4 text-right font-semibold">Total Output (kg)</th>
+                                <th class="px-6 py-4 text-right font-semibold">Amount Paid</th>
+                                <th class="px-6 py-4 text-right font-semibold">Debt Remaining</th>
+                                <th class="px-6 py-4 text-right font-semibold">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            {% for b in (batch_summaries or []) %}
+                                <tr class="hover:bg-gray-50 transition">
+                                    <td class="px-6 py-4 text-gray-700">{{ b.last_date.strftime('%Y-%m-%d') if b.last_date else '-' }}</td>
+                                    <td class="px-6 py-4 text-gray-700 font-mono text-sm">{{ b.batch_id }}</td>
+                                    <td class="px-6 py-4 text-gray-700">{{ b.customer or '-' }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(b.total_kg or 0) }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold text-green-600">{{ "%.2f"|format(b.total_paid or 0) }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold {% if (b.total_debt or 0) > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+                                        {{ "%.2f"|format(b.total_debt or 0) }}
+                                    </td>
+                                    <td class="px-6 py-4 text-right">
+                                        <a href="{{ url_for('cassiterite.list_outputs', batch_id=b.batch_id) }}" class="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white shadow hover:bg-blue-700">View Details</a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+
+                            {% for output in (single_outputs or []) %}
+                                <tr class="hover:bg-gray-50 transition bg-slate-50">
+                                    <td class="px-6 py-4 text-gray-700">{{ output.date.strftime('%Y-%m-%d') if output.date else '-' }}</td>
+                                    <td class="px-6 py-4 text-gray-700 font-mono text-sm">-</td>
+                                    <td class="px-6 py-4 text-gray-700">{{ output.customer or '-' }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_kg or 0) }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold text-green-600">{{ "%.2f"|format(output.amount_paid_rwf or output.amount_paid or 0) }}</td>
+                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold {% if (output.debt_remaining or 0) > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+                                        {{ "%.2f"|format(output.debt_remaining or 0) }}
+                                    </td>
+                                    <td class="px-6 py-4 text-right text-xs text-slate-500">No batch</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% endif %}
             </div>
 
             <!-- Summary Stats -->

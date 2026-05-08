@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unearned Receipts Allocation</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-gray-900">Allocate Customer Unearned Receipts (Allocate to Batch)</h1>
+            <div class="flex items-center gap-3">
+                {% include '_notifications_bell.html' %}
+                <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-sm text-gray-600">Select a receipt and allocate it to a batch. This will update the customer ledger.</p>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table class="min-w-full border-collapse">
+                <thead class="bg-slate-900 text-white">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Date</th>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Customer</th>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Channel</th>
+                        <th class="px-4 py-3 text-right text-sm font-semibold">Amount (RWF)</th>
+                        <th class="px-4 py-3 text-right text-sm font-semibold">Remaining (RWF)</th>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Allocate</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200">
+                    {% for r in rows %}
+                    <tr class="hover:bg-slate-50 text-sm">
+                        <td class="px-4 py-3 text-slate-700">{{ r.received_at|rwanda_datetime if r.received_at else '' }}</td>
+                        <td class="px-4 py-3 text-slate-900 font-semibold">{{ r.customer }}</td>
+                        <td class="px-4 py-3 text-slate-700">{{ r.payment_channel }}</td>
+                        <td class="px-4 py-3 text-right text-slate-700">{{ '{:,.2f}'.format(r.amount_rwf or 0) }}</td>
+                        <td class="px-4 py-3 text-right font-bold text-slate-900">{{ '{:,.2f}'.format(r.remaining_rwf or 0) }}</td>
+                        <td class="px-4 py-3">
+                            {% if (r.remaining_rwf or 0) > 0 %}
+                            <form method="post" action="{{ url_for('core.allocate_customer_unearned', unearned_id=r.id) }}" class="grid grid-cols-1 gap-2 md:grid-cols-4">
+                                <input name="batch_id" class="rounded border border-slate-300 px-2 py-1" placeholder="Batch ID" required>
+                                <select name="mineral_type" class="rounded border border-slate-300 px-2 py-1" required>
+                                    <option value="copper">Coltan</option>
+                                    <option value="cassiterite">Cassiterite</option>
+                                </select>
+                                <input name="amount_rwf" type="number" step="0.01" min="0" max="{{ r.remaining_rwf or 0 }}" class="rounded border border-slate-300 px-2 py-1" placeholder="Amount" required>
+                                <button class="rounded bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700">Allocate</button>
+                            </form>
+                            {% else %}
+                            <span class="text-xs text-slate-500">Fully allocated</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

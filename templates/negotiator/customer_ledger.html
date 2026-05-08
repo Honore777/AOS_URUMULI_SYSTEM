@@ -60,6 +60,7 @@
                                     <th class="px-3 py-3 text-left">{% if user_role == 'boss' %}Itariki{% else %}Date{% endif %}</th>
                                     <th class="px-3 py-3 text-left">{% if user_role == 'boss' %}Ubwoko bw’Amabuye{% else %}Mineral{% endif %}</th>
                                     <th class="px-3 py-3 text-left">{% if user_role == 'boss' %}Itsinda (Batch){% else %}Batch{% endif %}</th>
+                                    <th class="px-3 py-3 text-left">Ref</th>
                                     <th class="px-3 py-3 text-right">Qty (kg)</th>
                                     <th class="px-3 py-3 text-right">Moyenne</th>
                                     {% if mineral_type != 'cassiterite' %}
@@ -80,12 +81,21 @@
                                     <td class="px-3 py-3 text-slate-600">{{ e.get('date').strftime('%Y-%m-%d %H:%M') if e.get('date') else '-' }}</td>
                                     <td class="px-3 py-3 text-slate-700 uppercase">{{ e.get('mineral_type') or '-' }}</td>
                                     <td class="px-3 py-3 text-slate-700">{{ e.get('batch_id') or '-' }}</td>
+                                    <td class="px-3 py-3 text-slate-700">
+                                        {% if e.get('receipt_id') %}
+                                            <a class="font-semibold text-indigo-700 hover:text-indigo-900" href="{{ url_for('core.customer_receipt_detail', receipt_id=e.get('receipt_id')) }}">receipt:{{ e.get('receipt_id') }}</a>
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
                                     <td class="px-3 py-3 text-right text-slate-700">{{ '%.2f'|format(e.get('qty', 0) or 0) }}</td>
                                     <td class="px-3 py-3 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne', 0) or 0) }}</td>
                                     {% if mineral_type != 'cassiterite' %}
                                     <td class="px-3 py-3 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne_nb', 0) or 0) }}</td>
                                     {% endif %}
-                                    <td class="px-3 py-3 font-semibold text-slate-900">{{ e.get('description') }}</td>
+                                    <td class="px-3 py-3 font-semibold text-slate-900">
+                                        {{ e.get('description') }}
+                                    </td>
                                     <td class="px-3 py-3 text-right font-bold text-red-700">{% if debit_amount %}{{ '{:,.0f}'.format(debit_amount or 0) }}{% else %}-{% endif %}</td>
                                     <td class="px-3 py-3 text-right font-bold text-emerald-700">{% if credit_amount %}{{ '{:,.0f}'.format(credit_amount or 0) }}{% else %}-{% endif %}</td>
                                     <td class="px-3 py-3 text-right font-bold text-slate-900">{{ '{:,.0f}'.format(balance_amount or 0) }}</td>

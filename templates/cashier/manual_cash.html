@@ -1,0 +1,56 @@
+{% extends 'cashier/base.html' %}
+
+{% block title %}Manual Cash In/Out{% endblock %}
+
+{% block content %}
+<div>
+    <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
+    <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Manual Cash In/Out</h1>
+    <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">Use this when cash physically enters or leaves the drawer and it is not tied to a receipt. This creates a request for boss approval.</p>
+</div>
+
+<div class="mt-6 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+    <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="mb-5">
+            <h2 class="text-xl font-extrabold text-slate-900">Record Cash Transaction</h2>
+            <p class="mt-1 text-sm text-slate-500">Creates a pending review. Cash balance changes only after approval + disbursement.</p>
+        </div>
+        <form method="post" action="{{ url_for('core.cashier_manual_cash') }}" class="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+                <label class="mb-1 block text-sm font-semibold text-slate-700">Account</label>
+                <select name="account_id" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                    {% for a in accounts %}
+                    <option value="{{ a.id }}">{{ a.name }} — {{ '{:,.2f}'.format(a.current_balance or 0) }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-semibold text-slate-700">Direction</label>
+                <select name="direction" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                    <option value="IN">Cash In</option>
+                    <option value="OUT">Cash Out</option>
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-semibold text-slate-700">Amount</label>
+                <input name="amount" type="number" step="0.01" min="0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="0.00">
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-semibold text-slate-700">Note</label>
+                <input name="note" type="text" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="Optional note">
+            </div>
+            <div class="md:col-span-2">
+                <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700">Submit Cash Movement</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="rounded-3xl border border-slate-200 bg-slate-950 p-6 text-slate-100 shadow-sm">
+        <h2 class="text-xl font-extrabold text-white">Reminder</h2>
+        <div class="mt-4 space-y-4 text-sm leading-6 text-slate-300">
+            <p>Manual cash movements must match the physical drawer movement.</p>
+            <p>Boss approval authorizes the movement. Cashier disbursement posts the final transaction.</p>
+        </div>
+    </section>
+</div>
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends 'cashier/base.html' %}
+
+{% block title %}Pending Receipts{% endblock %}
+
+{% block content %}
+<div>
+    <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
+    <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Pending Cash Receipts</h1>
+    <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">Receipts handed over by negotiators. The cashier collects cash into the correct account now (RWF vs USD), then the boss reviews the action for audit.</p>
+</div>
+
+<div class="mt-6 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+    <div class="border-b border-slate-200 px-6 py-4">
+        <h2 class="text-xl font-extrabold text-slate-900">Receipts Waiting Collection</h2>
+    </div>
+    <div class="p-6">
+        {% if pending_receipts|length == 0 %}
+            <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">No pending cash receipts.</div>
+        {% else %}
+        <ul class="space-y-4">
+            {% for r in pending_receipts %}
+            <li class="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <div class="font-bold text-slate-900">Receipt #{{ r.id }} — {{ r.customer or r.plan.customer or 'N/A' }}</div>
+                        {% if (r.currency or 'RWF')|upper == 'USD' %}
+                            <div class="mt-1 text-sm text-slate-600">Amount: {{ '{:,.2f}'.format(r.amount_input or 0) }} USD @ {{ '{:,.2f}'.format(r.exchange_rate or 1) }} = {{ '{:,.2f}'.format(r.amount_rwf or 0) }} RWF</div>
+                        {% else %}
+                            <div class="mt-1 text-sm text-slate-600">Amount: {{ '{:,.2f}'.format(r.amount_rwf or 0) }} RWF</div>
+                        {% endif %}
+                        <div class="text-sm text-slate-500">Received: {{ r.created_at|kigali_datetime('%Y-%m-%d %H:%M') if r.created_at else '-' }}</div>
+                        <div class="text-sm text-slate-500">Note: {{ r.note or '-' }}</div>
+                    </div>
+                    <form method="POST" action="{{ url_for('core.cashier_pending_receipts') }}" class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input type="hidden" name="collect_receipt_id" value="{{ r.id }}">
+                        <select name="account_id" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                            {% for a in cash_accounts %}
+                            <option value="{{ a.id }}">{{ a.name }} [{{ a.currency or 'RWF' }}] ({{ '{:,.2f}'.format(a.current_balance or 0) }})</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-700">Collect Cash</button>
+                    </form>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+</div>
+
+<div class="mt-6 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+    <div class="border-b border-slate-200 px-6 py-4">
+        <h2 class="text-xl font-extrabold text-slate-900">Unearned Receipts (Pay Before Delivery)</h2>
+    </div>
+    <div class="p-6">
+        {% if pending_unearned|length == 0 %}
+            <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">No pending unearned cash receipts.</div>
+        {% else %}
+        <ul class="space-y-4">
+            {% for r in pending_unearned %}
+            <li class="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <div class="font-bold text-slate-900">Unearned #{{ r.id }} — {{ r.customer or 'N/A' }}</div>
+                        {% if (r.currency or 'RWF')|upper == 'USD' %}
+                            <div class="mt-1 text-sm text-slate-600">Amount: {{ '{:,.2f}'.format(r.amount_input or 0) }} USD @ {{ '{:,.2f}'.format(r.exchange_rate or 1) }} = {{ '{:,.2f}'.format(r.amount_rwf or 0) }} RWF</div>
+                        {% else %}
+                            <div class="mt-1 text-sm text-slate-600">Amount: {{ '{:,.2f}'.format(r.amount_rwf or 0) }} RWF</div>
+                        {% endif %}
+                        <div class="text-sm text-slate-500">Received: {{ r.received_at|kigali_datetime('%Y-%m-%d %H:%M') if r.received_at else '-' }}</div>
+                        <div class="text-sm text-slate-500">Note: {{ r.note or '-' }}</div>
+                    </div>
+                    <form method="POST" action="{{ url_for('core.cashier_pending_receipts') }}" class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input type="hidden" name="receipt_kind" value="unearned">
+                        <input type="hidden" name="collect_unearned_id" value="{{ r.id }}">
+                        <select name="account_id" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                            {% for a in cash_accounts %}
+                            <option value="{{ a.id }}">{{ a.name }} [{{ a.currency or 'RWF' }}] ({{ '{:,.2f}'.format(a.current_balance or 0) }})</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-700">Collect Cash</button>
+                    </form>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+</div>
+
+<script type="application/json" id="pending-receipts-initial">{{ {
+    "earned": (pending_receipts|length if pending_receipts is defined else 0),
+    "unearned": (pending_unearned|length if pending_unearned is defined else 0)
+}|tojson }}</script>
+
+<script>
+    (function () {
+        const POLL_MS = 10000;
+        let last = { earned: 0, unearned: 0 };
+        try {
+            const el = document.getElementById('pending-receipts-initial');
+            if (el && el.textContent) {
+                last = JSON.parse(el.textContent);
+            }
+        } catch (e) {
+            last = { earned: 0, unearned: 0 };
+        }
+
+        async function poll() {
+            if (document.hidden) return;
+            try {
+                const res = await fetch("{{ url_for('core.cashier_pending_receipts_summary') }}", { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data) return;
+                const next = {
+                    earned: Number(data.earned || 0),
+                    unearned: Number(data.unearned || 0),
+                };
+                if (next.earned !== last.earned || next.unearned !== last.unearned) {
+                    window.location.reload();
+                    return;
+                }
+            } catch (e) {
+                return;
+            }
+        }
+
+        setInterval(poll, POLL_MS);
+    })();
+</script>
+{% endblock %}

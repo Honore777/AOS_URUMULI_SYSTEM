@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lender Ledger</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-800">Lender Ledger</h1>
+                <p class="mt-1 text-sm text-slate-600">{{ lender_name }}</p>
+            </div>
+            <a href="{{ url_for('core.accountant_lenders') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back</a>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table class="min-w-full border-collapse">
+                <thead class="bg-slate-900 text-white">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Date</th>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Type</th>
+                        <th class="px-4 py-3 text-right text-sm font-semibold">Amount (RWF)</th>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Method</th>
+                        <th class="px-4 py-3 text-left text-sm font-semibold">Reference</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200">
+                    {% for e in entries %}
+                    <tr class="hover:bg-slate-50 text-sm">
+                        <td class="px-4 py-3 text-slate-800">{{ e.created_at|rwanda_datetime if e.created_at else '' }}</td>
+                        <td class="px-4 py-3 text-slate-800 font-semibold">{{ e.entry_type }}</td>
+                        <td class="px-4 py-3 text-right text-slate-800">{{ '{:,.2f}'.format(e.amount_rwf or 0) }}</td>
+                        <td class="px-4 py-3 text-slate-800">{{ e.note }}</td>
+                        <td class="px-4 py-3 text-slate-800">
+                            {% if e.cash_transaction_id %}
+                                <a class="text-xs font-bold text-indigo-700 hover:text-indigo-900" href="{{ url_for('core.cash_transaction_detail', tx_id=e.cash_transaction_id) }}">cash_tx:{{ e.cash_transaction_id }}</a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

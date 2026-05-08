@@ -11,7 +11,7 @@
     <div class="max-w-4xl mx-auto">
         <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold text-gray-800">Edit Supplier Payment</h1>
-            <a href="{{ url_for('cassiterite.cassiterite_supplier_ledger', supplier=(payment.stock.supplier if payment and payment.stock else '') ) }}" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">Back</a>
+            <a href="{{ url_for('core.consolidated_supplier_ledger_lookup', supplier=(payment.stock.supplier if payment and payment.stock else '') ) }}" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">Back</a>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}

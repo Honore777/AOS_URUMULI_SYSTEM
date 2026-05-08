@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Unearned Receipt #{{ receipt.id }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <style>
+        @media print {
+            @page { size: A5 portrait; margin: 10mm; }
+            .no-print { display: none !important; }
+            body { background: white; }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+<div class="mx-auto max-w-4xl space-y-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900">Customer Unearned Receipt Detail</h1>
+            <p class="mt-1 text-sm text-slate-600">Ref: <span class="font-semibold">unearned_receipt:{{ receipt.id }}</span></p>
+        </div>
+        <div class="flex gap-2 no-print">
+            <a href="{{ url_for('core.customer_ledger_index') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Customer Ledgers</a>
+            <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">Menu</a>
+            <button onclick="window.print()" class="rounded bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Print</button>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 text-sm">
+            <div>
+                <dt class="text-slate-500">Mineral</dt>
+                <dd class="font-semibold text-slate-900">{{ receipt.mineral_type or '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-slate-500">Customer</dt>
+                <dd class="font-semibold text-slate-900">{{ receipt.customer or '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-slate-500">Channel</dt>
+                <dd class="font-semibold text-slate-900">{{ receipt.payment_channel or '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-slate-500">Amount (RWF)</dt>
+                <dd class="font-semibold text-slate-900">{{ '{:,.2f}'.format(receipt.amount_rwf or 0) }}</dd>
+            </div>
+            <div>
+                <dt class="text-slate-500">Remaining (RWF)</dt>
+                <dd class="font-semibold text-slate-900">{{ '{:,.2f}'.format(receipt.remaining_rwf or 0) }}</dd>
+            </div>
+            <div>
+                <dt class="text-slate-500">Received At</dt>
+                <dd class="font-semibold text-slate-900">{{ receipt.received_at|kigali_datetime('%Y-%m-%d %H:%M') if receipt.received_at else '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-slate-500">Collected?</dt>
+                <dd class="font-semibold text-slate-900">{{ 'YES' if receipt.is_collected else 'NO' }}</dd>
+            </div>
+            <div>
+                <dt class="text-slate-500">Created By</dt>
+                <dd class="font-semibold text-slate-900">{{ receipt.created_by.username if receipt.created_by else '-' }}</dd>
+            </div>
+            <div class="sm:col-span-2">
+                <dt class="text-slate-500">Note</dt>
+                <dd class="font-semibold text-slate-900">{{ receipt.note or '-' }}</dd>
+            </div>
+        </dl>
+    </div>
+</div>
+</body>
+</html>

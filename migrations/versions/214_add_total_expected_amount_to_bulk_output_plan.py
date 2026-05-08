@@ -18,9 +18,24 @@ depends_on = None
 
 def upgrade():
     # Add total_expected_amount column to bulk_output_plan table
-    op.add_column('bulk_output_plan', sa.Column('total_expected_amount', sa.Float(), nullable=True, server_default='0'))
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name='bulk_output_plan'
+                  AND column_name='total_expected_amount'
+            ) THEN
+                ALTER TABLE bulk_output_plan
+                ADD COLUMN total_expected_amount DOUBLE PRECISION DEFAULT 0;
+            END IF;
+        END $$;
+        """
+    )
 
 
 def downgrade():
     # Remove the column if migration is rolled back
-    op.drop_column('bulk_output_plan', 'total_expected_amount')
+    op.execute("ALTER TABLE bulk_output_plan DROP COLUMN IF EXISTS total_expected_amount")

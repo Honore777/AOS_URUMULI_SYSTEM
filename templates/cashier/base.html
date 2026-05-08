@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Cashier{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 text-slate-100">
+<div class="mx-auto max-w-7xl px-4 py-6 lg:px-8">
+    <div class="rounded-3xl border border-white/10 bg-white/95 p-6 shadow-2xl backdrop-blur-sm text-slate-900">
+        <div class="md:flex md:gap-6">
+            <aside class="md:fixed md:inset-y-6 md:left-6 md:w-[320px]">
+                <div class="h-full rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:overflow-y-auto">
+                    <div class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cashier</div>
+                    <div class="mt-2 text-lg font-black text-slate-900">Navigation</div>
+
+                    <div class="mt-4 grid grid-cols-1 gap-2">
+                        <a href="{{ url_for('core.cashier_request_cash_account') }}" class="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-950 hover:bg-indigo-100">Saba Konti y’Amafaranga</a>
+                        <a href="{{ url_for('core.cashier_cash_transfer') }}" class="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-950 hover:bg-indigo-100">Kohereza Amafaranga (Transfer)</a>
+                        <a href="{{ url_for('core.cashier_approved_requests') }}" class="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-950 hover:bg-indigo-100">Approved Requests</a>
+                        <a href="{{ url_for('core.cashier_pending_receipts') }}" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Pending Receipts</a>
+                        <a href="{{ url_for('core.cashier_manual_cash') }}" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Manual Cash In/Out</a>
+                        <a href="{{ url_for('core.cashier_daily_closing') }}" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Daily Closing</a>
+                        <a href="{{ url_for('core.cashier_supplier_refund') }}" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Supplier Refund</a>
+                        <a href="{{ url_for('core.cashier_transactions') }}" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Transactions</a>
+                    </div>
+
+                    <div class="mt-6 flex gap-2">
+                        <a href="{{ url_for('entry_point') }}" class="inline-flex flex-1 items-center justify-center px-3 py-2 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 shadow-sm">Menu</a>
+                        <a href="{{ url_for('logout') }}" class="inline-flex flex-1 items-center justify-center px-3 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 shadow-sm">Logout</a>
+                    </div>
+                </div>
+            </aside>
+
+            <main class="md:ml-[344px]">
+                <div class="mb-4 flex items-center justify-end">
+                    {% include '_notifications_bell.html' %}
+                </div>
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        <div class="space-y-2">
+                            {% for category, message in messages %}
+                                <div class="rounded-2xl border px-4 py-3 text-sm font-semibold shadow-sm
+                                    {{ 'border-emerald-200 bg-emerald-50 text-emerald-900' if category in ['success', 'info'] else ('border-amber-200 bg-amber-50 text-amber-900' if category == 'warning' else 'border-red-200 bg-red-50 text-red-900') }}">
+                                    {{ message }}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+</div>
+</body>
+</html>

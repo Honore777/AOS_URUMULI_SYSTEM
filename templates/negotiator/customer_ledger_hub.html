@@ -18,8 +18,10 @@
                 <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
                 <nav class="space-y-2">
                     <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.customer_unearned_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Unearned</a>
                     <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
                     <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Customer Ledgers</a>
+                    <a href="{{ url_for('core.negotiator_loans') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Loans</a>
                 </nav>
             </aside>
 
@@ -33,6 +35,10 @@
                     <a href="{{ url_for('core.cassiterite_customer_ledger_index') }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
                         <p class="font-semibold text-slate-900">Cassiterite Customer Ledgers</p>
                         <p class="text-xs text-slate-500">Open mineral-specific customer ledgers</p>
+                    </a>
+                    <a href="{{ url_for('core.consolidated_customer_ledger_index') }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100 md:col-span-2">
+                        <p class="font-semibold text-slate-900">Consolidated Customer Ledgers (All Minerals)</p>
+                        <p class="text-xs text-slate-500">View batches for the same customer across Coltan + Cassiterite</p>
                     </a>
                 </div>
             </section>

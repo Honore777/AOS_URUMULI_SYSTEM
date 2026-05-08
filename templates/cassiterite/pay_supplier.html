@@ -102,10 +102,12 @@
                         <input
                             type="text"
                             name="supplier"
+                            id="supplier-input"
                             value="{{ supplier_query or '' }}"
                             placeholder="Type supplier name"
                             class="w-full border border-gray-300 rounded-md p-2"
                         >
+                        <div id="supplier-suggest" class="relative"></div>
                     </div>
                     <div class="flex gap-2">
                         <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">Search</button>
@@ -130,6 +132,102 @@
                 {% endif %}
             </div>
 
+            <script>
+              (function () {
+                const input = document.getElementById('supplier-input');
+                const holder = document.getElementById('supplier-suggest');
+                if (!input || !holder) return;
+
+                holder.innerHTML = `
+                  <div class="absolute z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg hidden" id="supplier-suggest-list"></div>
+                `;
+                const list = holder.querySelector('#supplier-suggest-list');
+                let lastQ = '';
+                let inflight = null;
+
+                function hide() {
+                  if (list) list.classList.add('hidden');
+                  if (list) list.innerHTML = '';
+                }
+
+                function fmtRwf(v) {
+                  const n = Number(v || 0);
+                  try { return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' RWF'; }
+                  catch (e) { return (n || 0).toFixed(0) + ' RWF'; }
+                }
+
+                function render(items) {
+                  if (!items || items.length === 0) {
+                    hide();
+                    return;
+                  }
+                  list.innerHTML = '';
+                  items.forEach(it => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-b-0';
+                    const wallet = fmtRwf(it.wallet_remaining || 0);
+                    const net = fmtRwf(it.net_ledger_rwf || 0);
+                    btn.innerHTML = `
+                      <div class="flex items-start justify-between gap-3">
+                        <div class="font-semibold text-slate-900">${(it.name || '').toString()}</div>
+                        <div class="text-right text-xs">
+                          <div class="font-bold text-emerald-700">Wallet: ${wallet}</div>
+                          <div class="text-slate-600">Net: ${net}</div>
+                        </div>
+                      </div>
+                    `;
+
+                    btn.addEventListener('mousedown', (e) => {
+                      try { e.preventDefault(); } catch (err) {}
+                      input.value = it.name;
+                      hide();
+                    });
+                    list.appendChild(btn);
+                  });
+                  list.classList.remove('hidden');
+                }
+
+                async function fetchSuggest(q) {
+                  if (inflight) {
+                    try { inflight.abort(); } catch (e) {}
+                  }
+                  inflight = new AbortController();
+                  const resp = await fetch(`{{ url_for('core.supplier_name_suggest') }}?with_balances=1&q=${encodeURIComponent(q)}`, {
+                    signal: inflight.signal,
+                    headers: { 'Accept': 'application/json' }
+                  });
+                  if (!resp.ok) return [];
+                  const data = await resp.json();
+                  return (data && data.results) ? data.results : [];
+                }
+
+                let t = null;
+                input.addEventListener('input', () => {
+                  const q = (input.value || '').trim();
+                  if (q === lastQ) return;
+                  lastQ = q;
+                  if (t) clearTimeout(t);
+                  if (!q) {
+                    hide();
+                    return;
+                  }
+                  t = setTimeout(async () => {
+                    try {
+                      const items = await fetchSuggest(q);
+                      render(items);
+                    } catch (e) {
+                      hide();
+                    }
+                  }, 160);
+                });
+
+                input.addEventListener('blur', () => {
+                  setTimeout(hide, 120);
+                });
+              })();
+            </script>
+
             <table class="w-full bg-white shadow-md rounded-lg overflow-hidden">
                 <thead class="bg-indigo-600 text-white">
                     <tr>
@@ -152,7 +250,7 @@
                             {{ '{:,.2f}'.format(s.remaining or 0) }}
                         </td>
                         <td class="px-4 py-2 text-center">
-                            <a href="{{ url_for('cassiterite.cassiterite_supplier_ledger', supplier=s.supplier) }}" 
+                            <a href="{{ url_for('core.consolidated_supplier_ledger_lookup', supplier=s.supplier) }}" 
                                class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition">
                                 View Ledger
                             </a>

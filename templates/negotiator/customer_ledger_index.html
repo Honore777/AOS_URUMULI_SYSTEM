@@ -27,7 +27,7 @@
                 {% if customers %}
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {% for c in customers %}
-                    <a href="{{ url_for('core.copper_customer_ledger', customer=c) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger', customer=c) }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
+                    <a href="{{ url_for('core.consolidated_customer_ledger', customer=c) if mineral_type == 'all' else (url_for('core.copper_customer_ledger', customer=c) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger', customer=c)) }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
                         <p class="font-semibold text-slate-900">{{ c }}</p>
                         <p class="text-xs text-slate-500">Open {{ mineral_type }} ledger</p>
                     </a>

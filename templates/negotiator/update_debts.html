@@ -11,6 +11,7 @@
         <div class="flex items-center justify-between">
             <h1 class="text-2xl font-bold text-slate-800">Negotiator - Update Debts</h1>
             <div class="flex items-center gap-2">
+                {% include '_notifications_bell.html' %}
                 <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
                 <a href="{{ url_for('logout') }}" class="rounded bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700">Logout</a>
             </div>
@@ -129,12 +130,50 @@
                         <button type="submit" class="rounded bg-indigo-600 text-white px-4 py-2 hover:bg-indigo-700">Apply Payment To Selected Batch</button>
                     </div>
                 </form>
+
+                <div class="rounded-xl border border-slate-200 bg-white p-4">
+                    <h2 class="text-sm font-extrabold text-slate-900">Cash Receipts Waiting Handover To Cashier</h2>
+                    <p class="mt-1 text-xs text-slate-600">After counting the physical money, hand it over in the system so cashier can confirm and collect into a cash account.</p>
+
+                    {% if handover_receipts is defined and handover_receipts|length == 0 %}
+                        <div class="mt-3 rounded border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-600">No receipts waiting handover.</div>
+                    {% else %}
+                        <div class="mt-3 overflow-x-auto">
+                            <table class="min-w-full text-sm">
+                                <thead class="bg-slate-100 text-slate-700">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left font-semibold">Receipt</th>
+                                        <th class="px-3 py-2 text-left font-semibold">Customer</th>
+                                        <th class="px-3 py-2 text-right font-semibold">Amount (RWF)</th>
+                                        <th class="px-3 py-2 text-left font-semibold">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-200">
+                                    {% for r in (handover_receipts or []) %}
+                                    <tr class="hover:bg-slate-50">
+                                        <td class="px-3 py-2 font-bold text-slate-900">#{{ r.id }}</td>
+                                        <td class="px-3 py-2 text-slate-700">{{ r.customer }}</td>
+                                        <td class="px-3 py-2 text-right font-semibold text-slate-900">{{ '{:,.2f}'.format(r.amount_rwf or 0) }}</td>
+                                        <td class="px-3 py-2">
+                                            <form method="post" action="{{ url_for('core.negotiator_handover_customer_receipt', receipt_id=r.id) }}">
+                                                <button class="rounded bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700">Handover to cashier</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% endif %}
+                </div>
             </section>
         </div>
     </div>
 
+    <script type="application/json" id="batch-options-json">{{ batch_options | tojson }}</script>
+
     <script>
-    const batchOptions = {{ batch_options | tojson }};
+    const batchOptions = JSON.parse(document.getElementById('batch-options-json').textContent || '[]');
     const customerSelect = document.getElementById('customer-select');
     const batchSelect = document.getElementById('batch-select');
     const mineralInput = document.getElementById('mineral-type');

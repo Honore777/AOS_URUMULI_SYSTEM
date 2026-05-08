@@ -18,7 +18,7 @@ from core.auth import role_required
 
 @cassiterite_bp.before_request
 @login_required
-@role_required('accountant')
+@role_required('accountant', 'cashier', 'boss', 'admin')
 def cassiterite_role_protect():
     pass
 

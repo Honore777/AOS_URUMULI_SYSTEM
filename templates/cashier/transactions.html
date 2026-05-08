@@ -1,0 +1,53 @@
+{% extends 'cashier/base.html' %}
+
+{% block title %}Transactions{% endblock %}
+
+{% block content %}
+<div>
+    <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
+    <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Transactions</h1>
+    <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">Latest posted cash transactions across all cash accounts.</p>
+</div>
+
+<div class="mt-6 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+    <div class="border-b border-slate-200 px-6 py-4">
+        <h2 class="text-xl font-extrabold text-slate-900">Recent Transactions</h2>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+            <thead class="bg-slate-100 text-slate-700">
+                <tr>
+                    <th class="px-4 py-3 text-left font-semibold">Date</th>
+                    <th class="px-4 py-3 text-left font-semibold">Account</th>
+                    <th class="px-4 py-3 text-left font-semibold">Reference</th>
+                    <th class="px-4 py-3 text-right font-semibold">Amount</th>
+                    <th class="px-4 py-3 text-left font-semibold">Direction</th>
+                    <th class="px-4 py-3 text-left font-semibold">User</th>
+                    <th class="px-4 py-3 text-left font-semibold">Note</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 bg-white">
+                {% for r in recent %}
+                <tr class="hover:bg-slate-50">
+                    <td class="px-4 py-3 text-slate-600">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '-' }}</td>
+                    <td class="px-4 py-3 font-medium text-slate-900">{{ r.account.name if r.account else 'N/A' }}</td>
+                    <td class="px-4 py-3 text-slate-700">
+                        <a class="font-semibold text-emerald-700 hover:text-emerald-900" href="{{ url_for('core.cash_transaction_detail', tx_id=r.id) }}">{{ r.reference or ('tx:' ~ r.id) }}</a>
+                    </td>
+                    <td class="px-4 py-3 text-right font-semibold text-slate-900">{{ '{:,.2f}'.format(r.amount or 0) }}</td>
+                    <td class="px-4 py-3">
+                        {% if r.direction == 'IN' %}
+                            <span class="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800">Cash In</span>
+                        {% else %}
+                            <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">Cash Out</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-slate-600">{{ r.created_by.username if r.created_by else 'User' }}</td>
+                    <td class="px-4 py-3 text-slate-500">{{ r.note or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

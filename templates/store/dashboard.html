@@ -10,10 +10,23 @@
 <body class="bg-gradient-to-br from-blue-900 to-sky-800 min-h-screen p-6">
     <div class="max-w-6xl mx-auto bg-white rounded-xl shadow-2xl p-8">
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="mb-6 space-y-2">
+                    {% for category, msg in messages %}
+                        <div class="rounded px-4 py-3 text-sm {% if category == 'danger' %}bg-red-50 text-red-800 border border-red-100{% elif category == 'warning' %}bg-amber-50 text-amber-800 border border-amber-100{% elif category == 'success' %}bg-emerald-50 text-emerald-800 border border-emerald-100{% else %}bg-slate-50 text-slate-800 border border-slate-100{% endif %}">
+                            {{ msg }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
          <div class="flex flex-wrap items-center gap-3 justify-center md:justify-end">
                 <a href="{{ url_for('core.profile') }}" class="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold py-2 px-4 rounded-lg shadow-sm border border-slate-200">
                     👤 Profile
                 </a>
+                {% include '_notifications_bell.html' %}
                 <a href="{{ url_for('logout') }}" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-sm">
                     Logout
                 </a>
@@ -58,7 +71,7 @@
                         <tbody class="divide-y divide-gray-200 text-sm">
                             {% for plan in plans %}
                                 <tr class="hover:bg-gray-50">
-                                    <td class="px-4 py-3 text-gray-700">{{ plan.created_at.strftime('%Y-%m-%d %H:%M') if plan.created_at else 'N/A' }}</td>
+                                    <td class="px-4 py-3 text-gray-700">{{ plan.created_at|kigali_datetime('%Y-%m-%d %H:%M') if plan.created_at else 'N/A' }}</td>
                                     <td class="px-4 py-3 text-gray-700 uppercase">{{ plan.mineral_type }}</td>
                                     <td class="px-4 py-3 text-gray-700">{{ plan.customer or 'N/A' }}</td>
                                     <td class="px-4 py-3 text-gray-700">{{ plan.batch_id or 'N/A' }}</td>
@@ -115,48 +128,6 @@
             {% endif %}
         </section>
 
-        <!-- Notifications -->
-        <section>
-            <div class="flex items-center mb-4 gap-3">
-                <h2 class="text-2xl font-bold text-gray-800">Your Notifications</h2>
-                {% if unread_notifications_count is defined and unread_notifications_count > 0 %}
-                    <span class="ml-2 inline-flex items-center justify-center px-2 py-1 rounded-full text-xs font-semibold bg-red-600 text-white">
-                        {{ unread_notifications_count }} new
-                    </span>
-                {% endif %}
-                <form method="post" action="{{ url_for('core.mark_all_notifications_read') }}" class="ml-auto">
-                    <button type="submit" class="text-xs font-semibold text-gray-600 hover:text-gray-900 border border-gray-300 hover:border-gray-500 px-3 py-1 rounded-md bg-white">
-                        Mark all as read
-                    </button>
-                </form>
-            </div>
-            {% if notifications %}
-                <ul class="divide-y divide-gray-200 bg-white rounded-lg shadow-md">
-                    {% for n in notifications %}
-                        <li class="px-4 py-3 text-sm flex justify-between items-start">
-                            <div class="pr-4">
-                                <p class="font-semibold text-gray-800">{{ n.message }}</p>
-                                <p class="text-xs text-gray-500">Type: {{ n.type }} · {{ n.created_at.strftime('%Y-%m-%d %H:%M') if n.created_at else 'N/A' }}</p>
-                            </div>
-                            <div class="flex items-center gap-3">
-                                {% if n.read_at %}
-                                    <span class="text-xs text-gray-400">Read</span>
-                                {% else %}
-                                    <span class="text-xs text-emerald-600 font-semibold">New</span>
-                                    <form method="post" action="{{ url_for('core.mark_notification_read', notification_id=n.id) }}">
-                                        <button type="submit" class="text-xs font-semibold text-blue-600 hover:text-blue-800">
-                                            Mark as read
-                                        </button>
-                                    </form>
-                                {% endif %}
-                            </div>
-                        </li>
-                    {% endfor %}
-                </ul>
-            {% else %}
-                <p class="text-gray-500 text-sm">No notifications yet.</p>
-            {% endif %}
-        </section>
     </div>
     </div>
     <script>

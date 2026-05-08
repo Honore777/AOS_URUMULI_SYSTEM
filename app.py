@@ -9,7 +9,8 @@ Main Flask application factory. This file wires together:
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from flask_migrate import Migrate
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from config import Config, db
 import logging
@@ -21,6 +22,25 @@ from core.models import User
 
 app = Flask(__name__)
 app.config.from_object(Config)
+
+
+KIGALI_TZ = ZoneInfo('Africa/Kigali')
+
+
+@app.template_filter('kigali_datetime')
+def kigali_datetime(value, fmt='%Y-%m-%d %H:%M'):
+    if not value:
+        return ''
+    try:
+        dt = value
+        if getattr(dt, 'tzinfo', None) is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(KIGALI_TZ).strftime(fmt)
+    except Exception:
+        try:
+            return value.strftime(fmt)
+        except Exception:
+            return str(value)
 
 # Initialize database
 db.init_app(app)
@@ -116,6 +136,9 @@ def translate_review_type(type_value):
         'worker': 'Kwishyura Umukozi',
         'supplier': 'Kwishyura Utanga ibicuruzwa',
         'customer': 'Kwishyura Umukiriya',
+        'cash_transaction': 'Cash Movement (Cashier)',
+        'cash_collect_receipt': 'Collect Cash Receipt (Cashier)',
+        'cash_supplier_refund': 'Supplier Refund (Cashier)',
         'other': 'Ibindi',
     }
     return mapping.get(type_value, type_value)
@@ -308,161 +331,11 @@ def api_dashboard_data():
 
 @app.route('/supplier/<supplier>/ledger')
 def supplier_ledger(supplier):
-    """View supplier transaction ledger"""
-    from copper.models import CopperStock, SupplierPayment, CopperSupplier, CopperAdvanceAllocation
-    try:
-        app.logger.info("supplier_ledger: generating ledger for %s", supplier)
-        supplier_row = None
-        try:
-            supplier_id = int(supplier)
-        except Exception:
-            supplier_id = None
-        if supplier_id is not None:
-            supplier_row = CopperSupplier.query.get(supplier_id)
-        if supplier_row is None:
-            supplier_row = CopperSupplier.query.filter(CopperSupplier.name == supplier).first()
-        supplier_name = supplier_row.name if supplier_row else supplier
-        # Fetch only required stock columns and batch-load payments to avoid N+1
-        stock_rows = db.session.query(
-            CopperStock.id,
-            CopperStock.date,
-            CopperStock.voucher_no,
-            CopperStock.net_balance,
-        ).filter(CopperStock.supplier == supplier_name).order_by(CopperStock.date).all()
-
-        stock_ids = [r.id for r in stock_rows]
-        allocation_map = {}
-        if stock_ids:
-            allocation_rows = (
-                db.session.query(
-                    CopperAdvanceAllocation.stock_id,
-                    func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('applied'),
-                )
-                .filter(CopperAdvanceAllocation.stock_id.in_(stock_ids))
-                .group_by(CopperAdvanceAllocation.stock_id)
-                .all()
-            )
-            allocation_map = {row.stock_id: float(row.applied or 0) for row in allocation_rows}
-
-        payments = []
-        advance_payments = []
-        payment_amounts_total = 0.0
-
-        payment_filters = [SupplierPayment.is_deleted.is_(False)]
-        supplier_conditions = []
-        supplier_row_id = getattr(supplier_row, 'id', None)
-        if supplier_row_id is not None:
-            supplier_conditions.append(SupplierPayment.supplier_id == supplier_row_id)
-        supplier_conditions.append(SupplierPayment.supplier_name == supplier_name)
-        if stock_ids:
-            supplier_conditions.append(SupplierPayment.stock_id.in_(stock_ids))
-
-        payment_rows = (
-            db.session.query(SupplierPayment)
-            .filter(*payment_filters)
-            .filter(or_(*supplier_conditions))
-            .order_by(SupplierPayment.paid_at)
-            .all()
-        )
-        for payment in payment_rows:
-            payment_amount = float(payment.amount_rwf or payment.amount or 0)
-            payment_amounts_total += payment_amount
-            if payment.stock_id:
-                payments.append(payment)
-            else:
-                advance_payments.append(payment)
-
-        # Build a single chronological event stream.
-        # Advances are real credits. Stocks are real debits.
-        ledger_events = []
-
-        for r in stock_rows:
-            applied = allocation_map.get(r.id, 0.0)
-            ledger_events.append({
-                'date': r.date,
-                'kind': 'stock',
-                'sort_key': 1,
-                'description': f"Stock {r.voucher_no}" + (f" (advance linked: {applied:,.2f} RWF)" if applied > 0 else ""),
-                'debit': float(r.net_balance or 0),
-                'credit': 0.0,
-                'advance_amount': 0.0,
-            })
-
-        for payment in advance_payments:
-            payment_amount = float(payment.amount_rwf or payment.amount or 0)
-            remaining = float(payment.advance_remaining or 0)
-            allocated_amt = payment_amount - remaining
-            ledger_events.append({
-                'date': payment.paid_at,
-                'kind': 'advance',
-                'sort_key': 0,
-                'description': f"Advance Payment (Ref: {payment.reference}) [Advance] | Allocated: {allocated_amt:,.2f} RWF, Remaining: {remaining:,.2f} RWF",
-                'debit': 0.0,
-                'credit': payment_amount,
-                'advance_amount': payment_amount,
-            })
-
-        for payment in payments:
-            payment_amount = float(payment.amount_rwf or payment.amount or 0)
-            ledger_events.append({
-                'date': payment.paid_at,
-                'kind': 'settlement',
-                'sort_key': 2,
-                'description': f"Settlement Payment (Ref: {payment.reference})",
-                'debit': 0.0,
-                'credit': payment_amount,
-                'advance_amount': 0.0,
-            })
-
-        def _ledger_sort_value(value):
-            if isinstance(value, datetime):
-                return value
-            if isinstance(value, date):
-                return datetime.combine(value, time.min)
-            return datetime.min
-
-        ledger_events.sort(key=lambda item: (_ledger_sort_value(item['date']), item['sort_key']))
-
-        ledger = []
-        running_balance = 0.0
-        for event in ledger_events:
-            running_balance += float(event['debit']) - float(event['credit'])
-            ledger.append({
-                'date': event['date'],
-                'description': event['description'],
-                'debit': event['debit'],
-                'credit': event['credit'],
-                'advance_amount': event.get('advance_amount', 0.0),
-                'balance': running_balance,
-            })
-
-        # Summary cards (Model B):
-        # - Total owed is the sum of stock net balances.
-        # - Total paid includes ALL supplier payments (advances + settlements).
-        # - Balance can be negative (supplier credit).
-        total_owed = sum(float(r.net_balance or 0.0) for r in stock_rows)
-        total_paid_settlements = sum(float(p.amount_rwf or p.amount or 0.0) for p in payments)
-        total_advances = sum(float(p.amount_rwf or p.amount or 0.0) for p in advance_payments)
-        total_paid = float(total_paid_settlements + total_advances)
-        total_advance_applied = sum(float(v or 0.0) for v in allocation_map.values())
-        balance = float((total_owed or 0.0) - (total_paid or 0.0))
-
-        app.logger.info("supplier_ledger: completed for %s (owed=%s paid=%s)", supplier, total_owed, total_paid)
-
-        return render_template(
-            'copper/supplier_ledger.html',
-            supplier=supplier_name,
-            ledger=ledger,
-            total_owed=total_owed,
-            total_paid=total_paid,
-            total_advances=total_advances,
-            total_advance_applied=total_advance_applied,
-            balance=balance,
-            user_role=getattr(current_user, 'role', None),
-        )
-    except Exception:
-        app.logger.exception("supplier_ledger failed for %s", supplier)
-        raise
+    supplier_name = (supplier or '').strip()
+    if not supplier_name:
+        flash('Supplier is required.', 'warning')
+        return redirect(url_for('entry_point'))
+    return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier_name))
 
 
 @app.route('/_diag/brevo')
@@ -550,6 +423,33 @@ def shutdown_session(exception=None):
 def inject_config():
     """Inject config into templates"""
     return dict(app_name="Urumuli Smart System")
+
+
+@app.context_processor
+def inject_nav_notifications():
+    try:
+        from flask_login import current_user
+    except Exception:
+        current_user = None
+
+    if not current_user or not getattr(current_user, 'is_authenticated', False):
+        return {
+            'nav_notifications': [],
+            'nav_unread_notifications_count': 0,
+        }
+
+    try:
+        from core.models import fetch_user_notifications
+        notifications, unread_count = fetch_user_notifications(getattr(current_user, 'id', None), unread_limit=8, read_limit=0)
+        return {
+            'nav_notifications': notifications or [],
+            'nav_unread_notifications_count': int(unread_count or 0),
+        }
+    except Exception:
+        return {
+            'nav_notifications': [],
+            'nav_unread_notifications_count': 0,
+        }
 
 
 # ============================================================

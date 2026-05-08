@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Login - Smart Account Manager</title>
 
+    <link rel="manifest" href="/static/manifest.webmanifest" />
+
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
 </head>
@@ -67,4 +69,8 @@
         </form>
     </div>
 </body>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
+<script src="{{ url_for('static', filename='js/push.js') }}"></script>
 </html>

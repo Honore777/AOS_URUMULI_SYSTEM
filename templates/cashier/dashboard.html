@@ -9,41 +9,72 @@
 <body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 text-slate-100">
 <div class="mx-auto max-w-7xl px-4 py-6 lg:px-8">
     <div class="rounded-3xl border border-white/10 bg-white/95 p-6 shadow-2xl backdrop-blur-sm text-slate-900">
-        <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
-                <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Cashier Dashboard</h1>
-                <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                    This page is for the cash desk: collect cash receipts recorded by the negotiator, post manual cash in/out movements, and keep the cash account balance synchronized.
-                </p>
-            </div>
-            <div class="flex flex-col gap-3">
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <div class="rounded-2xl bg-slate-900 p-4 text-white shadow-lg">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-300">Cash accounts</div>
-                        <div class="mt-2 text-3xl font-black">{{ accounts|length }}</div>
+        <div class="md:flex md:gap-6">
+            <aside class="md:fixed md:inset-y-6 md:left-6 md:w-[320px]">
+                <div class="h-full rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:overflow-y-auto">
+                    <div class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cashier</div>
+                    <div class="mt-2 text-lg font-black text-slate-900">Quick Actions</div>
+
+                    <div class="mt-4 grid grid-cols-1 gap-3">
+                        <a href="{{ url_for('core.cashier_request_cash_account') }}" class="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-950 hover:bg-indigo-100">
+                            Saba Konti y’Amafaranga
+                        </a>
+                        <a href="#approved" class="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-950 hover:bg-indigo-100">Approved Requests</a>
+                        <a href="#receipts" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Pending Receipts</a>
+                        <a href="#cash" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Manual Cash In/Out</a>
+                        <a href="#reconcile" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Daily Closing</a>
+                        <a href="#refund" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Supplier Refund</a>
+                        <a href="#recent" class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-100">Recent Transactions</a>
                     </div>
-                    <div class="rounded-2xl bg-emerald-600 p-4 text-white shadow-lg">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-emerald-100">Pending receipts</div>
-                        <div class="mt-2 text-3xl font-black">{{ pending_receipts|length }}</div>
+
+                    <div class="mt-6 grid grid-cols-3 gap-3">
+                        <div class="rounded-2xl bg-slate-900 p-3 text-white shadow-sm">
+                            <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Accounts</div>
+                            <div class="mt-1 text-2xl font-black">{{ accounts|length }}</div>
+                        </div>
+                        <div class="rounded-2xl bg-emerald-600 p-3 text-white shadow-sm">
+                            <div class="text-[10px] font-semibold uppercase tracking-wide text-emerald-100">Receipts</div>
+                            <div class="mt-1 text-2xl font-black">{{ pending_receipts|length }}</div>
+                        </div>
+                        <div class="rounded-2xl bg-amber-600 p-3 text-white shadow-sm">
+                            <div class="text-[10px] font-semibold uppercase tracking-wide text-amber-100">Tx</div>
+                            <div class="mt-1 text-2xl font-black">{{ recent|length }}</div>
+                        </div>
                     </div>
-                    <div class="rounded-2xl bg-amber-600 p-4 text-white shadow-lg">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-amber-100">Recent transactions</div>
-                        <div class="mt-2 text-3xl font-black">{{ recent|length }}</div>
+
+                    <div class="mt-6 flex gap-2">
+                        <a href="{{ url_for('entry_point') }}" class="inline-flex flex-1 items-center justify-center px-3 py-2 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 shadow-sm">Menu</a>
+                        <a href="{{ url_for('logout') }}" class="inline-flex flex-1 items-center justify-center px-3 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 shadow-sm">Logout</a>
                     </div>
                 </div>
-                <div class="flex gap-2 justify-end">
-                    <a href="{{ url_for('entry_point') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 shadow-sm">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M3 9.5 12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>
-                        Menu
-                    </a>
-                    <a href="{{ url_for('logout') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 shadow-sm">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="m9 21-1-1 3-3H3v-2h8l-3-3 1-1 5 5z"/><path d="M20 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6v-2h6V5h-6V3z"/></svg>
-                        Logout
-                    </a>
+            </aside>
+
+            <main class="md:ml-[344px]">
+                <div class="flex flex-col gap-6">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
+                        <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Cashier Dashboard</h1>
+                        <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+                            This page is for the cash desk: collect cash receipts recorded by the negotiator, post manual cash in/out movements, and keep the cash account balance synchronized.
+                        </p>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        {% for a in accounts %}
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ a.name }}</div>
+                            <div class="mt-2 text-2xl font-black text-slate-900">{{ '{:,.2f}'.format(a.current_balance or 0) }}</div>
+                            <div class="mt-2">
+                                {% if recon_map and recon_map.get(a.id) %}
+                                    <span class="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800">Reconciled today</span>
+                                {% else %}
+                                    <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">Not reconciled</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
                 </div>
-            </div>
-        </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -69,11 +100,11 @@
             </div>
             <div class="rounded-2xl border border-amber-100 bg-amber-50 p-4">
                 <div class="text-sm font-bold text-amber-900">3. Keep balances accurate</div>
-                <div class="mt-1 text-sm text-amber-800">Every change updates the account balance immediately so the boss and accountant see the same numbers.</div>
+                <div class="mt-1 text-sm text-amber-800">Movements only update balances after boss approval and cashier disbursement, so everyone sees synchronized numbers.</div>
             </div>
         </div>
 
-        <div class="mt-8 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <div id="cash" class="mt-8 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
             <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div class="mb-5 flex items-center justify-between gap-4">
                     <div>
@@ -117,8 +148,8 @@
                 <h2 class="text-xl font-extrabold text-white">What this page is for</h2>
                 <div class="mt-4 space-y-4 text-sm leading-6 text-slate-300">
                     <p>This dashboard belongs to the cashier role. It is used to post real cash movements and to collect cash receipts that negotiators recorded for customers.</p>
-                    <p>When the cashier collects a receipt, the system marks the receipt as collected and updates the selected cash account balance immediately.</p>
-                    <p>That keeps the cash position accurate for the boss, accountant, and store teams.</p>
+                    <p>Requests are first approved by the boss. The cashier then disburses the approved request, which is when the system posts the real cash movement and updates the selected cash account.</p>
+                    <p>That keeps the cash position accurate and synchronized for the boss, accountant, and store teams.</p>
                 </div>
                 <div class="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div class="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Reminder</div>
@@ -127,8 +158,157 @@
             </section>
         </div>
 
-        <div class="mt-8 grid gap-6 xl:grid-cols-2">
-            <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <div id="reconcile" class="mt-8 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div class="mb-5">
+                    <h2 class="text-xl font-extrabold text-slate-900">Daily Closing (Reconciliation)</h2>
+                    <p class="mt-1 text-sm text-slate-500">Count the physical cash and confirm the balance for a specific cash account.</p>
+                </div>
+                <form method="post" action="{{ url_for('core.cashier_dashboard') }}" class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Account</label>
+                        <select name="reconcile_account_id" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" required>
+                            {% for a in accounts %}
+                            <option value="{{ a.id }}">{{ a.name }} — Expected: {{ '{:,.2f}'.format(a.current_balance or 0) }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Date</label>
+                        <input name="reconcile_date" type="date" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" required>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Counted Cash (RWF)</label>
+                        <input name="reconcile_counted_balance" type="number" step="0.01" min="0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="0.00" required>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Note</label>
+                        <input name="reconcile_note" type="text" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="Optional note">
+                    </div>
+                    <div class="md:col-span-2">
+                        <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-lg transition hover:bg-indigo-700">
+                            Save Closing
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 class="text-xl font-extrabold text-slate-900">Recent Closings</h2>
+                <p class="mt-1 text-sm text-slate-500">Variance shows difference between expected system balance and counted cash.</p>
+                <div class="mt-4 overflow-x-auto">
+                    {% if reconciliations is not defined or reconciliations|length == 0 %}
+                        <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">No closings recorded yet.</div>
+                    {% else %}
+                        <table class="min-w-full text-sm">
+                            <thead class="bg-slate-100 text-slate-700">
+                                <tr>
+                                    <th class="px-4 py-3 text-left font-semibold">Date</th>
+                                    <th class="px-4 py-3 text-left font-semibold">Account</th>
+                                    <th class="px-4 py-3 text-right font-semibold">Expected</th>
+                                    <th class="px-4 py-3 text-right font-semibold">Counted</th>
+                                    <th class="px-4 py-3 text-right font-semibold">Variance</th>
+                                    <th class="px-4 py-3 text-left font-semibold">Note</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200 bg-white">
+                                {% for rec in reconciliations %}
+                                <tr class="hover:bg-slate-50">
+                                    <td class="px-4 py-3 text-slate-600">{{ rec.recon_date.strftime('%Y-%m-%d') if rec.recon_date else '-' }}</td>
+                                    <td class="px-4 py-3 font-bold text-slate-900">{{ rec.account.name if rec.account else 'N/A' }}</td>
+                                    <td class="px-4 py-3 text-right text-slate-700">{{ '{:,.2f}'.format(rec.expected_balance or 0) }}</td>
+                                    <td class="px-4 py-3 text-right text-slate-700">{{ '{:,.2f}'.format(rec.counted_balance or 0) }}</td>
+                                    <td class="px-4 py-3 text-right font-extrabold {{ 'text-emerald-700' if (rec.variance or 0) == 0 else 'text-amber-700' }}">{{ '{:,.2f}'.format(rec.variance or 0) }}</td>
+                                    <td class="px-4 py-3 text-slate-500">{{ rec.note or '-' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% endif %}
+                </div>
+            </section>
+        </div>
+
+        <div id="refund" class="mt-8 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div class="mb-5">
+                    <h2 class="text-xl font-extrabold text-slate-900">Supplier Advance Refund (Cash In)</h2>
+                    <p class="mt-1 text-sm text-slate-500">Use this when a supplier returns cash for an advance that was given earlier.</p>
+                </div>
+                <form method="post" action="{{ url_for('core.cashier_dashboard') }}" class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div class="md:col-span-2">
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Supplier name</label>
+                        <input name="refund_supplier_name" type="text" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="Type supplier name (exact)" required>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Cash account</label>
+                        <select name="refund_account_id" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" required>
+                            {% for a in accounts %}
+                            <option value="{{ a.id }}">{{ a.name }} — {{ '{:,.2f}'.format(a.current_balance or 0) }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Refund amount (RWF)</label>
+                        <input name="refund_amount" type="number" step="0.01" min="0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="0.00" required>
+                    </div>
+                    <div class="md:col-span-2">
+                        <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-lg transition hover:bg-slate-800">
+                            Record Supplier Refund
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="rounded-3xl border border-emerald-200 bg-emerald-50 p-6 text-emerald-950 shadow-sm">
+                <h3 class="text-lg font-extrabold">How it works</h3>
+                <div class="mt-3 space-y-3 text-sm leading-6">
+                    <p>The system records a cash-in transaction to the selected cash account, then creates a negative supplier-advance ledger row for audit.</p>
+                    <p>To keep the supplier wallet correct, the refund is applied FIFO against the supplier’s remaining advances.</p>
+                </div>
+            </section>
+        </div>
+
+        <div id="approved" class="mt-8 grid gap-6 xl:grid-cols-2">
+            <section class="overflow-hidden rounded-3xl border border-indigo-200 bg-indigo-50 shadow-sm">
+                <div class="border-b border-indigo-200 px-6 py-4">
+                    <h2 class="text-xl font-extrabold text-indigo-950">Approved Requests Waiting Disbursement</h2>
+                    <p class="mt-1 text-sm text-indigo-800">These are boss-approved requests. Select the cash account and confirm disbursement to post the real cash movement.</p>
+                </div>
+                <div class="p-6">
+                    {% if approved_waiting is not defined or approved_waiting|length == 0 %}
+                        <div class="rounded-2xl border border-dashed border-indigo-300 bg-white/60 px-4 py-6 text-sm text-indigo-900">No approved requests waiting disbursement.</div>
+                    {% else %}
+                        <div class="space-y-4">
+                            {% for r in approved_waiting %}
+                                <div class="rounded-2xl border border-indigo-200 bg-white p-4 shadow-sm">
+                                    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                        <div>
+                                            <div class="text-xs font-semibold uppercase tracking-wide text-indigo-700">Approved Request</div>
+                                            <div class="mt-1 font-extrabold text-slate-900">#{{ r.id }} — {{ r.type|translate_review_type }}</div>
+                                            <div class="mt-1 text-sm text-slate-700">{{ r.customer }}</div>
+                                            <div class="mt-1 text-xs font-semibold text-indigo-700">Method: {{ r.method or '-' }}</div>
+                                            <div class="mt-1 text-sm font-bold text-slate-900">{{ r.display_amount or ('{:,.2f}'.format(r.amount or 0) ~ ' ' ~ (r.currency or 'RWF')) }}</div>
+                                            <div class="mt-1 text-xs text-slate-600">{{ r.display_comment or r.boss_comment or '-' }}</div>
+                                        </div>
+                                        <form method="post" action="{{ url_for('core.cashier_disburse_payment_review', review_id=r.id) }}" class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                            <select name="cash_account_id" class="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" {% if r.requires_cash_account %}required{% endif %}>
+                                                <option value="">Select cash account</option>
+                                                {% for a in cash_accounts %}
+                                                    <option value="{{ a.id }}">{{ a.name }} ({{ '{:,.2f}'.format(a.current_balance or 0) }})</option>
+                                                {% endfor %}
+                                            </select>
+                                            <button type="submit" class="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-lg hover:bg-indigo-700">Disburse</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+            </section>
+
+            <section id="receipts" class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                 <div class="border-b border-slate-200 px-6 py-4">
                     <h2 class="text-xl font-extrabold text-slate-900">Pending Cash Receipts</h2>
                     <p class="mt-1 text-sm text-slate-500">Receipts waiting to be collected into a cash account.</p>
@@ -164,7 +344,7 @@
                 </div>
             </section>
 
-            <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <section id="recent" class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                 <div class="border-b border-slate-200 px-6 py-4">
                     <h2 class="text-xl font-extrabold text-slate-900">Recent Transactions</h2>
                     <p class="mt-1 text-sm text-slate-500">Latest cashier posts across all accounts.</p>
@@ -202,6 +382,7 @@
                     </table>
                 </div>
             </section>
+            </main>
         </div>
     </div>
 </div>

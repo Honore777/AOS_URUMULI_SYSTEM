@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Adjustments</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-7xl mx-auto space-y-6">
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900">Stock Adjustments</h1>
+                <p class="text-sm text-slate-600 mt-1">Audit trail for stock edits and soft-deletions.</p>
+            </div>
+            <a href="{{ url_for('core.boss_dashboard') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back</a>
+        </div>
+
+        <form method="get" class="grid grid-cols-1 md:grid-cols-6 gap-3 rounded-xl bg-white p-4 shadow border border-slate-200">
+            <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Mineral</label>
+                <select name="mineral" class="w-full rounded border border-slate-300 px-3 py-2 text-sm">
+                    <option value="" {% if not mineral %}selected{% endif %}>All</option>
+                    <option value="copper" {% if mineral=='copper' %}selected{% endif %}>Copper/Coltan</option>
+                    <option value="cassiterite" {% if mineral=='cassiterite' %}selected{% endif %}>Cassiterite</option>
+                </select>
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Action</label>
+                <select name="action" class="w-full rounded border border-slate-300 px-3 py-2 text-sm">
+                    <option value="" {% if not action %}selected{% endif %}>All</option>
+                    <option value="EDIT" {% if action=='EDIT' %}selected{% endif %}>EDIT</option>
+                    <option value="DELETE" {% if action=='DELETE' %}selected{% endif %}>DELETE</option>
+                </select>
+            </div>
+            <div class="md:col-span-2 flex items-end gap-2">
+                <button type="submit" class="rounded bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700">Filter</button>
+                <a href="{{ url_for('core.boss_stock_adjustments') }}" class="rounded bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Reset</a>
+            </div>
+        </form>
+
+        <div class="rounded-xl bg-white shadow border border-slate-200 overflow-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-slate-800 text-white">
+                    <tr>
+                        <th class="px-3 py-3 text-left">Date</th>
+                        <th class="px-3 py-3 text-left">Mineral</th>
+                        <th class="px-3 py-3 text-left">Action</th>
+                        <th class="px-3 py-3 text-left">Stock ID</th>
+                        <th class="px-3 py-3 text-left">Reason</th>
+                        <th class="px-3 py-3 text-right">View</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200">
+                    {% for r in rows %}
+                    <tr class="hover:bg-slate-50">
+                        <td class="px-3 py-3 text-slate-600">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '-' }}</td>
+                        <td class="px-3 py-3 text-slate-700">{{ (r.mineral_type or '-')|upper }}</td>
+                        <td class="px-3 py-3 font-semibold {% if r.action=='DELETE' %}text-red-700{% else %}text-amber-700{% endif %}">{{ r.action }}</td>
+                        <td class="px-3 py-3 text-slate-700">{{ r.stock_id }}</td>
+                        <td class="px-3 py-3 text-slate-700">{{ r.reason or '-' }}</td>
+                        <td class="px-3 py-3 text-right">
+                            <a class="font-semibold text-indigo-700 hover:text-indigo-900" href="{{ url_for('core.boss_stock_adjustment_detail', log_id=r.id) }}">Open</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not rows %}
+                    <tr>
+                        <td colspan="6" class="px-3 py-6 text-center text-slate-500">No adjustments found.</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="flex items-center justify-between text-sm text-slate-600">
+            <div>Total: {{ total }}</div>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                    <a class="rounded bg-white px-3 py-2 border border-slate-200 hover:bg-slate-50" href="{{ url_for('core.boss_stock_adjustments', page=page-1, per_page=per_page, mineral=mineral or '', action=action or '') }}">Prev</a>
+                {% endif %}
+                <span>Page {{ page }}</span>
+                {% if total > page * per_page %}
+                    <a class="rounded bg-white px-3 py-2 border border-slate-200 hover:bg-slate-50" href="{{ url_for('core.boss_stock_adjustments', page=page+1, per_page=per_page, mineral=mineral or '', action=action or '') }}">Next</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</body>
+</html>

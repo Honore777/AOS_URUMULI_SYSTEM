@@ -16,3 +16,5 @@ core_bp = Blueprint("core", __name__)
 from . import management  # noqa: F401
 from . import cashier_routes  # noqa: F401
 from . import inventory_api  # noqa: F401
+from . import loan_routes  # noqa: F401
+from . import cash_tx_routes  # noqa: F401

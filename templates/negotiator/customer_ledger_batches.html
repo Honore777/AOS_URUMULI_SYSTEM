@@ -31,8 +31,8 @@
                 {% if batches %}
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {% for b in batches %}
-                    <a href="{{ url_for('core.copper_customer_ledger_batch', customer=customer, batch_id=b.batch_id) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger_batch', customer=customer, batch_id=b.batch_id) }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
-                        <p class="font-semibold text-slate-900">Batch {{ b.batch_id }}</p>
+                    <a href="{{ url_for('core.consolidated_customer_ledger_batch', customer=customer, mineral_type=b.mineral_type, batch_id=b.batch_id) if mineral_type == 'all' else (url_for('core.copper_customer_ledger_batch', customer=customer, batch_id=b.batch_id) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger_batch', customer=customer, batch_id=b.batch_id)) }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
+                        <p class="font-semibold text-slate-900">Batch {{ b.batch_id }}{% if mineral_type == 'all' %} <span class="text-xs font-bold text-slate-600">({{ b.mineral_type }})</span>{% endif %}</p>
                         <p class="text-xs text-slate-600 mt-1">Qty {{ '%.2f'|format(b.qty or 0) }} kg | Moy {{ '%.2f'|format(b.moyenne or 0) }} | NB {{ '%.2f'|format(b.moyenne_nb or 0) }}</p>
                         <p class="text-xs mt-1 text-slate-600">Agreed {{ '{:,.0f}'.format(b.expected or 0) }} | Paid {{ '{:,.0f}'.format(b.paid or 0) }} | Remaining <span class="font-bold text-slate-900">{{ '{:,.0f}'.format(b.remaining or 0) }}</span></p>
                     </a>

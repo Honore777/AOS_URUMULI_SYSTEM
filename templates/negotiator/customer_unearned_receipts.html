@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Unearned Receipts</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-slate-800">Customer Unearned Receipts</h1>
+            <div class="flex items-center gap-3">
+                {% include '_notifications_bell.html' %}
+                <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <aside class="lg:col-span-3 rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
+                <nav class="space-y-2">
+                    <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.customer_unearned_receipts') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Customer Unearned</a>
+                    <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
+                    <a href="{{ url_for('core.consolidated_customer_ledger_index') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Ledgers</a>
+                    <a href="{{ url_for('core.negotiator_loans') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Loans</a>
+                </nav>
+            </aside>
+
+            <section class="lg:col-span-9 space-y-6">
+                <div class="rounded-xl bg-white p-6 shadow-lg border border-slate-200">
+                    <h2 class="text-lg font-bold text-slate-900">Record Unearned Receipt (Pay Before Delivery)</h2>
+                    <p class="mt-1 text-sm text-slate-600">This is money received before any stock/batch is delivered. Later, allocate it to a batch so it appears in the customer ledger.</p>
+                    <form method="post" enctype="multipart/form-data" class="mt-4 grid grid-cols-1 gap-4">
+                        <div>
+                            <label class="mb-1 block text-sm font-semibold text-slate-700">Customer</label>
+                            <div class="relative">
+                                <input id="customer-name" name="customer" autocomplete="off" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+                                <div id="customer-suggestions" class="absolute z-20 mt-1 hidden w-full rounded-lg border border-slate-200 bg-white shadow-lg"></div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="mb-1 block text-sm font-semibold text-slate-700">Mineral type (optional)</label>
+                                <select name="mineral_type" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+                                    <option value="">All/Unknown</option>
+                                    <option value="copper">Coltan</option>
+                                    <option value="cassiterite">Cassiterite</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-semibold text-slate-700">Payment channel</label>
+                                <select name="payment_channel" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+                                    <option value="CASH">CASH</option>
+                                    <option value="BANK">BANK</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="mb-1 block text-sm font-semibold text-slate-700">Amount</label>
+                                <input name="amount_input" type="number" step="0.01" min="0" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-semibold text-slate-700">Currency</label>
+                                <select name="currency" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+                                    <option value="RWF">RWF</option>
+                                    <option value="USD">USD</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-semibold text-slate-700">Exchange rate (RWF/USD)</label>
+                                <input name="exchange_rate" type="number" step="0.01" min="0" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2" placeholder="1.0">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-semibold text-slate-700">Note</label>
+                            <input name="note" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+                        </div>
+                        <button class="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white">Save Unearned Receipt</button>
+                    </form>
+                </div>
+
+                <div class="rounded-xl bg-white p-6 shadow-lg border border-slate-200">
+                    <h2 class="text-lg font-bold text-slate-900">Recent Unearned Receipts</h2>
+                    <div class="mt-4 overflow-x-auto">
+                        <table class="min-w-full text-sm">
+                            <thead class="bg-slate-100 text-slate-700">
+                                <tr>
+                                    <th class="px-3 py-2 text-left font-semibold">Date</th>
+                                    <th class="px-3 py-2 text-left font-semibold">Customer</th>
+                                    <th class="px-3 py-2 text-right font-semibold">Amount (RWF)</th>
+                                    <th class="px-3 py-2 text-right font-semibold">Remaining (RWF)</th>
+                                    <th class="px-3 py-2 text-left font-semibold">Handover</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200">
+                                {% for r in rows %}
+                                <tr class="hover:bg-slate-50">
+                                    <td class="px-3 py-2 text-slate-700">{{ r.received_at }}</td>
+                                    <td class="px-3 py-2 font-semibold text-slate-900">{{ r.customer }}</td>
+                                    <td class="px-3 py-2 text-right text-slate-700">{{ '{:,.2f}'.format(r.amount_rwf or 0) }}</td>
+                                    <td class="px-3 py-2 text-right font-bold text-slate-900">{{ '{:,.2f}'.format(r.remaining_rwf or 0) }}</td>
+                                    <td class="px-3 py-2">
+                                        {% if (r.payment_channel or '')|upper == 'CASH' and not r.is_collected %}
+                                            {% if r.is_handed_over %}
+                                                <span class="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-800">Sent to cashier</span>
+                                            {% else %}
+                                                <form method="post" action="{{ url_for('core.negotiator_handover_customer_unearned', unearned_id=r.id) }}">
+                                                    <button class="rounded bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700">Handover to cashier</button>
+                                                </form>
+                                            {% endif %}
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const input = document.getElementById('customer-name');
+            const box = document.getElementById('customer-suggestions');
+            if (!input || !box) return;
+
+            let lastQuery = '';
+
+            function hide() {
+                box.classList.add('hidden');
+                box.innerHTML = '';
+            }
+
+            function show(items) {
+                if (!items || items.length === 0) {
+                    hide();
+                    return;
+                }
+                box.innerHTML = items.map((nm, idx) => (
+                    `<button type="button" data-idx="${idx}" data-name="${encodeURIComponent(nm)}" class="block w-full px-3 py-2 text-left text-sm hover:bg-emerald-50">${nm}</button>`
+                )).join('');
+                box.classList.remove('hidden');
+            }
+
+            async function fetchCustomers(q) {
+                const res = await fetch(`{{ url_for('core.customers_autocomplete') }}?q=${encodeURIComponent(q)}`);
+                if (!res.ok) return [];
+                const data = await res.json();
+                return data && Array.isArray(data.results) ? data.results : [];
+            }
+
+            input.addEventListener('input', async () => {
+                const q = (input.value || '').trim();
+                lastQuery = q;
+                if (q.length < 2) {
+                    hide();
+                    return;
+                }
+                const items = await fetchCustomers(q);
+                if (lastQuery !== q) return;
+                show(items);
+            });
+
+            box.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-name]');
+                if (!btn) return;
+                const nm = decodeURIComponent(btn.getAttribute('data-name') || '');
+                if (nm) input.value = nm;
+                hide();
+            });
+
+            document.addEventListener('click', (e) => {
+                if (e.target === input || box.contains(e.target)) return;
+                hide();
+            });
+        })();
+    </script>
+</body>
+</html>

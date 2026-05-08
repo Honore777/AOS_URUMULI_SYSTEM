@@ -20,6 +20,7 @@ import enum
 from config import db
 from werkzeug.security import generate_password_hash, check_password_hash
 import logging
+import os
 from sqlalchemy import func
 from sqlalchemy.orm import backref
 
@@ -137,6 +138,98 @@ class Notification(db.Model):
         )
 
 
+class PushToken(db.Model):
+        __tablename__ = 'push_token'
+
+        id = db.Column(db.Integer, primary_key=True)
+        user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+        token = db.Column(db.Text, nullable=False, unique=True)
+        user_agent = db.Column(db.String(255), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+        user = db.relationship('User', backref=backref('push_tokens', cascade='all, delete-orphan'), lazy=True)
+
+
+_firebase_app = None
+
+
+def _get_firebase_app():
+        global _firebase_app
+        if _firebase_app is not None:
+                return _firebase_app
+
+        logger = logging.getLogger(__name__)
+        try:
+                import firebase_admin
+                from firebase_admin import credentials
+        except Exception:
+                logger.debug('firebase_admin not installed; push notifications disabled')
+                _firebase_app = False
+                return _firebase_app
+
+        project_id = os.environ.get('FIREBASE_PROJECT_ID')
+        client_email = os.environ.get('FIREBASE_CLIENT_EMAIL')
+        private_key = os.environ.get('FIREBASE_PRIVATE_KEY')
+        if not project_id or not client_email or not private_key:
+                logger.debug('Firebase env vars not configured; push notifications disabled')
+                _firebase_app = False
+                return _firebase_app
+
+        try:
+                private_key = private_key.replace('\\n', '\n')
+                cred = credentials.Certificate({
+                        'type': 'service_account',
+                        'project_id': project_id,
+                        'client_email': client_email,
+                        'private_key': private_key,
+                        'token_uri': 'https://oauth2.googleapis.com/token',
+                })
+                _firebase_app = firebase_admin.initialize_app(cred)
+                return _firebase_app
+        except Exception:
+                logger.exception('Failed to initialize Firebase Admin; push notifications disabled')
+                _firebase_app = False
+                return _firebase_app
+
+
+def _send_push_to_user(user_id: int, title: str, body: str, data: dict | None = None) -> None:
+        logger = logging.getLogger(__name__)
+        app = _get_firebase_app()
+        if not app:
+                return
+
+        try:
+                from firebase_admin import messaging
+        except Exception:
+                return
+
+        try:
+                tokens = [t.token for t in PushToken.query.filter_by(user_id=user_id).limit(10).all()]
+        except Exception:
+                logger.exception('Failed to load push tokens')
+                return
+
+        if not tokens:
+                return
+
+        msg_data = {str(k): str(v) for (k, v) in (data or {}).items()}
+        message = messaging.MulticastMessage(
+                notification=messaging.Notification(title=title, body=body),
+                data=msg_data,
+                tokens=tokens,
+        )
+
+        try:
+                resp = messaging.send_multicast(message)
+                if resp.failure_count:
+                        for idx, r in enumerate(resp.responses):
+                                if not r.success:
+                                        logger.debug('Push failed for token index=%s err=%s', idx, getattr(r, 'exception', None))
+        except Exception:
+                logger.exception('Failed to send push notification')
+
+
 def create_notification(user_id: int,
                                                 type_: str,
                                                 message: str,
@@ -166,6 +259,19 @@ def create_notification(user_id: int,
                 related_id=related_id,
         )
         db.session.add(notif)
+
+        try:
+                link = ''
+                if related_type and related_id:
+                        link = f"{related_type}:{related_id}"
+                _send_push_to_user(
+                        user_id=int(user_id),
+                        title='Urumuli Smart System',
+                        body=str(message),
+                        data={'type': str(type_), 'related': link},
+                )
+        except Exception:
+                logging.getLogger(__name__).debug('Push send failed (ignored)', exc_info=True)
 
 
 def fetch_user_notifications(user_id: int, unread_limit: int = 20, read_limit: int = 10):
@@ -356,6 +462,10 @@ class CustomerReceipt(db.Model):
         created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
         note = db.Column(db.Text, nullable=True)
 
+        # Optional proof for audit (photo path under /static/...)
+        proof_image_path = db.Column(db.String(255), nullable=True)
+        proof_uploaded_at = db.Column(db.DateTime, nullable=True)
+
         plan = db.relationship("BulkOutputPlan", backref="customer_receipts", lazy=True)
         created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
         # Cash collection tracking (set when cashier confirms physical cash)
@@ -364,7 +474,37 @@ class CustomerReceipt(db.Model):
         collected_at = db.Column(db.DateTime, nullable=True)
         cash_account_id = db.Column(db.Integer, db.ForeignKey('cash_account.id'), nullable=True)
 
+        is_handed_over = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        handed_over_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        handed_over_at = db.Column(db.DateTime, nullable=True)
+
         collected_by = db.relationship('User', foreign_keys=[collected_by_id], lazy=True)
+        handed_over_by = db.relationship('User', foreign_keys=[handed_over_by_id], lazy=True)
+
+
+class StockChangeLog(db.Model):
+        """Audit trail for stock changes.
+
+        This does not replace business logic; it provides a professional,
+        queryable history for boss/auditors whenever a stock row is edited or
+        soft-deleted.
+        """
+
+        __tablename__ = "stock_change_log"
+
+        id = db.Column(db.Integer, primary_key=True)
+        mineral_type = db.Column(db.String(20), nullable=False, index=True)
+        stock_id = db.Column(db.Integer, nullable=False, index=True)
+        action = db.Column(db.String(20), nullable=False, index=True)  # EDIT | DELETE
+
+        reason = db.Column(db.Text, nullable=True)
+        before_json = db.Column(db.JSON, nullable=True)
+        after_json = db.Column(db.JSON, nullable=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+        created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
 
 
 class StockAggregate(db.Model):
@@ -463,6 +603,17 @@ class PaymentReview(db.Model):
         reviewed_at = db.Column(db.DateTime, nullable=True)
         boss_comment = db.Column(db.Text)
         request_payload = db.Column(db.Text, nullable=True)
+
+        disbursement_status = db.Column(
+                db.String(20),
+                nullable=False,
+                default="NOT_DISBURSED",
+                index=True,
+        )
+        disbursed_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        disbursed_at = db.Column(db.DateTime, nullable=True)
+        cash_account_id = db.Column(db.Integer, db.ForeignKey('cash_account.id'), nullable=True)
+        cash_transaction_id = db.Column(db.Integer, nullable=True)
 
 
 class SupplierTransactionType(enum.Enum):
@@ -579,8 +730,10 @@ class CashAccount(db.Model):
 
         id = db.Column(db.Integer, primary_key=True)
         name = db.Column(db.String(120), nullable=False, unique=True)
+        currency = db.Column(db.String(10), nullable=False, default="RWF", index=True)
         opening_balance = db.Column(db.Float, nullable=False, default=0.0)
         current_balance = db.Column(db.Float, nullable=False, default=0.0)
+        create_reason = db.Column(db.Text, nullable=True)
         created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
         created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -596,12 +749,204 @@ class CashTransaction(db.Model):
         id = db.Column(db.Integer, primary_key=True)
         account_id = db.Column(db.Integer, db.ForeignKey("cash_account.id"), nullable=False, index=True)
         amount = db.Column(db.Float, nullable=False)
+        currency = db.Column(db.String(10), nullable=False, default="RWF", index=True)
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+        amount_input = db.Column(db.Float, nullable=True)
+        amount_rwf = db.Column(db.Float, nullable=True)
         direction = db.Column(db.String(4), nullable=False)  # IN | OUT
+        reference = db.Column(db.String(140), nullable=True, index=True)
         note = db.Column(db.Text, nullable=True)
         created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
         created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
         account = db.relationship("CashAccount", backref="transactions", lazy=True)
         created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
+
+
+class CashReconciliation(db.Model):
+        __tablename__ = "cash_reconciliation"
+
+        id = db.Column(db.Integer, primary_key=True)
+        account_id = db.Column(db.Integer, db.ForeignKey("cash_account.id"), nullable=False, index=True)
+        recon_date = db.Column(db.Date, nullable=False, index=True)
+
+        expected_balance = db.Column(db.Float, nullable=False, default=0.0)
+        counted_balance = db.Column(db.Float, nullable=False, default=0.0)
+        variance = db.Column(db.Float, nullable=False, default=0.0, index=True)
+
+        note = db.Column(db.Text, nullable=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+        is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        deleted_at = db.Column(db.DateTime, nullable=True)
+        deleted_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        delete_reason = db.Column(db.Text, nullable=True)
+
+        account = db.relationship("CashAccount", lazy=True)
+        created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
+        deleted_by = db.relationship("User", foreign_keys=[deleted_by_id], lazy=True)
+
+
+class UnifiedSupplierAdvance(db.Model):
+        __tablename__ = "unified_supplier_advance"
+
+        id = db.Column(db.Integer, primary_key=True)
+        supplier_name = db.Column(db.String(120), nullable=False, index=True)
+        supplier_name_norm = db.Column(db.String(140), nullable=False, index=True)
+
+        source_mineral_type = db.Column(db.String(20), nullable=True, index=True)
+        source_payment_id = db.Column(db.Integer, nullable=True, index=True)
+
+        input_amount = db.Column(db.Float, nullable=True)
+        currency = db.Column(db.String(10), nullable=False, default="RWF", index=True)
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+        amount_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+
+        paid_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        method = db.Column(db.String(50), nullable=True)
+        reference = db.Column(db.String(100), nullable=True)
+        note = db.Column(db.Text, nullable=True)
+
+        advance_remaining = db.Column(db.Float, nullable=False, default=0.0, index=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+        is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        deleted_at = db.Column(db.DateTime, nullable=True)
+        deleted_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        delete_reason = db.Column(db.Text, nullable=True)
+
+        created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
+        deleted_by = db.relationship("User", foreign_keys=[deleted_by_id], lazy=True)
+
+
+class UnifiedSupplierAdvanceAllocation(db.Model):
+        __tablename__ = "unified_supplier_advance_allocation"
+
+        id = db.Column(db.Integer, primary_key=True)
+        advance_id = db.Column(db.Integer, db.ForeignKey("unified_supplier_advance.id"), nullable=False, index=True)
+        stock_mineral_type = db.Column(db.String(20), nullable=False, index=True)
+        stock_id = db.Column(db.Integer, nullable=False, index=True)
+        applied_amount = db.Column(db.Float, nullable=False, default=0.0)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+        advance = db.relationship(
+                "UnifiedSupplierAdvance",
+                backref=backref("allocations", cascade="all, delete-orphan"),
+                lazy=True,
+        )
+
+
+class Loan(db.Model):
+        __tablename__ = 'loan'
+
+        id = db.Column(db.Integer, primary_key=True)
+        lender_name = db.Column(db.String(140), nullable=False, index=True)
+        lender_name_norm = db.Column(db.String(160), nullable=False, index=True)
+
+        principal_input = db.Column(db.Float, nullable=False, default=0.0)
+        currency = db.Column(db.String(10), nullable=False, default='RWF', index=True)
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+        principal_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+
+        status = db.Column(db.String(30), nullable=False, default='PENDING_APPROVAL', index=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        boss_approved_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        boss_approved_at = db.Column(db.DateTime, nullable=True)
+
+        note = db.Column(db.Text, nullable=True)
+
+        outstanding_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+        disbursed_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+        repaid_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+
+        created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
+        boss_approved_by = db.relationship('User', foreign_keys=[boss_approved_by_id], lazy=True)
+
+
+class LoanLedgerEntry(db.Model):
+        __tablename__ = 'loan_ledger_entry'
+
+        id = db.Column(db.Integer, primary_key=True)
+        loan_id = db.Column(db.Integer, db.ForeignKey('loan.id'), nullable=False, index=True)
+        entry_type = db.Column(db.String(30), nullable=False, index=True)  # DISBURSEMENT | REPAYMENT
+
+        amount_input = db.Column(db.Float, nullable=False, default=0.0)
+        currency = db.Column(db.String(10), nullable=False, default='RWF', index=True)
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+        amount_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+
+        cash_account_id = db.Column(db.Integer, db.ForeignKey('cash_account.id'), nullable=True, index=True)
+        cash_transaction_id = db.Column(db.Integer, db.ForeignKey('cash_transaction.id'), nullable=True, index=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        note = db.Column(db.Text, nullable=True)
+
+        loan = db.relationship('Loan', backref=backref('entries', cascade='all, delete-orphan'), lazy=True)
+        cash_account = db.relationship('CashAccount', lazy=True)
+        cash_transaction = db.relationship('CashTransaction', lazy=True)
+        created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
+
+
+class CustomerUnearnedReceipt(db.Model):
+        __tablename__ = 'customer_unearned_receipt'
+
+        id = db.Column(db.Integer, primary_key=True)
+        mineral_type = db.Column(db.String(20), nullable=True, index=True)
+        customer = db.Column(db.String(100), nullable=False, index=True)
+
+        received_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+        payment_channel = db.Column(db.String(20), nullable=False, default=CustomerReceiptChannel.CASH.value, index=True)
+
+        amount_input = db.Column(db.Float, nullable=False, default=0.0)
+        currency = db.Column(db.String(10), nullable=False, default='RWF', index=True)
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+        amount_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+        remaining_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+
+        note = db.Column(db.Text, nullable=True)
+
+        proof_image_path = db.Column(db.String(255), nullable=True)
+        proof_uploaded_at = db.Column(db.DateTime, nullable=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+        is_collected = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        collected_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        collected_at = db.Column(db.DateTime, nullable=True)
+        cash_account_id = db.Column(db.Integer, db.ForeignKey('cash_account.id'), nullable=True)
+
+        is_handed_over = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        handed_over_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        handed_over_at = db.Column(db.DateTime, nullable=True)
+
+        created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
+        collected_by = db.relationship('User', foreign_keys=[collected_by_id], lazy=True)
+        cash_account = db.relationship('CashAccount', lazy=True)
+
+        handed_over_by = db.relationship('User', foreign_keys='CustomerUnearnedReceipt.handed_over_by_id', lazy=True)
+
+
+class CustomerUnearnedAllocation(db.Model):
+        __tablename__ = 'customer_unearned_allocation'
+
+        id = db.Column(db.Integer, primary_key=True)
+        unearned_id = db.Column(db.Integer, db.ForeignKey('customer_unearned_receipt.id'), nullable=False, index=True)
+        stock_mineral_type = db.Column(db.String(20), nullable=False, index=True)
+        batch_id = db.Column(db.String(100), nullable=False, index=True)
+        applied_amount_rwf = db.Column(db.Float, nullable=False, default=0.0)
+        created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        note = db.Column(db.Text, nullable=True)
+
+        unearned = db.relationship('CustomerUnearnedReceipt', backref=backref('allocations', cascade='all, delete-orphan'), lazy=True)
+        created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
 
 
