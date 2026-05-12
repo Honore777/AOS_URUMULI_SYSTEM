@@ -1859,9 +1859,11 @@ def cashier_disburse_payment_review(review_id: int):
                             def _norm_supplier(nm):
                                 return ' '.join((nm or '').strip().lower().split())
 
+                            # FIX: Use the SAME fallback logic for both supplier_name and supplier_name_norm
+                            final_supplier_name = (supplier_name or '').strip() or (review.customer or '').strip() or 'Unknown'
                             unified = UnifiedSupplierAdvance(
-                                supplier_name=(supplier_name or '').strip() or (review.customer or '').strip() or 'Unknown',
-                                supplier_name_norm=_norm_supplier(supplier_name),
+                                supplier_name=final_supplier_name,
+                                supplier_name_norm=_norm_supplier(final_supplier_name),
                                 source_mineral_type='copper',
                                 source_payment_id=int(payment.id),
                                 input_amount=float(amount_input) if amount_input is not None else None,
@@ -2002,9 +2004,11 @@ def cashier_disburse_payment_review(review_id: int):
                             def _norm_supplier(nm):
                                 return ' '.join((nm or '').strip().lower().split())
 
+                            # FIX: Use the SAME fallback logic for both supplier_name and supplier_name_norm
+                            final_supplier_name = (supplier_name or '').strip() or (review.customer or '').strip() or 'Unknown'
                             unified = UnifiedSupplierAdvance(
-                                supplier_name=(supplier_name or '').strip() or (review.customer or '').strip() or 'Unknown',
-                                supplier_name_norm=_norm_supplier(supplier_name),
+                                supplier_name=final_supplier_name,
+                                supplier_name_norm=_norm_supplier(final_supplier_name),
                                 source_mineral_type='cassiterite',
                                 source_payment_id=int(payment.id),
                                 input_amount=float(amount_input) if amount_input is not None else None,

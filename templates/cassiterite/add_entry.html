@@ -218,6 +218,17 @@
     const input = document.querySelector('input[name="supplier"]');
     if (!input) return;
 
+        function preventWheelChange(field) {
+            if (!field) return;
+            field.addEventListener('wheel', (event) => {
+                event.preventDefault();
+                field.blur();
+            }, { passive: false });
+        }
+
+        document.querySelectorAll('input[type="number"]').forEach(preventWheelChange);
+        document.querySelectorAll('input[type="date"]').forEach(preventWheelChange);
+
     const advanceSelect = document.querySelector('select[name="advance_payment_ids"]');
     const advanceSearch = document.getElementById('advance_payment_search');
 

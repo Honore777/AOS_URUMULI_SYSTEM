@@ -482,14 +482,14 @@ def dashboard():
         page = request.args.get('page', 1, type=int)
         per_page = 20
         # load related supplier payments via the model relationship named `payments`
-        stocks_pagination = CassiteriteStock.query.options(selectinload(CassiteriteStock.payments)).order_by(CassiteriteStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
+        stocks_pagination = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False)).options(selectinload(CassiteriteStock.payments)).order_by(CassiteriteStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
         stocks = stocks_pagination.items
-        outputs = CassiteriteOutput.query.order_by(CassiteriteOutput.date.desc()).limit(10).all()
+        outputs = CassiteriteOutput.query.join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False)).order_by(CassiteriteOutput.date.desc()).limit(10).all()
 
         # Compute a small distinct list of voucher/lot choices to populate the
         # filter dropdown without materializing large lists in the template.
         try:
-            voucher_q = db.session.query(CassiteriteStock.voucher_no).filter(CassiteriteStock.local_balance > 0).distinct().order_by(CassiteriteStock.date.desc()).limit(200)
+            voucher_q = db.session.query(CassiteriteStock.voucher_no).filter(CassiteriteStock.is_deleted.is_(False), CassiteriteStock.local_balance > 0).distinct().order_by(CassiteriteStock.date.desc()).limit(200)
             voucher_choices = [v for (v,) in voucher_q.all() if v]
         except Exception:
             try:
@@ -499,8 +499,8 @@ def dashboard():
 
         from sqlalchemy import func
         try:
-            total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).scalar()
-            total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).scalar()
+            total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).filter(CassiteriteStock.is_deleted.is_(False)).scalar()
+            total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False)).scalar()
             # Sales must be in sync with customer ledger truth (plans), because
             # Output rows may exist without monetary fields populated.
             total_sales = (
@@ -513,7 +513,7 @@ def dashboard():
                 )
                 .scalar()
             )
-            total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
+            total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(CassiteriteStock.is_deleted.is_(False)).scalar()
 
             # Customer outstanding debt from single source of truth: plans - receipts
             total_expected_amount = (
@@ -540,7 +540,7 @@ def dashboard():
                     func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
                     0,
                 )
-            ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0).scalar() or 0
+            ).filter(CassiteriteStock.is_deleted.is_(False), CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0).scalar() or 0
         except Exception:
             logger.exception("cassiterite.dashboard: aggregate queries failed; resetting session and falling back to safe defaults")
             try:
@@ -558,7 +558,7 @@ def dashboard():
 
         # Debts (DB-side aggregate for supplier debt)
         from sqlalchemy import func
-        supplier_debt = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar()
+        supplier_debt = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(CassiteriteStock.is_deleted.is_(False)).scalar()
         customer_debt = total_debt
 
         # Cash position indicator for cassiterite
@@ -586,7 +586,7 @@ def dashboard():
 
         # Cassiterite moyenne is stored on each stock; compute global moyenne like copper
         # Avoid materializing all remaining stocks in memory — just compute the count.
-        remaining_stocks_count = CassiteriteStock.query.filter(CassiteriteStock.local_balance > 0).count()
+        remaining_stocks_count = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False), CassiteriteStock.local_balance > 0).count()
         total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
         total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
         moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
@@ -643,7 +643,7 @@ def cassiterite_filter_stocks():
         lot_no = data.get('lot_no') or None
 
     # Base queries
-        stocks_query = CassiteriteStock.query.order_by(CassiteriteStock.date.desc())
+        stocks_query = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False)).order_by(CassiteriteStock.date.desc())
         outputs_query = CassiteriteOutput.query.order_by(CassiteriteOutput.date.desc())
 
         from datetime import datetime as _dt
@@ -790,6 +790,7 @@ FROM (
 
         # Build common stock filters for DB-side aggregates
         stock_filters = []
+        stock_filters.append(CassiteriteStock.is_deleted.is_(False))
         if start_date:
                 
                 stock_filters.append(CassiteriteStock.date >= start)
@@ -810,7 +811,7 @@ FROM (
         if end_date:
             output_filters.append(CassiteriteOutput.date <= end)
 
-        total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).filter(*output_filters).scalar() or 0
+        total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False), *output_filters).scalar() or 0
 
         # Customer outstanding debt from single source of truth: plans - receipts
         try:

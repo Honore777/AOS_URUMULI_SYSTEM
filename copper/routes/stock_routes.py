@@ -565,13 +565,13 @@ def dashboard():
     page = request.args.get('page', 1, type=int)
     per_page = 20
     # Avoid pre-loading related supplier_payments here to reduce hydration cost on dashboard.
-    stocks_pagination = CopperStock.query.order_by(CopperStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    stocks_pagination = CopperStock.query.filter(CopperStock.is_deleted.is_(False)).order_by(CopperStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
     stocks = stocks_pagination.items
     outputs = CopperOutput.query.order_by(CopperOutput.date.desc()).limit(10).all()
     # Compute a small distinct list of voucher choices separately so the
     # template doesn't materialize voucher values by iterating over `stocks`.
     try:
-        voucher_q = db.session.query(CopperStock.voucher_no).filter(CopperStock.local_balance > 0).distinct().order_by(CopperStock.date.desc()).limit(200)
+        voucher_q = db.session.query(CopperStock.voucher_no).filter(CopperStock.is_deleted.is_(False), CopperStock.local_balance > 0).distinct().order_by(CopperStock.date.desc()).limit(200)
         voucher_choices = [v for (v,) in voucher_q.all() if v]
     except Exception:
         try:
@@ -673,7 +673,7 @@ def dashboard():
             total_t_unity = cached.get('total_t_unity', 0)
             moyenne_nb = cached.get('moyenne_nb', 0)
         else:
-            remaining_stocks_count = CopperStock.query.filter(CopperStock.local_balance > 0).count()
+            remaining_stocks_count = CopperStock.query.filter(CopperStock.is_deleted.is_(False), CopperStock.local_balance > 0).count()
             # Try StockAggregate first for the moyenne values (single-row, cheap)
             try:
                 from core.models import StockAggregate
@@ -784,7 +784,7 @@ def dashboard():
 @copper_bp.route("/export_stocks")
 def export_stocks():
     """Export all copper stocks to Excel"""
-    stocks = CopperStock.query.order_by(CopperStock.date.desc()).all()
+    stocks = CopperStock.query.filter(CopperStock.is_deleted.is_(False)).order_by(CopperStock.date.desc()).all()
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Copper Stock"
@@ -861,7 +861,7 @@ def export_filtered_stocks():
         df = pd.read_sql_query(text(sql), con=db.session.bind, params=params)
     except Exception:
         # Fallback to ORM-based fetch if read_sql_query fails
-        filtered_stocks = CopperStock.query.filter(CopperStock.local_balance > 0).all()
+        filtered_stocks = CopperStock.query.filter(CopperStock.is_deleted.is_(False), CopperStock.local_balance > 0).all()
         df = pd.DataFrame([{
             "Voucher": s.voucher_no,
             "Input_kg": s.input_kg,
@@ -902,7 +902,7 @@ def filter_stocks():
         voucher_no = data.get('voucher_no') or None
     
     # Filter stocks
-        stocks_query = CopperStock.query.order_by(CopperStock.date.desc())
+        stocks_query = CopperStock.query.filter(CopperStock.is_deleted.is_(False)).order_by(CopperStock.date.desc())
         
         if start_date:
             start = datetime.strptime(start_date, '%Y-%m-%d').date()
@@ -943,7 +943,7 @@ def filter_stocks():
         include_all = bool(data.get('include_all'))
 
         # Build SQL WHERE fragments for stocks and outputs based on optional filters
-        stock_where = '1=1'
+        stock_where = 's.is_deleted IS FALSE'
         output_where = '1=1'
         params = {'per_page': per_page, 'offset': offset}
         if start_date:
@@ -967,8 +967,9 @@ def filter_stocks():
             page_sql = f"""
 WITH outputs_sum AS (
   SELECT stock_id, COALESCE(SUM(output_kg),0) AS outputs_sum
-  FROM copper_output o
-  WHERE {output_where}
+    FROM copper_output o
+    JOIN copper_stock s ON o.stock_id = s.id
+        WHERE s.is_deleted IS FALSE AND {output_where}
   GROUP BY stock_id
 ), ordered AS (
   SELECT
@@ -1032,6 +1033,10 @@ FROM (
         except Exception:
             # Fallback to ORM paginate path on SQL failure to preserve behaviour
             logger.exception('filter_stocks: page SQL failed; falling back to ORM paginate')
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
             stocks_local_q = stocks_query.filter(CopperStock.local_balance > 0)
             stocks_pagination = stocks_local_q.paginate(page=page, per_page=per_page, error_out=False)
             filtered_stocks = stocks_pagination.items
@@ -1094,6 +1099,7 @@ FROM (
 
             # build filters for other aggregates (we keep existing queries)
             stock_filters = []
+            stock_filters.append(CopperStock.is_deleted.is_(False))
             if start_date:
                 stock_filters.append(CopperStock.date >= start)
             if end_date:
@@ -1116,27 +1122,28 @@ FROM (
                 stock_where = '1=1'
                 output_where = '1=1'
                 params = {}
+                stock_where = 's.is_deleted IS FALSE'
                 if start_date:
-                    stock_where += ' AND date >= :start'
-                    output_where += ' AND date >= :start'
+                    stock_where += ' AND s.date >= :start'
+                    output_where += ' AND o.date >= :start'
                     params['start'] = start
                 if end_date:
-                    stock_where += ' AND date <= :end'
-                    output_where += ' AND date <= :end'
+                    stock_where += ' AND s.date <= :end'
+                    output_where += ' AND o.date <= :end'
                     params['end'] = end
                 if voucher_no:
-                    stock_where += ' AND voucher_no = :voucher_no'
+                    stock_where += ' AND s.voucher_no = :voucher_no'
                     params['voucher_no'] = voucher_no
 
                 combined_sql = f"""
 SELECT
-  (SELECT COALESCE(SUM(input_kg),0) FROM copper_stock WHERE {stock_where}) AS total_input,
-  (SELECT COALESCE(COUNT(id),0) FROM copper_stock WHERE {stock_where}) AS total_stocks,
-  (SELECT COALESCE(SUM(output_kg),0) FROM copper_output WHERE {output_where}) AS total_output,
+    (SELECT COALESCE(SUM(s.input_kg),0) FROM copper_stock s WHERE {stock_where}) AS total_input,
+    (SELECT COALESCE(COUNT(s.id),0) FROM copper_stock s WHERE {stock_where}) AS total_stocks,
+    (SELECT COALESCE(SUM(o.output_kg),0) FROM copper_output o JOIN copper_stock s ON o.stock_id = s.id WHERE s.is_deleted IS FALSE AND {output_where}) AS total_output,
   0 AS total_debt,
   0 AS total_sales,
-  (SELECT COALESCE(SUM(net_balance),0) FROM copper_stock WHERE {stock_where}) AS total_supplier_obligation,
-    (SELECT COALESCE(SUM(COALESCE(sp.amount_rwf, sp.amount)),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE {stock_where}) AS total_payments
+    (SELECT COALESCE(SUM(s.net_balance),0) FROM copper_stock s WHERE {stock_where}) AS total_supplier_obligation,
+        (SELECT COALESCE(SUM(COALESCE(sp.amount_rwf, sp.amount)),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE {stock_where}) AS total_payments
 """
 
                 row = db.session.execute(text(combined_sql), params).fetchone()

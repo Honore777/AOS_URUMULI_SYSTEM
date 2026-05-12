@@ -647,8 +647,7 @@
                 document.querySelector('.bg-gradient-to-br.from-blue-600.to-blue-800 .text-4xl').textContent = formatNumber(data.total_output,2);
                 document.querySelector('.bg-gradient-to-br.from-orange-600.to-orange-800 .text-4xl').textContent = formatNumber(data.total_debt,2);
                 document.getElementById('cass-card-remaining-stock').textContent = formatNumber((Number(data.total_input || 0) - Number(data.total_output || 0)), 2);
-                const remainingCount = (data.stocks || []).filter(s => (s.local_balance ?? 0) > 0).length;
-                document.getElementById('cass-card-total-stocks').textContent = formatNumber(remainingCount,0);
+                // NOTE: cass-card-total-stocks is NOT updated by AJAX filter; shows all stocks
                 document.getElementById('cass-card-moyenne').textContent = formatNumber(data.moyenne,4);
             } catch (err) {
                 console.warn('cassUpdateCards partial update failed', err);
