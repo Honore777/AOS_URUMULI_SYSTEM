@@ -1040,7 +1040,8 @@ def delete_supplier_payment(payment_id):
 def edit_worker_payment(payment_id):
 	from cassiterite.forms import CassiteriteWorkerPaymentForm
 	from cassiterite.models.workers_payment import CassiteriteWorkerPayment
-	from core.models import PaymentReview
+	from core.models import PaymentReview, PaymentReviewStatus
+	import json
 
 	payment = CassiteriteWorkerPayment.query.get_or_404(payment_id)
 	form = CassiteriteWorkerPaymentForm()
@@ -1052,57 +1053,62 @@ def edit_worker_payment(payment_id):
 			return render_template('cassiterite/edit_worker_payment.html', form=form, payment=payment)
 
 		try:
-			payment.worker_name = form.worker_name.data
-			payment.amount = form.amount.data
-			payment.method = form.method.data
-			payment.reference = form.reference.data
-			payment.note = form.note.data
-			db.session.add(payment)
-			db.session.commit()
-
-			# upsert pending review for edited worker payment so boss sees override
+			# Create approval request WITHOUT executing the edit
 			from flask_login import current_user as _current_user
-			from core.models import create_notification, User, PaymentReviewStatus, PaymentReview
-			existing = PaymentReview.query.filter_by(
+			from core.models import create_notification, User
+			
+			# Store the proposed changes in the payload
+			payload = {
+				'action': 'edit_worker_payment',
+				'payment_id': payment_id,
+				'old_values': {
+					'worker_name': payment.worker_name,
+					'amount': float(payment.amount or 0),
+					'method': payment.method,
+					'reference': payment.reference,
+					'note': payment.note,
+				},
+				'new_values': {
+					'worker_name': form.worker_name.data,
+					'amount': float(form.amount.data or 0),
+					'method': form.method.data,
+					'reference': form.reference.data,
+					'note': form.note.data,
+				},
+				'change_reason': form.change_reason.data.strip(),
+			}
+			
+			review = PaymentReview(
+				mineral_type='cassiterite',
+				type='expense_edit',
+				customer=f"{payment.worker_name} (current) -> {form.worker_name.data} (proposed)",
+				amount=float(form.amount.data or 0),
+				currency='RWF',
 				payment_id=payment.id,
+				created_by_id=getattr(_current_user, 'id', None),
 				status=PaymentReviewStatus.PENDING_REVIEW.value,
-			).first()
-			if existing:
-				existing.mineral_type = None
-				existing.type = 'worker'
-				existing.customer = payment.worker_name
-				existing.amount = payment.amount
-				existing.currency = 'RWF'
-				existing.created_by_id = getattr(_current_user, 'id', None)
-				existing.boss_comment = (f"Edit requested: {form.change_reason.data.strip()}")
-			else:
-				review = PaymentReview(
-					mineral_type=None,
-					type='worker',
-					customer=payment.worker_name,
-					amount=payment.amount,
-					currency='RWF',
-					payment_id=payment.id,
-					created_by_id=getattr(_current_user, 'id', None),
-					boss_comment=(f"Edit requested: {form.change_reason.data.strip()}"),
-				)
-				db.session.add(review)
-			boss_user = User.query.filter_by(role='boss').first()
-			if boss_user:
+				request_payload=json.dumps(payload),
+				boss_comment=f"Expense edit requested: {form.change_reason.data.strip()}"
+			)
+			db.session.add(review)
+			
+			# Notify all bosses
+			boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+			for (boss_id,) in boss_rows:
 				create_notification(
-					user_id=boss_user.id,
-					type_='PAYMENT_EDIT_REQUEST',
-					message=f"Hasabwe gusuzuma: Impinduka ku kwishyura umukozi - {payment.worker_name}, Amafaranga: {payment.amount} RWF. Icyitonderwa: {form.change_reason.data.strip()}",
-					related_type='cassiterite_worker_payment',
-					related_id=payment.id,
+					user_id=boss_id,
+					type_="expense_edit_approval",
+					message=f"Accountant {getattr(_current_user, 'username', 'unknown')} requested approval to edit expense for {payment.worker_name} (amount: {payment.amount} RWF -> {form.amount.data} RWF).",
+					related_type="payment_review",
+					related_id=review.id
 				)
+			
 			db.session.commit()
-
-			flash('Worker payment updated; boss has been notified to review the change.', 'success')
+			flash('Expense edit request submitted for boss approval. The edit will be executed after approval.', 'warning')
 			return redirect(url_for('cassiterite.pay_worker'))
 		except Exception as e:
 			db.session.rollback()
-			flash(f'Error updating payment: {e}', 'danger')
+			flash(f'Error submitting edit request: {e}', 'danger')
 
 	if not form.is_submitted():
 		form.worker_name.data = payment.worker_name

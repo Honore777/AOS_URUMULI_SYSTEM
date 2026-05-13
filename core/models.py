@@ -506,6 +506,14 @@ class StockChangeLog(db.Model):
 
         created_by = db.relationship("User", foreign_keys=[created_by_id], lazy=True)
 
+        # Audit fields for edits to the reason field itself
+        original_reason = db.Column(db.Text, nullable=True)
+        reason_edited_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+        reason_edited_at = db.Column(db.DateTime, nullable=True)
+        reason_edit_reason = db.Column(db.Text, nullable=True)
+
+        reason_edited_by = db.relationship("User", foreign_keys=[reason_edited_by_id], lazy=True)
+
 
 class StockAggregate(db.Model):
         """Lightweight single-row aggregate for stock system state.

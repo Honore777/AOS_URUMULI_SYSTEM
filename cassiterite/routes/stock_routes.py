@@ -22,6 +22,87 @@ from utils import close_name_matches, normalize_counterparty_name
 import logging
 logger= logging.getLogger(__name__)
 
+
+def _stock_has_payment_history(stock_id: int) -> bool:
+    """Return True if this supplier has any payment activity in the consolidated ledger."""
+    from cassiterite.models import CassiteriteSupplierPayment, CassiteriteSupplier
+    try:
+        stock = CassiteriteStock.query.get(stock_id)
+        supplier_name = (getattr(stock, 'supplier', None) or '').strip() if stock else ''
+        if not supplier_name:
+            result = None
+        else:
+            normalized_supplier = supplier_name.lower()
+            from sqlalchemy import func as _func, or_ as _or
+
+            supplier_row = CassiteriteSupplier.query.filter(CassiteriteSupplier.name == supplier_name).first()
+            supplier_id = getattr(supplier_row, 'id', None)
+
+            cass_hit = db.session.query(CassiteriteSupplierPayment.id).filter(
+                _or(
+                    CassiteriteSupplierPayment.stock_id.in_(
+                        db.session.query(CassiteriteStock.id).filter(
+                            CassiteriteStock.is_deleted.is_(False),
+                            _func.lower(_func.trim(CassiteriteStock.supplier)) == normalized_supplier,
+                        )
+                    ),
+                    _func.lower(_func.trim(CassiteriteSupplierPayment.supplier_name)) == normalized_supplier,
+                    CassiteriteSupplierPayment.supplier_id == supplier_id if supplier_id else False,
+                )
+            ).first()
+
+            copper_hit = None
+            try:
+                from copper.models import CopperStock, SupplierPayment, CopperSupplier
+                copper_supplier_row = CopperSupplier.query.filter(CopperSupplier.name == supplier_name).first()
+                copper_supplier_id = getattr(copper_supplier_row, 'id', None)
+                copper_hit = db.session.query(SupplierPayment.id).filter(
+                    _or(
+                        SupplierPayment.stock_id.in_(
+                            db.session.query(CopperStock.id).filter(
+                                CopperStock.is_deleted.is_(False),
+                                _func.lower(_func.trim(CopperStock.supplier)) == normalized_supplier,
+                            )
+                        ),
+                        _func.lower(_func.trim(SupplierPayment.supplier_name)) == normalized_supplier,
+                        SupplierPayment.supplier_id == copper_supplier_id if copper_supplier_id else False,
+                    )
+                ).first()
+            except Exception:
+                copper_hit = None
+
+            unified_hit = None
+            try:
+                from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+                unified_hit = (
+                    db.session.query(UnifiedSupplierAdvance.id)
+                    .filter(
+                        UnifiedSupplierAdvance.is_deleted.is_(False),
+                        UnifiedSupplierAdvance.supplier_name_norm == normalized_supplier,
+                    )
+                    .first()
+                )
+                if not unified_hit:
+                    unified_hit = (
+                        db.session.query(UnifiedSupplierAdvanceAllocation.id)
+                        .join(UnifiedSupplierAdvance, UnifiedSupplierAdvance.id == UnifiedSupplierAdvanceAllocation.advance_id)
+                        .filter(
+                            UnifiedSupplierAdvance.is_deleted.is_(False),
+                            UnifiedSupplierAdvance.supplier_name_norm == normalized_supplier,
+                        )
+                        .first()
+                    )
+            except Exception:
+                unified_hit = None
+
+            result = cass_hit or copper_hit or unified_hit
+        has_payment = result is not None
+        logger.debug("cassiterite._stock_has_payment_history: stock_id=%s result=%s has_payment=%s", stock_id, result, has_payment)
+        return has_payment
+    except Exception as e:
+        logger.exception("cassiterite._stock_has_payment_history failed for stock_id=%s", stock_id)
+        return False
+
 @role_required("accountant")
 @trace_time
 @cassiterite_bp.route('/add_stock', methods=['GET', 'POST'])
@@ -254,6 +335,55 @@ def delete_stock(stock_id):
         logger.info("cassiterite.delete_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CassiteriteStock.query.get_or_404(stock_id)
         voucher = stock.voucher_no
+        
+        # Check if stock has ever had supplier payments - if so, require boss approval
+        has_payments = _stock_has_payment_history(stock_id)
+        logger.info("cassiterite.delete_stock: stock_id=%s has_payments=%s (bool=%s)", stock_id, has_payments, bool(has_payments))
+        
+        if has_payments:
+            # Create approval request instead of directly deleting
+            from core.models import PaymentReview, PaymentReviewStatus
+            import json
+            
+            payload = {
+                'action': 'delete_stock',
+                'stock_id': stock_id,
+                'voucher_no': voucher,
+                'supplier': stock.supplier,
+                'delete_reason': request.form.get('delete_reason') or 'Deleted from dashboard.',
+                'mineral_type': 'cassiterite'
+            }
+            
+            review = PaymentReview(
+                mineral_type='cassiterite',
+                type='stock_delete',
+                customer=f"Stock {voucher} - {stock.supplier}",
+                amount=float(getattr(stock, 'balance_to_pay', 0) or 0),
+                currency='RWF',
+                payment_id=stock_id,
+                created_by_id=getattr(current_user, 'id', None),
+                status=PaymentReviewStatus.PENDING_REVIEW.value,
+                request_payload=json.dumps(payload),
+                boss_comment=f"Request to delete stock {voucher} which has supplier payments. Reason: {request.form.get('delete_reason') or 'Deleted from dashboard.'}"
+            )
+            db.session.add(review)
+            db.session.commit()
+            
+            # Notify all bosses
+            boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+            for (boss_id,) in boss_rows:
+                create_notification(
+                    user_id=boss_id,
+                    type_="stock_delete_approval",
+                    message=f"Kontabure {getattr(current_user, 'username', 'unknown')} asabye gusiba stock   {voucher} (kandi ifite abatanga ibicuruzwa bishyuwe bivuzeko ayo tubarimo arahinduka  cg akavamwo muri sisitemi).",
+                    related_type="payment_review",
+                    related_id=review.id
+                )
+            
+            flash(f"stock {voucher} have already supplier payments so you will wait for boss approval.", "warning")
+            return redirect(url_for('cassiterite.dashboard'))
+        
+        # No supplier payments - proceed with direct deletion
         try:
             before_snapshot = {
                 'id': int(stock.id),
@@ -334,7 +464,86 @@ def edit_stock(stock_id):
     try:
         logger.info("cassiterite.edit_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CassiteriteStock.query.get_or_404(stock_id)
+        voucher = stock.voucher_no
+        
+        # Check if stock has ever had supplier payments - if so, require boss approval
+        has_payments = _stock_has_payment_history(stock_id)
+        logger.info("cassiterite.edit_stock: stock_id=%s has_payments=%s (bool=%s)", stock_id, has_payments, bool(has_payments))
+        
+        if has_payments:
+            # Create approval request instead of directly editing
+            from core.models import PaymentReview, PaymentReviewStatus
+            import json
+            
+            # Parse incoming fields for the payload
+            from datetime import datetime as _dt2
+            date_raw = request.form.get('date')
+            try:
+                date_val = _dt2.strptime(date_raw, '%Y-%m-%d').date() if date_raw else stock.date
+            except Exception:
+                date_val = stock.date
+            
+            new_voucher = request.form.get('voucher_no') or stock.voucher_no
+            supplier = request.form.get('supplier') or stock.supplier
+            input_kg = float(request.form.get('input_kg') or stock.input_kg or 0)
+            percentage = float(request.form.get('percentage') or stock.percentage or 0)
+            lme = float(request.form.get('lme') or stock.lme or 0)
+            m_lme = float(request.form.get('m_lme') or stock.m_lme or 0)
+            sec = float(request.form.get('sec') or stock.sec or 0)
+            tc = float(request.form.get('tc') or stock.tc or 0)
+            exchange = float(request.form.get('exchange') or stock.exchange or 0)
+            transport_tag = float(request.form.get('transport_tag') or stock.transport_tag or 0)
+            change_reason = (request.form.get('change_reason') or '').strip() or None
+            
+            payload = {
+                'action': 'edit_stock',
+                'stock_id': stock_id,
+                'voucher_no': voucher,
+                'new_voucher_no': new_voucher,
+                'supplier': supplier,
+                'date': str(date_val) if date_val else None,
+                'input_kg': input_kg,
+                'percentage': percentage,
+                'lme': lme,
+                'm_lme': m_lme,
+                'sec': sec,
+                'tc': tc,
+                'exchange': exchange,
+                'transport_tag': transport_tag,
+                'change_reason': change_reason,
+                'mineral_type': 'cassiterite'
+            }
+            
+            review = PaymentReview(
+                mineral_type='cassiterite',
+                type='stock_edit',
+                customer=f"Stock {voucher} - {stock.supplier}",
+                amount=float(getattr(stock, 'balance_to_pay', 0) or 0),
+                currency='RWF',
+                payment_id=stock_id,
+                created_by_id=getattr(current_user, 'id', None),
+                status=PaymentReviewStatus.PENDING_REVIEW.value,
+                request_payload=json.dumps(payload),
+                boss_comment=f"Request to edit stock {voucher} which has supplier payments. Reason: {change_reason or 'No reason provided'}"
+            )
+            db.session.add(review)
+            db.session.commit()
+            
+            # Notify all bosses
+            boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+            for (boss_id,) in boss_rows:
+                create_notification(
+                    user_id=boss_id,
+                    type_="stock_edit_approval",
+                    message=f"Kontabure {getattr(current_user, 'username', 'unknown')} asabye kwemeza guhindura ingano ya stock  (kandi uzana ibicuruzwa yarishyuwe bivuzeko birahindura ayo tumufitemo).",
+                    related_type="payment_review",
+                    related_id=review.id
+                )
+            
+            flash(f"stock{voucher} yatangiwe gukoreshwa twishyura abazana ibicuruzwa ,  EF birasaba ko boss abyemeza", "warning")
+            return redirect(url_for('cassiterite.dashboard'))
 
+        # No supplier payments - proceed with direct edit
         before_snapshot = {
             'id': int(stock.id),
             'date': str(stock.date) if getattr(stock, 'date', None) else None,
@@ -410,6 +619,8 @@ def edit_stock(stock_id):
 
             # Notify all bosses (ids only)
             boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+            # Ensure log_row exists in this scope before it's referenced in notifications
+            log_row = None
             for (boss_id,) in boss_rows:
                 create_notification(
                     user_id=boss_id,
@@ -641,9 +852,15 @@ def cassiterite_filter_stocks():
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         lot_no = data.get('lot_no') or None
+        search_term = (data.get('search') or '').strip()
 
     # Base queries
         stocks_query = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False)).order_by(CassiteriteStock.date.desc())
+        if search_term:
+            search_like = f"%{search_term.lower()}%"
+            stocks_query = stocks_query.filter(
+                func.lower(CassiteriteStock.voucher_no).ilike(search_like) | func.lower(CassiteriteStock.supplier).ilike(search_like)
+            )
         outputs_query = CassiteriteOutput.query.order_by(CassiteriteOutput.date.desc())
 
         from datetime import datetime as _dt
@@ -689,6 +906,9 @@ def cassiterite_filter_stocks():
         if lot_no:
             stock_where += ' AND s.voucher_no = :lot_no'
             params['lot_no'] = lot_no
+        if search_term:
+            stock_where += ' AND (LOWER(s.voucher_no) LIKE :search_like OR LOWER(s.supplier) LIKE :search_like)'
+            params['search_like'] = f"%{search_term.lower()}%"
 
         from sqlalchemy import text
         try:
@@ -798,6 +1018,11 @@ FROM (
                 stock_filters.append(CassiteriteStock.date <= end)
         if lot_no:
                 stock_filters.append(CassiteriteStock.voucher_no == lot_no)
+        if search_term:
+                stock_filters.append(
+                    (func.lower(CassiteriteStock.voucher_no).ilike(f"%{search_term.lower()}%")) |
+                    (func.lower(CassiteriteStock.supplier).ilike(f"%{search_term.lower()}%"))
+                )
 
             # Aggregates from DB (faster and avoids loading full tables into Python).
             # stock_filters here represent the original cost-basis window (lots

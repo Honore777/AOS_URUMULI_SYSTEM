@@ -11,6 +11,7 @@ import pandas as pd
 from config import db
 from copper.models import CopperStock, CopperOutput, SupplierPayment, CopperAdvanceAllocation
 from copper import copper_bp
+from core.auth import role_required
 from core.models import Notification, create_notification, User, fetch_user_notifications, BulkOutputPlan, BulkPlanStatus, CustomerReceipt, StockChangeLog
 from sqlalchemy.orm import joinedload, selectinload
 from flask_login import current_user
@@ -22,11 +23,92 @@ from threading import Lock
 
 logger = logging.getLogger(__name__)
 
+
+def _stock_has_payment_history(stock_id: int) -> bool:
+    """Return True if this supplier has any payment activity in the consolidated ledger."""
+    from copper.models import SupplierPayment, CopperSupplier
+    try:
+        stock = CopperStock.query.get(stock_id)
+        supplier_name = (getattr(stock, 'supplier', None) or '').strip() if stock else ''
+        if not supplier_name:
+            result = None
+        else:
+            normalized_supplier = supplier_name.lower()
+            from sqlalchemy import func as _func, or_ as _or
+
+            supplier_row = CopperSupplier.query.filter(CopperSupplier.name == supplier_name).first()
+            supplier_id = getattr(supplier_row, 'id', None)
+
+            copper_hit = db.session.query(SupplierPayment.id).filter(
+                _or(
+                    SupplierPayment.stock_id.in_(
+                        db.session.query(CopperStock.id).filter(
+                            CopperStock.is_deleted.is_(False),
+                            _func.lower(_func.trim(CopperStock.supplier)) == normalized_supplier,
+                        )
+                    ),
+                    _func.lower(_func.trim(SupplierPayment.supplier_name)) == normalized_supplier,
+                    SupplierPayment.supplier_id == supplier_id if supplier_id else False,
+                )
+            ).first()
+
+            cass_hit = None
+            try:
+                from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteSupplier
+                cass_supplier_row = CassiteriteSupplier.query.filter(CassiteriteSupplier.name == supplier_name).first()
+                cass_supplier_id = getattr(cass_supplier_row, 'id', None)
+                cass_hit = db.session.query(CassiteriteSupplierPayment.id).filter(
+                    _or(
+                        CassiteriteSupplierPayment.stock_id.in_(
+                            db.session.query(CassiteriteStock.id).filter(
+                                CassiteriteStock.is_deleted.is_(False),
+                                _func.lower(_func.trim(CassiteriteStock.supplier)) == normalized_supplier,
+                            )
+                        ),
+                        _func.lower(_func.trim(CassiteriteSupplierPayment.supplier_name)) == normalized_supplier,
+                        CassiteriteSupplierPayment.supplier_id == cass_supplier_id if cass_supplier_id else False,
+                    )
+                ).first()
+            except Exception:
+                cass_hit = None
+
+            unified_hit = None
+            try:
+                from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+                unified_hit = (
+                    db.session.query(UnifiedSupplierAdvance.id)
+                    .filter(
+                        UnifiedSupplierAdvance.is_deleted.is_(False),
+                        UnifiedSupplierAdvance.supplier_name_norm == normalized_supplier,
+                    )
+                    .first()
+                )
+                if not unified_hit:
+                    unified_hit = (
+                        db.session.query(UnifiedSupplierAdvanceAllocation.id)
+                        .join(UnifiedSupplierAdvance, UnifiedSupplierAdvance.id == UnifiedSupplierAdvanceAllocation.advance_id)
+                        .filter(
+                            UnifiedSupplierAdvance.is_deleted.is_(False),
+                            UnifiedSupplierAdvance.supplier_name_norm == normalized_supplier,
+                        )
+                        .first()
+                    )
+            except Exception:
+                unified_hit = None
+
+            result = copper_hit or cass_hit or unified_hit
+        has_payment = result is not None
+        logger.debug("_stock_has_payment_history: stock_id=%s result=%s has_payment=%s", stock_id, result, has_payment)
+        return has_payment
+    except Exception as e:
+        logger.exception("_stock_has_payment_history failed for stock_id=%s", stock_id)
+        return False
+
 # Simple cache for dashboard aggregates to avoid repeated heavy SQL
 _AGG_CACHE = {}
 _AGG_CACHE_LOCK = Lock()
 
-def _get_dashboard_aggregates(ttl=10):
+def _get_dashboard_aggregates(ttl=1):
     try:
         with _AGG_CACHE_LOCK:
             entry = _AGG_CACHE.get('dashboard')
@@ -88,6 +170,55 @@ def delete_stock(stock_id):
         logger.info("delete_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CopperStock.query.get_or_404(stock_id)
         voucher = stock.voucher_no
+        
+        # Check if stock has ever had supplier payments - if so, require boss approval
+        has_payments = _stock_has_payment_history(stock_id)
+        logger.info("delete_stock: stock_id=%s has_payments=%s (bool=%s)", stock_id, has_payments, bool(has_payments))
+        
+        if has_payments:
+            # Create approval request instead of directly deleting
+            from core.models import PaymentReview, PaymentReviewStatus
+            import json
+            
+            payload = {
+                'action': 'delete_stock',
+                'stock_id': stock_id,
+                'voucher_no': voucher,
+                'supplier': stock.supplier,
+                'delete_reason': request.form.get('delete_reason') or 'Deleted from dashboard.',
+                'mineral_type': 'copper'
+            }
+            
+            review = PaymentReview(
+                mineral_type='copper',
+                type='stock_delete',
+                customer=f"Stock {voucher} - {stock.supplier}",
+                amount=float(stock.net_balance or 0),
+                currency='RWF',
+                payment_id=stock_id,
+                created_by_id=getattr(current_user, 'id', None),
+                status=PaymentReviewStatus.PENDING_REVIEW.value,
+                request_payload=json.dumps(payload),
+                boss_comment=f"Request to delete stock {voucher} which has supplier payments. Reason: {request.form.get('delete_reason') or 'Deleted from dashboard.'}"
+            )
+            db.session.add(review)
+            db.session.commit()
+            
+            # Notify all bosses
+            boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+            for (boss_id,) in boss_rows:
+                create_notification(
+                    user_id=boss_id,
+                    type_="stock_delete_approval",
+                    message=f"Kontabure {getattr(current_user, 'username', 'unknown')} asabye kwemeza gusibwa kwa stock  {voucher} (hari abatanga ibicuruzwa bamaze kwishyurwa bivuzeko ayo tubarimwo arahinduka muri sisitemu).",
+                    related_type="payment_review",
+                    related_id=review.id
+                )
+            
+            flash(f"Stock {voucher} already have some supplier payments . so you will wait for boss approval.", "warning")
+            return redirect(url_for("copper.dashboard"))
+        
+        # No supplier payments - proceed with direct deletion
         try:
             before_snapshot = {
                 'id': int(stock.id),
@@ -176,7 +307,76 @@ def edit_stock(stock_id):
     try:
         logger.info("edit_stock: start id=%s user=%s", stock_id, getattr(current_user, "username", None))
         stock = CopperStock.query.get_or_404(stock_id)
+        voucher = stock.voucher_no
+        
+        # Check if stock has ever had supplier payments - if so, require boss approval
+        has_payments = _stock_has_payment_history(stock_id)
+        logger.info("edit_stock: stock_id=%s has_payments=%s (bool=%s)", stock_id, has_payments, bool(has_payments))
+        
+        if has_payments:
+            # Create approval request instead of directly editing
+            from core.models import PaymentReview, PaymentReviewStatus
+            import json
+            
+            # Parse incoming fields for the payload
+            date = _parse_date(request.form.get("date")) or stock.date
+            new_voucher = request.form.get("voucher_no") or stock.voucher_no
+            supplier = request.form.get("supplier") or stock.supplier
+            input_kg = float(request.form.get("input_kg") or stock.input_kg or 0)
+            percentage = float(request.form.get("percentage") or stock.percentage or 0)
+            nb = float(request.form.get("nb") or stock.nb or 0)
+            u_price = float(request.form.get("u_price") or stock.u_price or 0)
+            exchange = float(request.form.get("exchange") or stock.exchange or 0)
+            transport_tag = float(request.form.get("transport_tag") or stock.transport_tag or 0)
+            change_reason = (request.form.get('change_reason') or '').strip() or None
+            
+            payload = {
+                'action': 'edit_stock',
+                'stock_id': stock_id,
+                'voucher_no': voucher,
+                'new_voucher_no': new_voucher,
+                'supplier': supplier,
+                'date': str(date) if date else None,
+                'input_kg': input_kg,
+                'percentage': percentage,
+                'nb': nb,
+                'u_price': u_price,
+                'exchange': exchange,
+                'transport_tag': transport_tag,
+                'change_reason': change_reason,
+                'mineral_type': 'copper'
+            }
+            
+            review = PaymentReview(
+                mineral_type='copper',
+                type='stock_edit',
+                customer=f"Stock {voucher} - {stock.supplier}",
+                amount=float(stock.net_balance or 0),
+                currency='RWF',
+                payment_id=stock_id,
+                created_by_id=getattr(current_user, 'id', None),
+                status=PaymentReviewStatus.PENDING_REVIEW.value,
+                request_payload=json.dumps(payload),
+                boss_comment=f"Request to edit stock {voucher} which has supplier payments. Reason: {change_reason or 'No reason provided'}"
+            )
+            db.session.add(review)
+            db.session.commit()
+            
+            # Notify all bosses
+            boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+            for (boss_id,) in boss_rows:
+                create_notification(
+                    user_id=boss_id,
+                    type_="stock_edit_approval",
+                    message=f"Kontabure {getattr(current_user, 'username', 'unknown')} asabye kwemeza guhindura ingano {voucher} (hari abatanga ibicuruzwa bamaze kwishyurwa bivuzeko ayo tubarimwo arahinduka muri sisitemu).",
+                    related_type="payment_review",
+                    related_id=review.id
+                )
+            
+            flash(f"Stcok  {voucher} already have some supplier payments , so it will require boss approval. ", "warning")
+            return redirect(url_for("copper.dashboard"))
 
+        # No supplier payments - proceed with direct edit
         before_snapshot = {
             'id': int(stock.id),
             'date': str(stock.date) if getattr(stock, 'date', None) else None,
@@ -900,9 +1100,15 @@ def filter_stocks():
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         voucher_no = data.get('voucher_no') or None
+        search_term = (data.get('search') or '').strip()
     
     # Filter stocks
         stocks_query = CopperStock.query.filter(CopperStock.is_deleted.is_(False)).order_by(CopperStock.date.desc())
+        if search_term:
+            search_like = f"%{search_term.lower()}%"
+            stocks_query = stocks_query.filter(
+                db.func.lower(CopperStock.voucher_no).ilike(search_like) | db.func.lower(CopperStock.supplier).ilike(search_like)
+            )
         
         if start_date:
             start = datetime.strptime(start_date, '%Y-%m-%d').date()
@@ -957,6 +1163,9 @@ def filter_stocks():
         if voucher_no:
             stock_where += ' AND s.voucher_no = :voucher_no'
             params['voucher_no'] = voucher_no
+        if search_term:
+            stock_where += ' AND (LOWER(s.voucher_no) LIKE :search_like OR LOWER(s.supplier) LIKE :search_like)'
+            params['search_like'] = f"%{search_term.lower()}%"
 
         # Compose a single SQL that (1) computes per-stock outputs_sum, (2)
         # computes cumulative total_balance using a window over the filtered

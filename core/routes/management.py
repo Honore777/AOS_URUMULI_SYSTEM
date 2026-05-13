@@ -1927,6 +1927,58 @@ def boss_stock_adjustment_detail(log_id: int):
     return render_template('boss/stock_adjustment_detail.html', row=row)
 
 
+@core_bp.route('/boss/adjustments/<int:log_id>/edit', methods=['GET', 'POST'])
+@role_required('boss', 'admin')
+def boss_stock_adjustment_edit(log_id: int):
+    """Edit the reason field of a stock adjustment log with full audit trail."""
+    row = StockChangeLog.query.get_or_404(log_id)
+    
+    if request.method == 'POST':
+        new_reason = request.form.get('reason', '').strip()
+        edit_reason = request.form.get('edit_reason', '').strip()
+        
+        if not new_reason:
+            flash('Reason cannot be empty.', 'danger')
+            return render_template('boss/stock_adjustment_edit.html', row=row)
+        
+        if not edit_reason:
+            flash('You must provide a reason for editing this adjustment.', 'danger')
+            return render_template('boss/stock_adjustment_edit.html', row=row)
+        
+        try:
+            # Store original reason before editing
+            if not row.original_reason:
+                row.original_reason = row.reason
+            
+            # Update the reason
+            row.reason = new_reason
+            row.reason_edited_by_id = getattr(current_user, 'id', None)
+            row.reason_edited_at = datetime.utcnow()
+            row.reason_edit_reason = edit_reason
+            
+            db.session.commit()
+            
+            # Notify all bosses about the edit
+            boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+            for (boss_id,) in boss_rows:
+                create_notification(
+                    user_id=boss_id,
+                    type_="adjustment_edit",
+                    message=f"Adjustment log #{log_id} reason was edited by {getattr(current_user, 'username', 'unknown')}.",
+                    related_type="stock_change_log",
+                    related_id=log_id
+                )
+            
+            flash('Adjustment reason updated successfully.', 'success')
+            return redirect(url_for('core.boss_stock_adjustment_detail', log_id=log_id))
+        except Exception as e:
+            db.session.rollback()
+            logger.exception("boss_stock_adjustment_edit failed")
+            flash(f'Error updating adjustment: {e}', 'danger')
+    
+    return render_template('boss/stock_adjustment_edit.html', row=row)
+
+
 @core_bp.route("/boss/payment_review/<int:review_id>/approve", methods=["POST"])
 @role_required("boss")
 def boss_approve_payment(review_id: int):
@@ -2039,6 +2091,193 @@ def boss_approve_payment(review_id: int):
                 f"Boss approved {review.mineral_type} payment for "
                 f"{review.customer} ({amount_rwf:,.2f} RWF from {amount_input:,.2f} {currency})."
             )
+
+        # If this approval was a request to change/delete a stock, apply it now.
+        try:
+            action = (payload.get('action') or '').strip().lower()
+            if action in {'delete_stock', 'edit_stock'}:
+                stock_id = int(payload.get('stock_id') or review.payment_id or 0)
+                mineral_key = (payload.get('mineral_type') or review.mineral_type or '').strip().lower()
+                stock_model = _get_stock_model(mineral_key)
+                if not stock_model:
+                    raise ValueError(f"Unknown mineral type for approval execution: {mineral_key}")
+
+                # Load the stock and prepare snapshots
+                stock = stock_model.query.get(stock_id)
+                if not stock:
+                    raise ValueError(f"Stock id {stock_id} not found for auto-apply.")
+
+                # Common before snapshot
+                before_snapshot = {
+                    'id': int(stock.id),
+                    'date': str(getattr(stock, 'date', None)) if getattr(stock, 'date', None) else None,
+                    'voucher_no': getattr(stock, 'voucher_no', None),
+                    'supplier': getattr(stock, 'supplier', None),
+                    'input_kg': float(getattr(stock, 'input_kg', 0.0) or 0.0),
+                    'percentage': float(getattr(stock, 'percentage', 0.0) or 0.0),
+                    'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
+                    't_unity': float(getattr(stock, 't_unity', 0.0) or 0.0),
+                }
+
+                if action == 'delete_stock':
+                    # compute contribution and mark deleted
+                    try:
+                        contrib_q, contrib_wp, contrib_t = stock_model.contribution(stock)
+                    except Exception:
+                        contrib_q = contrib_wp = contrib_t = 0.0
+
+                    delete_reason = payload.get('delete_reason') or payload.get('reason') or f"Auto-deleted by boss approval (review #{review.id})."
+                    stock.is_deleted = True
+                    stock.deleted_at = datetime.utcnow()
+                    stock.deleted_by_id = getattr(current_user, 'id', None)
+                    try:
+                        stock.delete_reason = delete_reason
+                    except Exception:
+                        pass
+                    db.session.add(stock)
+
+                    try:
+                        log_row = StockChangeLog(
+                            mineral_type=mineral_key,
+                            stock_id=int(stock.id),
+                            action='DELETE',
+                            reason=delete_reason,
+                            before_json=before_snapshot,
+                            after_json={'is_deleted': True},
+                            created_by_id=getattr(review, 'created_by_id', None),
+                        )
+                        db.session.add(log_row)
+                        db.session.flush()
+                    except Exception:
+                        logger.exception('boss_approve_payment: failed to create StockChangeLog for auto-delete')
+                        log_row = None
+
+                    try:
+                        stock_model.apply_aggregate_delta(-contrib_q, -contrib_wp, -contrib_t, mineral_type=mineral_key)
+                    except Exception:
+                        logger.exception('boss_approve_payment: failed to apply aggregate delta for auto-delete')
+
+                    # Notify accountants that the boss approved and action was applied
+                    accountant_rows = db.session.query(User.id).filter_by(role='accountant', is_active=True).all()
+                    for (acc_id,) in accountant_rows:
+                        create_notification(
+                            user_id=acc_id,
+                            type_='STOCK_DELETE_AUTO_APPLIED',
+                            message=f"Umuyobozi yemeje kandi yatanze ingano {before_snapshot.get('voucher_no')} (bijyanye #{review.id}).",
+                            related_type='stock_change_log' if log_row else 'stock',
+                            related_id=(int(getattr(log_row, 'id', 0)) if log_row else int(stock.id)),
+                        )
+
+                    # Invalidate copper dashboard cache if present
+                    try:
+                        if mineral_key in {'copper', 'coltan'}:
+                            from copper.routes.stock_routes import _set_dashboard_aggregates as _cset
+                            _cset(None, ttl=0)
+                    except Exception:
+                        pass
+
+                elif action == 'edit_stock':
+                    # Apply edit payload fields onto the stock then recompute
+                    change_reason = payload.get('change_reason') or payload.get('reason') or f"Auto-edit by boss approval (review #{review.id})."
+                    # capture old contribution
+                    try:
+                        old_q, old_wp, old_t = stock_model.contribution(stock)
+                    except Exception:
+                        old_q = old_wp = old_t = 0.0
+
+                    # Apply fields (best-effort)
+                    try:
+                        if payload.get('date'):
+                            from datetime import datetime as _dt2
+                            try:
+                                stock.date = _dt2.fromisoformat(payload.get('date')).date()
+                            except Exception:
+                                try:
+                                    stock.date = _dt2.strptime(payload.get('date'), '%Y-%m-%d').date()
+                                except Exception:
+                                    pass
+                        if payload.get('new_voucher_no'):
+                            stock.voucher_no = payload.get('new_voucher_no')
+                        if payload.get('voucher_no') and not payload.get('new_voucher_no'):
+                            # keep original voucher if new not provided
+                            stock.voucher_no = payload.get('voucher_no')
+                        if payload.get('supplier') is not None:
+                            stock.supplier = payload.get('supplier')
+                        # numeric fields
+                        for f in ['input_kg', 'percentage', 'nb', 'u_price', 'lme', 'm_lme', 'sec', 'tc', 'exchange', 'transport_tag']:
+                            if f in payload and payload.get(f) is not None:
+                                try:
+                                    setattr(stock, f, float(payload.get(f)))
+                                except Exception:
+                                    pass
+
+                    except Exception:
+                        logger.exception('boss_approve_payment: failed to apply edit payload fields')
+
+                    # Recompute derived values if model exposes update_calculations
+                    try:
+                        if hasattr(stock, 'update_calculations'):
+                            stock.update_calculations()
+                    except Exception:
+                        logger.exception('boss_approve_payment: failed to run update_calculations on edited stock')
+
+                    # compute new contribution and apply delta
+                    try:
+                        new_q, new_wp, new_t = stock_model.contribution(stock)
+                        delta_q = float((new_q or 0.0) - (old_q or 0.0))
+                        delta_wp = float((new_wp or 0.0) - (old_wp or 0.0))
+                        delta_t = float((new_t or 0.0) - (old_t or 0.0))
+                        stock_model.apply_aggregate_delta(delta_q, delta_wp, delta_t, mineral_type=mineral_key)
+                    except Exception:
+                        logger.exception('boss_approve_payment: failed to apply aggregate delta for auto-edit')
+
+                    # create change log
+                    try:
+                        after_snapshot = {
+                            'id': int(stock.id),
+                            'date': str(getattr(stock, 'date', None)) if getattr(stock, 'date', None) else None,
+                            'voucher_no': getattr(stock, 'voucher_no', None),
+                            'supplier': getattr(stock, 'supplier', None),
+                            'input_kg': float(getattr(stock, 'input_kg', 0.0) or 0.0),
+                            'percentage': float(getattr(stock, 'percentage', 0.0) or 0.0),
+                            'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
+                            't_unity': float(getattr(stock, 't_unity', 0.0) or 0.0),
+                        }
+                        log_row = StockChangeLog(
+                            mineral_type=mineral_key,
+                            stock_id=int(stock.id),
+                            action='EDIT',
+                            reason=change_reason,
+                            before_json=before_snapshot,
+                            after_json=after_snapshot,
+                            created_by_id=getattr(review, 'created_by_id', None),
+                        )
+                        db.session.add(log_row)
+                        db.session.flush()
+                    except Exception:
+                        logger.exception('boss_approve_payment: failed to create StockChangeLog for auto-edit')
+                        log_row = None
+
+                    # Notify accountants of auto-applied edit
+                    accountant_rows = db.session.query(User.id).filter_by(role='accountant', is_active=True).all()
+                    for (acc_id,) in accountant_rows:
+                        create_notification(
+                            user_id=acc_id,
+                            type_='STOCK_EDIT_AUTO_APPLIED',
+                            message=f"Umuyobozi yemeje kandi yahinduje ingano {before_snapshot.get('voucher_no')} (bijyanye #{review.id}).",
+                            related_type='stock_change_log' if log_row else 'stock',
+                            related_id=(int(getattr(log_row, 'id', 0)) if log_row else int(stock.id)),
+                        )
+
+                    # Invalidate copper cache if needed
+                    try:
+                        if mineral_key in {'copper', 'coltan'}:
+                            from copper.routes.stock_routes import _set_dashboard_aggregates as _cset
+                            _cset(None, ttl=0)
+                    except Exception:
+                        pass
+        except Exception:
+            logger.exception("boss_approve_payment: auto-apply of request_payload failed")
 
         accountant_rows = db.session.query(User.id).filter_by(role="accountant", is_active=True).all()
         for (acc_id,) in accountant_rows:

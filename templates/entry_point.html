@@ -250,7 +250,7 @@
                 </a>
             {% endif %}
 
-            {% if current_user.role in ['accountant', 'boss', 'admin'] %}
+            {% if current_user.role in ['accountant', 'admin'] %}
                 <a href="{{ url_for('core.accountant_lenders') }}" class="module-card">
                     <div class="module-icon" style="color:#1d4ed8;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

@@ -138,11 +138,10 @@
                             <td class="px-4 py-3 text-gray-700">{{ payment.note }}</td>
                             <td class="px-4 py-3 text-gray-700">
                                 <a href="{{ url_for('cassiterite.edit_worker_payment', payment_id=payment.id) }}" class="inline-block bg-green-700 text-white px-3 py-1 rounded text-sm hover:bg-green-800 transition">Edit</a>
-                                <button type="button" data-action="{{ url_for('cassiterite.delete_worker_payment', payment_id=payment.id) }}" data-worker="{{ payment.worker_name }}" data-amount="{{ payment.amount or 0 }}" onclick="openDeleteModal(this.dataset.action, this.dataset.worker, this.dataset.amount)" class="inline-block bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 ml-1">Delete</button>
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="6" class="text-center py-8 text-gray-500">No recent payments.</td></tr>
+                        <tr><td colspan="7" class="text-center py-8 text-gray-500">No recent payments.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

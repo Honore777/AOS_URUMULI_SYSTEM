@@ -13,7 +13,12 @@
                 <h1 class="text-2xl font-bold text-slate-900">Adjustment #{{ row.id }}</h1>
                 <p class="text-sm text-slate-600 mt-1">{{ (row.mineral_type or '-')|upper }} · {{ row.action }} · Stock {{ row.stock_id }}</p>
             </div>
-            <a href="{{ url_for('core.boss_stock_adjustments') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back</a>
+            <div class="flex gap-2">
+                {% if current_user.role in ['boss', 'admin'] %}
+                <a href="{{ url_for('core.boss_stock_adjustment_edit', log_id=row.id) }}" class="rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700">Edit Reason</a>
+                {% endif %}
+                <a href="{{ url_for('core.boss_stock_adjustments') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back</a>
+            </div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">

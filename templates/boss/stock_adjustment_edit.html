@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Adjustment Reason</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-4xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900">Edit Adjustment Reason</h1>
+                <p class="text-sm text-slate-600 mt-1">{{ (row.mineral_type or '-')|upper }} · {{ row.action }} · Stock {{ row.stock_id }}</p>
+            </div>
+            <a href="{{ url_for('core.boss_stock_adjustment_detail', log_id=row.id) }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="space-y-2">
+            {% for category, message in messages %}
+            <div class="px-4 py-2 rounded-md shadow {{ 'bg-green-100 text-green-800' if category == 'success' else 'bg-red-100 text-red-800' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="rounded-xl bg-white p-6 shadow border border-slate-200">
+            <form method="POST" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">Current Reason</label>
+                    <p class="text-sm text-slate-600 bg-slate-50 p-3 rounded border border-slate-200">{{ row.reason or 'No reason provided' }}</p>
+                </div>
+
+                {% if row.original_reason %}
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">Original Reason (First Version)</label>
+                    <p class="text-sm text-slate-600 bg-slate-50 p-3 rounded border border-slate-200">{{ row.original_reason }}</p>
+                </div>
+                {% endif %}
+
+                <div>
+                    <label for="reason" class="block text-sm font-semibold text-slate-700 mb-2">New Reason</label>
+                    <textarea 
+                        id="reason" 
+                        name="reason" 
+                        rows="4" 
+                        class="w-full rounded border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required>{{ row.reason or '' }}</textarea>
+                </div>
+
+                <div>
+                    <label for="edit_reason" class="block text-sm font-semibold text-slate-700 mb-2">Reason for Editing This Adjustment</label>
+                    <textarea 
+                        id="edit_reason" 
+                        name="edit_reason" 
+                        rows="3" 
+                        class="w-full rounded border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="Explain why you are editing this adjustment reason..."
+                        required></textarea>
+                </div>
+
+                {% if row.reason_edited_at %}
+                <div class="bg-amber-50 border border-amber-200 rounded p-3">
+                    <p class="text-sm text-amber-800">
+                        <strong>Previously edited:</strong> 
+                        {{ row.reason_edited_at.strftime('%Y-%m-%d %H:%M') if row.reason_edited_at else '-' }}
+                        by {{ row.reason_edited_by.username if row.reason_edited_by else 'Unknown' }}
+                        {% if row.reason_edit_reason %}
+                        <br><strong>Edit reason:</strong> {{ row.reason_edit_reason }}
+                        {% endif %}
+                    </p>
+                </div>
+                {% endif %}
+
+                <div class="flex justify-end gap-3">
+                    <a href="{{ url_for('core.boss_stock_adjustment_detail', log_id=row.id) }}" class="rounded bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Cancel</a>
+                    <button type="submit" class="rounded bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700">Update Reason</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="rounded-xl bg-white p-5 shadow border border-slate-200">
+            <h2 class="text-sm font-bold text-slate-900 mb-3">Audit Information</h2>
+            <div class="space-y-2 text-sm">
+                <div><span class="font-semibold text-slate-700">Created:</span> {{ row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else '-' }}</div>
+                <div><span class="font-semibold text-slate-700">Created By:</span> {{ row.created_by.username if row.created_by else '-' }}</div>
+                <div><span class="font-semibold text-slate-700">Stock ID:</span> {{ row.stock_id }}</div>
+                <div><span class="font-semibold text-slate-700">Action:</span> {{ row.action }}</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

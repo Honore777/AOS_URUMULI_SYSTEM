@@ -933,7 +933,8 @@ def edit_supplier_payment(payment_id):
     from copper.forms import SupplierPaymentForm
     from copper.models import SupplierPayment
     from copper.models import CopperStock
-    from core.models import PaymentReview
+    from core.models import PaymentReview, PaymentReviewStatus
+    import json
 
     payment = SupplierPayment.query.get_or_404(payment_id)
     form = SupplierPaymentForm()
@@ -950,45 +951,40 @@ def edit_supplier_payment(payment_id):
 
         try:
             stock = CopperStock.query.get(form.stock_id.data)
-            payment.stock_id = stock.id
-            payment.amount = form.amount.data
-            payment.method = form.method.data
-            payment.reference = form.reference.data
-            payment.note = form.note.data
-            db.session.add(payment)
-            db.session.commit()
-            db.session.flush()  # ensure payment.id is populated for the review record  
-            # Create a new PaymentReview for the boss to review this change.
-            # We keep existing review rows untouched (they represent what was
-            # previously recorded) and create a fresh PENDING_REVIEW entry
-            # that contains the new values and the accountant's reason.
             from flask_login import current_user
-            # upsert pending review for this edited supplier payment (include change reason)
-            from core.models import PaymentReviewStatus
-            existing = PaymentReview.query.filter_by(
+            payload = {
+                'action': 'edit_supplier_payment',
+                'payment_id': payment.id,
+                'stock_id': int(stock.id) if stock else None,
+                'old_values': {
+                    'stock_id': payment.stock_id,
+                    'amount': float(payment.amount or 0),
+                    'method': payment.method,
+                    'reference': payment.reference,
+                    'note': payment.note,
+                },
+                'new_values': {
+                    'stock_id': int(stock.id) if stock else None,
+                    'amount': float(form.amount.data or 0),
+                    'method': form.method.data,
+                    'reference': form.reference.data,
+                    'note': form.note.data,
+                },
+                'change_reason': form.change_reason.data.strip(),
+            }
+            review = PaymentReview(
+                mineral_type='copper',
+                type='Utanga ibicuruzwa',
+                customer=stock.supplier if stock else (payment.supplier_name or 'Unknown'),
+                amount=float(form.amount.data or 0),
+                currency='RWF',
                 payment_id=payment.id,
+                created_by_id=getattr(current_user, 'id', None),
                 status=PaymentReviewStatus.PENDING_REVIEW.value,
-            ).first()
-            if existing:
-                existing.mineral_type = 'coltan'
-                existing.type = 'Utanga amabuye'
-                existing.customer = stock.supplier
-                existing.amount = payment.amount
-                existing.currency = 'RWF'
-                existing.created_by_id = getattr(current_user, 'id', None)
-                existing.boss_comment = (f"Edit requested: {form.change_reason.data.strip()}")
-            else:
-                review = PaymentReview(
-                    mineral_type='coltan',
-                    type='Utanga amabuye',
-                    customer=stock.supplier,
-                    amount=payment.amount,
-                    currency='RWF',
-                    payment_id=payment.id,
-                    created_by_id=getattr(current_user, 'id', None),
-                    boss_comment=(f"Edit requested: {form.change_reason.data.strip()}"),
-                )
-                db.session.add(review)
+                request_payload=json.dumps(payload),
+                boss_comment=f"Edit requested: {form.change_reason.data.strip()}",
+            )
+            db.session.add(review)
             # in-app notification and email to boss
             from core.models import create_notification, User
             boss_user = User.query.filter_by(role='boss').first()
@@ -1023,7 +1019,7 @@ def edit_supplier_payment(payment_id):
             except Exception:
                 pass
 
-            flash('Supplier payment updated; boss has been notified to review the change.', 'success')
+            flash('Supplier payment edit request submitted for boss approval.', 'warning')
             return redirect(url_for('copper.pay_supplier'))
         except Exception as e:
             db.session.rollback()
@@ -1109,7 +1105,8 @@ def delete_supplier_payment(payment_id):
 def edit_worker_payment(payment_id):
     from copper.forms import WorkerPaymentForm
     from copper.models import WorkerPayment
-    from core.models import PaymentReview
+    from core.models import PaymentReview, PaymentReviewStatus
+    import json
 
     payment = WorkerPayment.query.get_or_404(payment_id)
     form = WorkerPaymentForm()
@@ -1121,58 +1118,62 @@ def edit_worker_payment(payment_id):
             return render_template('copper/edit_worker_payment.html', form=form, payment=payment)
 
         try:
-            payment.worker_name = form.worker_name.data
-            payment.amount = form.amount.data
-            payment.method = form.method.data
-            payment.reference = form.reference.data
-            payment.note = form.note.data
-            db.session.add(payment)
-            db.session.commit()
-
-            # Create a PENDING review for the boss to inspect this edit
+            # Create approval request WITHOUT executing the edit
             from flask_login import current_user
             from core.models import create_notification, User
-            # upsert pending review for edited worker payment
-            from core.models import PaymentReviewStatus
-            existing = PaymentReview.query.filter_by(
+            
+            # Store the proposed changes in the payload
+            payload = {
+                'action': 'edit_worker_payment',
+                'payment_id': payment_id,
+                'old_values': {
+                    'worker_name': payment.worker_name,
+                    'amount': float(payment.amount or 0),
+                    'method': payment.method,
+                    'reference': payment.reference,
+                    'note': payment.note,
+                },
+                'new_values': {
+                    'worker_name': form.worker_name.data,
+                    'amount': float(form.amount.data or 0),
+                    'method': form.method.data,
+                    'reference': form.reference.data,
+                    'note': form.note.data,
+                },
+                'change_reason': form.change_reason.data.strip(),
+            }
+            
+            review = PaymentReview(
+                mineral_type='copper',
+                type='expense_edit',
+                customer=f"{payment.worker_name} (current) -> {form.worker_name.data} (proposed)",
+                amount=float(form.amount.data or 0),
+                currency='RWF',
                 payment_id=payment.id,
+                created_by_id=getattr(current_user, 'id', None),
                 status=PaymentReviewStatus.PENDING_REVIEW.value,
-            ).first()
-            if existing:
-                existing.mineral_type = None
-                existing.type = 'Umukozi'
-                existing.customer = payment.worker_name
-                existing.amount = payment.amount
-                existing.currency = 'RWF'
-                existing.created_by_id = getattr(current_user, 'id', None)
-                existing.boss_comment = (f"Edit requested: {form.change_reason.data.strip()}")
-            else:
-                review = PaymentReview(
-                    mineral_type=None,
-                    type='Umukozi',
-                    customer=payment.worker_name,
-                    amount=payment.amount,
-                    currency='RWF',
-                    payment_id=payment.id,
-                    created_by_id=getattr(current_user, 'id', None),
-                    boss_comment=(f"Edit requested: {form.change_reason.data.strip()}"),
-                )
-                db.session.add(review)
-            boss_user = User.query.filter_by(role='boss').first()
-            if boss_user:
+                request_payload=json.dumps(payload),
+                boss_comment=f"Expense edit requested: {form.change_reason.data.strip()}"
+            )
+            db.session.add(review)
+            
+            # Notify all bosses
+            boss_rows = db.session.query(User.id).filter_by(role="boss", is_active=True).all()
+            for (boss_id,) in boss_rows:
                 create_notification(
-                    user_id=boss_user.id,
-                    type_='PAYMENT_EDIT_REQUEST',
-                    message=f"Hasabwe gusuzuma: Impinduka kuri kwishyura umukozi - {payment.worker_name}, Amafaranga: {payment.amount} RWF. Icyitonderwa: {form.change_reason.data.strip()}",
-                    related_type='worker_payment',
-                    related_id=payment.id,
+                    user_id=boss_id,
+                    type_="expense_edit_approval",
+                    message=f"Accountant {getattr(current_user, 'username', 'unknown')} requested approval to edit expense for {payment.worker_name} (amount: {payment.amount} RWF -> {form.amount.data} RWF).",
+                    related_type="payment_review",
+                    related_id=review.id
                 )
+            
             db.session.commit()
-            flash('Worker payment updated; boss has been notified to review the change.', 'success')
+            flash('Expense edit request submitted for boss approval. The edit will be executed after approval.', 'warning')
             return redirect(url_for('copper.pay_worker'))
         except Exception as e:
             db.session.rollback()
-            flash(f'Error updating payment: {e}', 'danger')
+            flash(f'Error submitting edit request: {e}', 'danger')
 
     if not form.is_submitted():
         form.worker_name.data = payment.worker_name

@@ -48,7 +48,7 @@
                         <th class="px-3 py-3 text-left">Action</th>
                         <th class="px-3 py-3 text-left">Stock ID</th>
                         <th class="px-3 py-3 text-left">Reason</th>
-                        <th class="px-3 py-3 text-right">View</th>
+                        <th class="px-3 py-3 text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-200">
@@ -61,6 +61,9 @@
                         <td class="px-3 py-3 text-slate-700">{{ r.reason or '-' }}</td>
                         <td class="px-3 py-3 text-right">
                             <a class="font-semibold text-indigo-700 hover:text-indigo-900" href="{{ url_for('core.boss_stock_adjustment_detail', log_id=r.id) }}">Open</a>
+                            {% if current_user.role in ['boss', 'admin'] %}
+                            <a class="font-semibold text-green-700 hover:text-green-900 ml-2" href="{{ url_for('core.boss_stock_adjustment_edit', log_id=r.id) }}">Edit</a>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
