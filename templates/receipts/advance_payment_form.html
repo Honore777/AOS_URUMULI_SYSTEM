@@ -100,6 +100,40 @@
                 {% if (payment.currency or 'RWF')|upper == 'USD' %}
                 <tr>
                     <th>Original Currency / Audit Trail</th>
+
+            {% if deductions_rows and deductions_rows|length > 0 %}
+            <div class="section-title">VOUCHER / LOT DETAILS ACROSS MINERALS</div>
+            <table class="form-table">
+                <thead>
+                    <tr>
+                        <th>Mineral</th>
+                        <th>Voucher / Lot</th>
+                        <th style="text-align:right;">Input (kg)</th>
+                        <th style="text-align:right;">Gross</th>
+                        <th style="text-align:right;">Transport</th>
+                        <th style="text-align:right;">RMA</th>
+                        <th style="text-align:right;">Inkomane</th>
+                        <th style="text-align:right;">RRA 3%</th>
+                        <th style="text-align:right;">Net</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in deductions_rows %}
+                    <tr>
+                        <td>{{ r.mineral or '-' }}</td>
+                        <td>{{ r.voucher_no or '-' }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.input_kg or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.gross or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.transport or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.rma or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.inkomane or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.rra_3_percent or 0) }}</td>
+                        <td style="text-align:right; font-weight: 700;">{{ '{:,.2f}'.format(r.net or 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
                     <td style="text-align: right; font-weight: 600; color: #1d4ed8;">{{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} USD</td>
                     <th>Exchange Rate Used</th>
                     <td style="text-align: right; font-weight: 600; color: #7c3aed;">{{ '{:,.2f}'.format(payment.exchange_rate or 0) }} RWF/USD</td>

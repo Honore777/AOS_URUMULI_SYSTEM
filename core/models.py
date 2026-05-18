@@ -403,6 +403,9 @@ class BulkOutputPlan(db.Model):
         # This is the total price the customer agreed to pay for the batch
         # Debt = total_expected_amount - total_payments_received
         total_expected_amount = db.Column(db.Float, nullable=True, default=0)
+        # Currency of the agreement (RWF or USD) and frozen exchange rate at agreement time
+        currency = db.Column(db.String(10), nullable=False, default='RWF', index=True)
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
 
         # The optimal table from the optimization step as JSON.
         # Typical structure (Python side before JSON):
@@ -452,10 +455,10 @@ class CustomerReceipt(db.Model):
         payment_channel = db.Column(db.String(20), nullable=False, default=CustomerReceiptChannel.CASH.value, index=True)
 
         # Entered and normalized amounts
-        amount_input = db.Column(db.Float, nullable=False, default=0)
+        amount_input = db.Column(db.Numeric(18, 2), nullable=False, default=0)
         currency = db.Column(db.String(10), nullable=False, default="RWF", index=True)
         exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
-        amount_rwf = db.Column(db.Float, nullable=False, default=0)
+        amount_rwf = db.Column(db.Numeric(18, 2), nullable=False, default=0)
 
         # Audit fields
         created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
@@ -807,17 +810,17 @@ class UnifiedSupplierAdvance(db.Model):
         source_mineral_type = db.Column(db.String(20), nullable=True, index=True)
         source_payment_id = db.Column(db.Integer, nullable=True, index=True)
 
-        input_amount = db.Column(db.Float, nullable=True)
+        input_amount = db.Column(db.Numeric(18, 2), nullable=True)
         currency = db.Column(db.String(10), nullable=False, default="RWF", index=True)
         exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
-        amount_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+        amount_rwf = db.Column(db.Numeric(18, 2), nullable=False, default=0.0, index=True)
 
         paid_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
         method = db.Column(db.String(50), nullable=True)
         reference = db.Column(db.String(100), nullable=True)
         note = db.Column(db.Text, nullable=True)
 
-        advance_remaining = db.Column(db.Float, nullable=False, default=0.0, index=True)
+        advance_remaining = db.Column(db.Numeric(18, 2), nullable=False, default=0.0, index=True)
 
         created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
         created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
@@ -838,7 +841,7 @@ class UnifiedSupplierAdvanceAllocation(db.Model):
         advance_id = db.Column(db.Integer, db.ForeignKey("unified_supplier_advance.id"), nullable=False, index=True)
         stock_mineral_type = db.Column(db.String(20), nullable=False, index=True)
         stock_id = db.Column(db.Integer, nullable=False, index=True)
-        applied_amount = db.Column(db.Float, nullable=False, default=0.0)
+        applied_amount = db.Column(db.Numeric(18, 2), nullable=False, default=0.0)
         created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
         advance = db.relationship(
@@ -956,5 +959,149 @@ class CustomerUnearnedAllocation(db.Model):
 
         unearned = db.relationship('CustomerUnearnedReceipt', backref=backref('allocations', cascade='all, delete-orphan'), lazy=True)
         created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
+
+
+class BatchDeduction(db.Model):
+        """Per-batch deduction record created during negotiation/agreement.
+
+        Stores each deduction (RMA, Transport, Alex fee, Percentage) as an
+        auditable row with frozen exchange rate and RWF equivalent.
+        """
+
+        __tablename__ = 'batch_deduction'
+
+        id = db.Column(db.Integer, primary_key=True)
+        batch_id = db.Column(db.Integer, db.ForeignKey('bulk_output_plan.id'), nullable=False, index=True)
+        deduction_type = db.Column(db.String(50), nullable=False)
+
+        amount_input = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+        currency = db.Column(db.String(10), nullable=False, default='RWF')
+        exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
+        amount_rwf = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        note = db.Column(db.Text, nullable=True)
+
+        plan = db.relationship('BulkOutputPlan', backref=backref('deductions', cascade='all, delete-orphan'), lazy=True)
+        created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
+
+
+class WorkerPaymentReceiptSequence(db.Model):
+        """Stores the next receipt number to assign for worker payments.
+        
+        Allows generation of unique, sequential receipt numbers like WKR-2026-001, WKR-2026-002, etc.
+        """
+
+        __tablename__ = 'worker_payment_receipt_sequence'
+
+        id = db.Column(db.Integer, primary_key=True)
+        year = db.Column(db.Integer, nullable=False, unique=True)
+        next_sequence = db.Column(db.Integer, nullable=False, default=1)
+        updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WorkerPaymentReceipt(db.Model):
+        """Immutable receipt generated when a worker payment is disbursed.
+        
+        Provides audit trail and allows workers to verify they were paid.
+        """
+
+        __tablename__ = 'worker_payment_receipt'
+
+        id = db.Column(db.Integer, primary_key=True)
+
+        # Link to the actual payment (ExpenseTransaction)
+        payment_id = db.Column(db.Integer, db.ForeignKey('expense_transaction.id'), nullable=False, index=True)
+
+        # Receipt identification
+        receipt_number = db.Column(db.String(50), unique=True, nullable=False, index=True)
+        
+        # Denormalized worker info for easy querying
+        worker_name = db.Column(db.String(120), nullable=False, index=True)
+        amount = db.Column(db.Float, nullable=False)
+        currency = db.Column(db.String(10), nullable=False, default='RWF')
+        
+        # Which mineral (copper/cassiterite)
+        mineral_type = db.Column(db.String(20), nullable=True, index=True)
+
+        # When the receipt was generated
+        generated_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        generated_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+        # Print tracking - prevent duplicate prints
+        is_printed = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        printed_at = db.Column(db.DateTime, nullable=True)
+        printed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+        # Soft-delete support
+        is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        deleted_at = db.Column(db.DateTime, nullable=True)
+        deleted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        delete_reason = db.Column(db.Text, nullable=True)
+
+        # Relationships
+        payment = db.relationship('ExpenseTransaction', backref='receipt', lazy=True)
+        generated_by = db.relationship('User', foreign_keys=[generated_by_id], lazy=True)
+        printed_by = db.relationship('User', foreign_keys=[printed_by_id], lazy=True)
+        deleted_by = db.relationship('User', foreign_keys=[deleted_by_id], lazy=True)
+
+
+class SupplierPaymentReceiptSequence(db.Model):
+        """Stores the next receipt number to assign for supplier payments.
+        
+        Allows generation of unique, sequential receipt numbers like SUP-2026-001, SUP-2026-002, etc.
+        """
+
+        __tablename__ = 'supplier_payment_receipt_sequence'
+
+        id = db.Column(db.Integer, primary_key=True)
+        year = db.Column(db.Integer, nullable=False, unique=True)
+        next_sequence = db.Column(db.Integer, nullable=False, default=1)
+        updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SupplierPaymentReceipt(db.Model):
+        """Receipt generated when a supplier payment is disbursed.
+        
+        Tracks supplier payments with print status and audit trail.
+        """
+
+        __tablename__ = 'supplier_payment_receipt'
+
+        id = db.Column(db.Integer, primary_key=True)
+
+        # Link to the payment (from copper or cassiterite)
+        payment_id = db.Column(db.Integer, nullable=False, index=True)
+        mineral_type = db.Column(db.String(20), nullable=False, index=True)  # 'copper' or 'cassiterite'
+
+        # Receipt identification
+        receipt_number = db.Column(db.String(50), unique=True, nullable=False, index=True)
+        
+        # Denormalized supplier info
+        supplier_name = db.Column(db.String(120), nullable=False, index=True)
+        amount = db.Column(db.Float, nullable=False)
+        currency = db.Column(db.String(10), nullable=False, default='RWF')
+        payment_type = db.Column(db.String(20), nullable=True)  # SETTLEMENT or ADVANCE
+
+        # When the receipt was generated
+        generated_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        generated_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+        # Print tracking - prevent duplicate prints
+        is_printed = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        printed_at = db.Column(db.DateTime, nullable=True)
+        printed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+        # Soft-delete support
+        is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        deleted_at = db.Column(db.DateTime, nullable=True)
+        deleted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        delete_reason = db.Column(db.Text, nullable=True)
+
+        # Relationships
+        generated_by = db.relationship('User', foreign_keys=[generated_by_id], lazy=True)
+        printed_by = db.relationship('User', foreign_keys=[printed_by_id], lazy=True)
+        deleted_by = db.relationship('User', foreign_keys=[deleted_by_id], lazy=True)
 
 

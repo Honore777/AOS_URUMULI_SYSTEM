@@ -26,7 +26,6 @@
                 <nav class="space-y-2">
                     {% if not is_readonly %}
                     <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
-                    <a href="{{ url_for('core.customer_unearned_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Unearned Revenue</a>
                     <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
                     {% endif %}
                     {% if user_role != 'boss' %}
@@ -111,7 +110,6 @@
                                     <th class="px-2 py-2 text-right">NB</th>
                                     {% endif %}
                                     <th class="px-2 py-2 text-left">Description</th>
-                                    <th class="px-2 py-2 text-right text-xs">Rate</th>
                                     <th class="px-2 py-2 text-right">Debit</th>
                                     <th class="px-2 py-2 text-right">Credit</th>
                                     <th class="px-2 py-2 text-right">Balance</th>
@@ -122,7 +120,7 @@
                                 {% set base_currency = e.get('base_currency', 'RWF') %}
                                 <tr class="hover:bg-slate-50">
                                     <td class="px-2 py-2 text-slate-600">{{ e.get('date').strftime('%m-%d %H:%M') if e.get('date') else '-' }}</td>
-                                    <td class="px-2 py-2 text-slate-700 uppercase">{{ e.get('mineral_type')|mineral_display or '-' }}</td>
+                                    <td class="px-2 py-2 text-slate-700 uppercase">{{ e.get('mineral_type') or '-' }}</td>
                                     <td class="px-2 py-2 text-slate-700 text-xs">{{ e.get('batch_id') or '-' }}</td>
                                     <td class="px-2 py-2 text-slate-700">
                                         {% if e.get('receipt_id') %}<a class="text-indigo-700 hover:text-indigo-900" href="{{ url_for('core.customer_receipt_detail', receipt_id=e.get('receipt_id')) }}">R:{{ e.get('receipt_id') }}</a>{% else %}-{% endif %}
@@ -133,7 +131,6 @@
                                     <td class="px-2 py-2 text-right text-slate-700">{{ '%.2f'|format(e.get('moyenne_nb', 0) or 0) }}</td>
                                     {% endif %}
                                     <td class="px-2 py-2 text-slate-900 text-xs font-semibold">{{ e.get('description') }}</td>
-                                    <td class="px-2 py-2 text-right text-slate-600 text-xs">{% if e.get('original_exchange_rate') %}{{ '{:,.4f}'.format(e.get('original_exchange_rate')) }}{% else %}-{% endif %}</td>
                                     <td class="px-2 py-2 text-right font-bold text-red-700">
                                         {% if e.get('debit') %}
                                         <div>{{ '{:,.2f}'.format(e.get('debit', 0)) }} {{ base_currency }}</div>

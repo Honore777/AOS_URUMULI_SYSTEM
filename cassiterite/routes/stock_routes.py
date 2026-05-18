@@ -6,7 +6,8 @@ This module handles:
     including optional notifications for the logged-in user.
 """
 from datetime import datetime
-from flask import render_template, request, redirect, url_for, flash, jsonify
+from flask import render_template, request, redirect, url_for, flash
+from utils import safe_jsonify
 from config import db
 from cassiterite.models import CassiteriteStock, CassiteriteOutput, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
 from core.models import BulkOutputPlan, BulkPlanStatus, CustomerReceipt, StockChangeLog
@@ -704,6 +705,10 @@ def dashboard():
             voucher_choices = [v for (v,) in voucher_q.all() if v]
         except Exception:
             try:
+                db.session.rollback()
+            except Exception:
+                pass
+            try:
                 voucher_choices = [s.voucher_no for s in stocks if getattr(s, 'voucher_no', None)]
             except Exception:
                 voucher_choices = []
@@ -1096,11 +1101,12 @@ FROM (
         total_payments = db.session.query(func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
 
         # Inventory value (book cost) and supplier outstanding (liability)
-        inventory_value = total_supplier_obligation
-        supplier_outstanding = (inventory_value or 0) - (total_payments or 0)
+        # Coerce DB numeric types (Decimal) to float for arithmetic and JSON outputs
+        inventory_value = float(total_supplier_obligation or 0)
+        supplier_outstanding = float(inventory_value or 0.0) - float(total_payments or 0.0)
 
-        # Gross profit for the filtered window
-        gross_profit = (total_sales or 0) - (total_supplier_obligation or 0)
+        # Gross profit for the filtered window (ensure numeric coercion)
+        gross_profit = float(total_sales or 0.0) - float(total_supplier_obligation or 0.0)
 
         # Remaining stocks aggregates (only local_balance > 0)
         remaining_filters = list(stock_filters) + [CassiteriteStock.local_balance > 0]
@@ -1165,12 +1171,13 @@ FROM (
             timings['inventory_value'] = None
 
             # Supplier outstanding (liability) is based on the original supplier
-            # obligation minus all payments recorded for these lots.
-        supplier_outstanding = (total_supplier_obligation or 0) - (total_payments or 0)
+            # obligation minus all payments recorded for these lots. Coerce to
+            # float to avoid mixing Decimal (from DB) with floats.
+            supplier_outstanding = float(total_supplier_obligation or 0) - float(total_payments or 0)
 
-            # Gross profit for the filtered window remains tied to the original
-            # cost basis, not the current Inventory Value.
-        gross_profit = (total_sales or 0) - (total_supplier_obligation or 0)
+                # Gross profit for the filtered window remains tied to the original
+                # cost basis, not the current Inventory Value. Coerce to float.
+            gross_profit = float(total_sales or 0) - float(total_supplier_obligation or 0)
             # Remaining stocks aggregates (only local_balance > 0)
         total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
 
@@ -1258,7 +1265,9 @@ FROM (
             timings['cogs_aggregate'] = None
         logger.info("cassiterite.filter_stocks: completed stocks=%d outputs=%d page=%d", len(filtered_stocks), len(filtered_outputs), page)
         logger.info('cassiterite.filter_stocks timings: %s', timings)
-        return jsonify({
+        from utils import safe_jsonify
+
+        return safe_jsonify({
             'stocks': stocks_data,
             'outputs': outputs_data,
             'page': page,
@@ -1282,4 +1291,9 @@ FROM (
         })
     except Exception:
         logger.exception("cassiterite.filter_stocks failed params=%s", request.get_json() or {})
-        raise
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        from utils import safe_jsonify
+        return safe_jsonify({'error': 'internal server error'}), 500

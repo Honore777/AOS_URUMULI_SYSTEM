@@ -50,10 +50,6 @@
                 <a href="{{ url_for('logout') }}" class="rounded bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700">Logout</a>
             </div>
         </div>
-                        <div class="relative">
-                            <input id="customer-input" type="text" name="customer" autocomplete="off" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                            <div id="customer-suggestions" class="absolute z-20 mt-1 hidden w-full rounded-lg border border-slate-200 bg-white shadow-lg"></div>
-                        </div>
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
         <div class="space-y-2">
@@ -71,7 +67,6 @@
                 <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
                 <nav class="space-y-2">
                     <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Record Customer Receipts</a>
-                    <a href="{{ url_for('core.customer_unearned_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Unearned</a>
                     <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
                     <a href="{{ url_for('core.consolidated_customer_ledger_index') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Customer Ledgers</a>
                     <a href="{{ url_for('core.negotiator_loans') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Loans</a>
@@ -88,6 +83,7 @@
 
                 <form method="post" action="{{ url_for('core.customer_receipts') }}" class="space-y-5">
                     <input type="hidden" id="force-overwrite" name="force_overwrite" value="0" />
+                    <input type="hidden" id="action-type" name="action_type" value="agreement" />
                     <div>
                         <label class="mb-2 block text-sm font-semibold text-slate-700">Select Executed Batch</label>
                         <select id="plan-selector" name="plan_id" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -103,8 +99,12 @@
                                 data-created="{{ p.created_at.strftime('%Y-%m-%d') if p.created_at else '-' }}"
                                 data-customer="{{ p.customer or '' }}"
                                 data-total="{{ p.total_expected_amount or 0 }}"
+                                data-currency="{{ p.currency or 'RWF' }}"
+                                data-rate="{{ p.exchange_rate or 1.0 }}"
+                                data-remaining-rwf="{{ p.remaining_rwf or 0 }}"
+                                data-remaining-display="{{ p.remaining_display or 0 }}"
                             >
-                                {{ p.customer or 'No customer' }} [{{ p.mineral_type|upper }} | Batch {{ p.batch_id }} | Qty {{ '%.2f'|format(p.summary.total_qty or 0) }}kg | Moy {{ '%.2f'|format(p.summary.moyenne or 0) }} | NB {{ '%.2f'|format(p.summary.moyenne_nb or 0) }}]
+                                {{ p.customer or 'No customer' }} [{{ p.mineral_type|upper }} | Batch {{ p.batch_id }} | Qty {{ '%.2f'|format(p.summary.total_qty or 0) }}kg | Moy {{ '%.2f'|format(p.summary.moyenne or 0) }} | NB {{ '%.2f'|format(p.summary.moyenne_nb or 0) }} | Remaining {{ '{:,.2f}'.format(p.remaining_display or 0) }} {{ p.currency or 'RWF' }}]
                             </option>
                             {% endfor %}
                         </select>
@@ -130,24 +130,103 @@
                                 <p id="batch-created" class="text-slate-900 font-bold">-</p>
                             </div>
                         </div>
+                        <p class="mt-2 text-sm text-slate-700">Remaining for selected batch: <span id="batch-rem" class="font-bold">-</span></p>
                     </div>
 
                     <div>
                         <label class="mb-1 block text-sm font-semibold text-slate-700">Customer Name</label>
-                        <input id="customer-input" type="text" name="customer" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        <div class="relative">
+                            <input id="customer-input" type="text" name="customer" autocomplete="off" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                            <div id="customer-suggestions" class="absolute z-20 mt-1 hidden w-full rounded-lg border border-slate-200 bg-white shadow-lg"></div>
+                        </div>
                     </div>
 
                     <div>
                         <label class="mb-1 block text-sm font-semibold text-slate-700">Agreed Total Amount</label>
-                        <input id="total-input" type="number" name="total_expected_amount" step="0.01" min="0" required class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        <input id="total-input" type="number" name="total_expected_amount" step="0.01" min="0" class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Optional for advance-only" />
                     </div>
 
                     <div>
                         <label class="mb-1 block text-sm font-semibold text-slate-700">Currency</label>
-                        <select name="currency" class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <select id="currency-select" name="currency" class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="RWF">RWF</option>
+                            <option value="USD">USD</option>
                         </select>
                     </div>
+
+                    <div id="exchange-rate-row" class="hidden">
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Exchange Rate (RWF per USD)</label>
+                        <input id="exchange-rate-input" type="number" name="exchange_rate" step="any" min="0.0001" class="w-full rounded border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+
+                    <div id="deductions-section" class="hidden space-y-3 rounded-lg bg-slate-50 p-4 border border-slate-200">
+                        <p class="text-sm font-semibold text-slate-900">Deductions (enter in agreement currency)</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div>
+                                <label class="text-xs text-slate-600">RMA</label>
+                                <input type="number" step="0.01" min="0" name="rma_amount" class="w-full rounded border border-slate-300 px-2 py-2" />
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-600">Transport</label>
+                                <input type="number" step="0.01" min="0" name="transport_amount" class="w-full rounded border border-slate-300 px-2 py-2" />
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-600">Alex International Fee</label>
+                                <input type="number" step="0.01" min="0" name="alex_fee_amount" class="w-full rounded border border-slate-300 px-2 py-2" />
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-600">Percentage (flat amount)</label>
+                                <input type="number" step="0.01" min="0" name="percentage_amount" class="w-full rounded border border-slate-300 px-2 py-2" />
+                            </div>
+                        </div>
+                        <div class="text-sm text-slate-700">
+                            <p id="deduction-summary">Deductions total: - 0.00</p>
+                            <p id="remaining-summary">Remaining due (after advance): -</p>
+                        </div>
+                    </div>
+
+                    {# Advance-only input removed: advances should be recorded via Update Debts or Unearned Receipts #}
+                    <script>
+                        (function(){
+                            const currencySelect = document.getElementById('currency-select');
+                            const exchangeRow = document.getElementById('exchange-rate-row');
+                            const exchangeInput = document.getElementById('exchange-rate-input');
+                            const dedSection = document.getElementById('deductions-section');
+                            const dedSummary = document.getElementById('deduction-summary');
+                            const remSummary = document.getElementById('remaining-summary');
+                            const totalInput = document.getElementById('total-input');
+
+                            function fmt(n){ return (isNaN(n) ? 0 : n).toFixed(2); }
+
+                            function updateVisibility(){
+                                const cur = (currencySelect && currencySelect.value) || 'RWF';
+                                if(cur === 'USD'){
+                                    exchangeRow.classList.remove('hidden');
+                                    dedSection.classList.remove('hidden');
+                                } else {
+                                    exchangeRow.classList.add('hidden');
+                                    dedSection.classList.remove('hidden');
+                                }
+                                updateSummary();
+                            }
+
+                            function updateSummary(){
+                                const keys = ['rma_amount','transport_amount','alex_fee_amount','percentage_amount'];
+                                let sum = 0;
+                                keys.forEach(k=>{
+                                    const el = document.querySelector(`[name="${k}"]`);
+                                    if(el){ sum += parseFloat(el.value || 0); }
+                                });
+                                dedSummary.textContent = 'Deductions total: - ' + fmt(sum);
+                                const total = parseFloat(totalInput.value || 0);
+                                remSummary.textContent = 'Remaining due (before advance allocation): ' + fmt(Math.max(0, total - sum));
+                            }
+
+                            if(currencySelect){ currencySelect.addEventListener('change', updateVisibility); }
+                            document.querySelectorAll('input[name="rma_amount"], input[name="transport_amount"], input[name="alex_fee_amount"], input[name="percentage_amount"], #total-input').forEach(el=>el.addEventListener('input', updateSummary));
+                            updateVisibility();
+                        })();
+                    </script>
 
                     <label class="flex items-center gap-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                         <input id="overwrite-check" type="checkbox" class="h-4 w-4 rounded border-amber-400 text-amber-700 focus:ring-amber-500" />
@@ -155,9 +234,10 @@
                     </label>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <button type="submit" class="agreement-action agreement-action-save">Save Agreement</button>
+                        <button type="submit" id="save-agreement-btn" class="agreement-action agreement-action-save">Save Agreement</button>
                         <a href="{{ url_for('core.update_debts') }}" class="agreement-action agreement-action-update">Go To Update Debts</a>
                     </div>
+                    {# Advance-only submit removed; agreements only here #}
                 </form>
             </section>
         </div>
@@ -170,7 +250,26 @@
     const totalInput = document.getElementById('total-input');
     const overwriteCheck = document.getElementById('overwrite-check');
     const forceOverwriteInput = document.getElementById('force-overwrite');
+    const actionTypeInput = document.getElementById('action-type');
+    const saveAgreementBtn = document.getElementById('save-agreement-btn');
     const planAveragesBase = "{{ url_for('core.api_plan_averages', plan_id=0)[:-1] }}";
+
+    function formatRemaining(opt) {
+        const ccy = (opt?.dataset?.currency || 'RWF').toUpperCase();
+        const remDisplay = Number(opt?.dataset?.remainingDisplay || 0);
+        const remRwf = Number(opt?.dataset?.remainingRwf || 0);
+        if (ccy === 'USD') {
+            return remDisplay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USD (' + remRwf.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RWF)';
+        }
+        return remRwf.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RWF';
+    }
+
+    if (saveAgreementBtn) {
+        saveAgreementBtn.addEventListener('click', function() {
+            actionTypeInput.value = 'agreement';
+        });
+    }
+    // Advance action removed — agreements only from this page
 
     overwriteCheck.addEventListener('change', function() {
         forceOverwriteInput.value = this.checked ? '1' : '0';
@@ -182,6 +281,7 @@
             metadata.classList.add('hidden');
             customerInput.value = '';
             totalInput.value = '';
+            document.getElementById('batch-rem').textContent = '-';
             overwriteCheck.checked = false;
             forceOverwriteInput.value = '0';
             return;
@@ -194,6 +294,7 @@
         let moyenneNb = parseFloat(selectedOption.dataset.moyenneNb || 0) || 0;
 
         customerInput.value = selectedOption.dataset.customer || '';
+        document.getElementById('batch-rem').textContent = formatRemaining(selectedOption);
         if ((parseFloat(selectedOption.dataset.total || 0) || 0) > 0) {
             totalInput.value = parseFloat(selectedOption.dataset.total || 0).toFixed(2);
         }
@@ -296,6 +397,18 @@
             if (e.target === input || box.contains(e.target)) return;
             hide();
         });
+    })();
+    // Prevent accidental mouse-wheel changes to number inputs on this form/page
+    (function(){
+        const form = document.querySelector('form[action="{{ url_for('core.customer_receipts') }}"]');
+        if (!form) return;
+        form.addEventListener('wheel', function(e){
+            const el = document.activeElement;
+            if (!el) return;
+            if (el.tagName === 'INPUT' && el.type === 'number') {
+                e.preventDefault();
+            }
+        }, { passive: false });
     })();
     </script>
 </body>

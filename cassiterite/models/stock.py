@@ -95,7 +95,7 @@ class CassiteriteStock(db.Model):
 
     def remaining_to_pay(self):
         from .payment import CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
-        total_paid = (
+        total_paid = float(
             db.session.query(
                 func.coalesce(
                     func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)),
@@ -137,7 +137,7 @@ class CassiteriteStock(db.Model):
                     UnifiedSupplierAdvanceAllocation.stock_id == self.id,
                 )
                 .scalar()
-                or 0.0
+                or 0
             )
         except Exception:
             try:
@@ -151,7 +151,8 @@ class CassiteriteStock(db.Model):
         if float(unified_applied or 0.0) > 0.0:
             advance_applied = 0.0
 
-        return (self.balance_to_pay or 0) - float(total_paid or 0.0) - float(advance_applied or 0.0) - float(unified_applied or 0.0)
+        base_balance = float(self.balance_to_pay or self.net_balance or 0)
+        return max(base_balance - float(total_paid or 0.0) - float(advance_applied or 0.0) - float(unified_applied or 0.0), 0.0)
 
     @trace_time
     def update_calculations(self):

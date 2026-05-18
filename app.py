@@ -6,7 +6,8 @@ Main Flask application factory. This file wires together:
 - Authentication (login/logout) using Flask-Login
 """
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash
+from utils import safe_jsonify
 from flask_migrate import Migrate
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from datetime import datetime, date, time, timedelta, timezone
@@ -41,6 +42,17 @@ def kigali_datetime(value, fmt='%Y-%m-%d %H:%M'):
             return value.strftime(fmt)
         except Exception:
             return str(value)
+
+@app.template_filter('mineral_display')
+def mineral_display(value):
+    """Convert mineral type code to display name"""
+    if not value:
+        return ''
+    mineral_map = {
+        'copper': 'Coltan',
+        'cassiterite': 'Cassiterite',
+    }
+    return mineral_map.get(str(value).lower(), str(value))
 
 # Initialize database
 db.init_app(app)
@@ -317,7 +329,8 @@ def api_dashboard_data():
         output_count = db.session.query(func.count(CopperOutput.id)).scalar()
 
         app.logger.info("api_dashboard_data: completed")
-        return jsonify({
+        from utils import safe_jsonify
+        return safe_jsonify({
             'total_input': total_input,
             'total_output': total_output,
             'total_debt': total_debt,
@@ -355,7 +368,7 @@ def diag_brevo():
         if key:
             preview = key[:8] + '...' if len(key) > 8 else key
 
-        return jsonify({
+        return safe_jsonify({
             'has_key': bool(key),
             'key_preview': preview,
             'init_ok': bool(api),
@@ -363,7 +376,7 @@ def diag_brevo():
         })
     except Exception as e:
         app.logger.exception('diag_brevo failed')
-        return jsonify({'error': str(e)}), 500
+        return safe_jsonify({'error': str(e)}), 500
 
 
 # ============================================================

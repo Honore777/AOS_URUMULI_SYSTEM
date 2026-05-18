@@ -4,7 +4,8 @@ STEP 1 (mode="initial"): User enters target moyenne → Filter stocks (BINARY)
 STEP 2 (mode="edit"): User clicks "Edit Selection" → Adjust quantities manually
 STEP 3 (mode="result"): User clicks "Recalculate" → Hybrid optimization
 """
-from flask import render_template, request, redirect, url_for, flash, session, jsonify
+from flask import render_template, request, redirect, url_for, flash, session
+from utils import safe_jsonify
 from config import db
 from cassiterite.models import CassiteriteStock, CassiteriteOutput
 from cassiterite.forms import RecordCassiteriteOutputForm, OptimizeCassiteriteForm
@@ -441,9 +442,9 @@ def cassiterite_optimize_totals():
                 total += float(v)
             except Exception:
                 continue
-        return jsonify({'total_recommended': total, 'quantities': quantities})
+        return safe_jsonify({'total_recommended': total, 'quantities': quantities})
     except Exception:
-        return jsonify({'total_recommended': 0.0, 'quantities': {}})
+        return safe_jsonify({'total_recommended': 0.0, 'quantities': {}})
 
 
 @cassiterite_bp.route('/optimize/save_edits', methods=['POST'])
@@ -462,9 +463,9 @@ def cassiterite_save_edits():
             except Exception:
                 continue
         session['cassiterite_optimization_edits'] = edits
-        return jsonify({'ok': True})
+        return safe_jsonify({'ok': True})
     except Exception:
-        return jsonify({'ok': False}), 400
+        return safe_jsonify({'ok': False}), 400
 
 
 @cassiterite_bp.route('/confirm_bulk_output', methods=['POST'])

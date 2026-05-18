@@ -11,7 +11,7 @@
         <div class="flex items-center justify-between">
             <div>
                 <h1 class="text-2xl font-bold text-slate-800">Customer Batches</h1>
-                <p class="text-sm text-slate-600 mt-1"><span class="font-semibold">Customer:</span> {{ customer }} | <span class="font-semibold uppercase">{{ mineral_type }}</span></p>
+                <p class="text-sm text-slate-600 mt-1"><span class="font-semibold">Customer:</span> {{ customer }} | <span class="font-semibold">{{ mineral_type|mineral_display if mineral_type != 'all' else 'All Minerals' }}</span></p>
             </div>
             <a href="{{ url_for('core.copper_customer_ledger_index') if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger_index') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back To Customer List</a>
         </div>
@@ -32,9 +32,10 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {% for b in batches %}
                     <a href="{{ url_for('core.consolidated_customer_ledger_batch', customer=customer, mineral_type=b.mineral_type, batch_id=b.batch_id) if mineral_type == 'all' else (url_for('core.copper_customer_ledger_batch', customer=customer, batch_id=b.batch_id) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger_batch', customer=customer, batch_id=b.batch_id)) }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
-                        <p class="font-semibold text-slate-900">Batch {{ b.batch_id }}{% if mineral_type == 'all' %} <span class="text-xs font-bold text-slate-600">({{ b.mineral_type }})</span>{% endif %}</p>
+                        <p class="font-semibold text-slate-900">Batch {{ b.batch_id }}{% if mineral_type == 'all' %} <span class="text-xs font-bold text-slate-600">({{ b.mineral_type|mineral_display }})</span>{% endif %}</p>
                         <p class="text-xs text-slate-600 mt-1">Qty {{ '%.2f'|format(b.qty or 0) }} kg | Moy {{ '%.2f'|format(b.moyenne or 0) }} | NB {{ '%.2f'|format(b.moyenne_nb or 0) }}</p>
-                        <p class="text-xs mt-1 text-slate-600">Agreed {{ '{:,.0f}'.format(b.expected or 0) }} | Paid {{ '{:,.0f}'.format(b.paid or 0) }} | Remaining <span class="font-bold text-slate-900">{{ '{:,.0f}'.format(b.remaining or 0) }}</span></p>
+                        <p class="text-xs mt-1 text-slate-600">Agreed {{ '{:,.2f}'.format(b.expected or 0) }} {{ b.base_currency or 'RWF' }} | Paid {{ '{:,.2f}'.format(b.paid or 0) }} {{ b.base_currency or 'RWF' }}</p>
+                        <p class="text-xs mt-1 text-slate-600">Remaining <span class="font-bold text-slate-900">{{ '{:,.2f}'.format(b.remaining or 0) }} {{ b.base_currency or 'RWF' }}</span>{% if (b.base_currency or 'RWF') == 'USD' %} <span class="text-slate-500">(~ {{ '{:,.2f}'.format(b.remaining_rwf or 0) }} RWF)</span>{% endif %}</p>
                     </a>
                     {% endfor %}
                 </div>

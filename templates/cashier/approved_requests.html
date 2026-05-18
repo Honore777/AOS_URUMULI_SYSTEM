@@ -3,10 +3,13 @@
 {% block title %}Approved Requests{% endblock %}
 
 {% block content %}
-<div>
-    <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
-    <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Approved Requests</h1>
-    <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">Boss-approved requests waiting for cashier action. Collections are cash IN; Payments are cash OUT.</p>
+<div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+        <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
+        <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Approved Requests</h1>
+        <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">Boss-approved requests waiting for cashier action. Collections are cash IN; Payments are cash OUT.</p>
+    </div>
+    <a href="{{ url_for('core.cashier_receipts_audit') }}" class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700">Open Receipts Audit</a>
 </div>
 
 <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">

@@ -11,7 +11,7 @@ from core.auth import role_required
 from flask import url_for, flash
 from config import db
 from sqlalchemy import func, or_
-from utils import normalize_counterparty_name, close_name_matches
+from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -79,9 +79,9 @@ def pay_worker():
 			if boss_user:
 				create_notification(
 					user_id=boss_user.id,
-					type_='kwishyura umukozi',
-					message=f"Hasabwe kwemeza: Kwishyura umukozi  - {form.worker_name.data}, Amafaranga: {form.amount.data} RWF.",
-					related_type='kwishyura umukozi',
+					type_='depense zimbere',
+					message=f"Hasabwe kwemeza: Depense zimbere - {form.worker_name.data}, Amafaranga: {form.amount.data} RWF.",
+					related_type='depense zimbere',
 					related_id=review.id
 				)
 
@@ -96,10 +96,10 @@ def pay_worker():
 				f"Umukozi: {form.worker_name.data}, Amafaranga: {form.amount.data} RWF, Uburyo: {form.method.data}, "
 				f"Reference: {form.reference.data}, Impamvu: {form.note.data}"
 			)
-			subject = "Gusaba Kwemeza Igikorwa: Kwishyura Umukozi"
+			subject = "Gusaba Kwemeza Igikorwa: Depense Zimbere"
 			html_content = (
 				"<p>Nyakubahwa Muyobozi,</p>"
-				f"<p>Umucungamutungo {getattr(current_user, 'username', 'Unknown')} ({getattr(current_user, 'email', 'Unknown')}) yasabye kwemeza ubwishyu bukurikira :</p>"
+				f"<p>Umucungamutungo {getattr(current_user, 'username', 'Unknown')} ({getattr(current_user, 'email', 'Unknown')}) yasabye kwemeza depense zimbere zikurikira :</p>"
 				f"<p>{payment_details}</p>"
 				"<p>Musuzume kandi mwemeze.</p>"
 				"<p>Mujye Muri Sisiteme kwemeza iki gikorwa.<br>Murakoze,<br>Urumuli Smart System</p>"
@@ -155,6 +155,7 @@ def pay_supplier():
 	from utils import send_brevo_email_async
 
 	form = CassiteriteSupplierPaymentForm()
+	selected_stock_label = ''
 
 	# Defaults so template rendering never crashes on GET or failed POST.
 	supplier_summaries = []
@@ -178,6 +179,16 @@ def pay_supplier():
 			return redirect(url_for('cassiterite.pay_supplier_advance'))
 		form.payment_kind.data = 'settlement'
 
+	if request.method == 'POST':
+		try:
+			selected_stock_id = int(request.form.get('stock_id') or 0)
+		except (TypeError, ValueError):
+			selected_stock_id = 0
+		if selected_stock_id:
+			selected_stock = CassiteriteStock.query.get(selected_stock_id)
+			if selected_stock:
+				selected_stock_label = f"{selected_stock.voucher_no} - {selected_stock.supplier}"
+
 	# Populate stock choices with stocks that still have balance to pay.
 	# Only select needed columns to avoid loading full model objects.
 	stock_rows = (
@@ -192,7 +203,11 @@ def pay_supplier():
 		.all()
 	)
 	form.stock_id.choices = [
-		(row.id, f"{row.voucher_no} - {row.supplier}") for row in stock_rows
+		(
+			row.id,
+			f"{row.voucher_no} - {row.supplier} - Remaining: {float(row.balance_to_pay or 0.0):,.2f} RWF",
+		)
+		for row in stock_rows
 	]
 	supplier_names = sorted({(row.supplier or '').strip() for row in stock_rows if (row.supplier or '').strip()})
 	form.existing_supplier.choices = [('', 'Select existing supplier')] + [(s, s) for s in supplier_names]
@@ -212,15 +227,20 @@ def pay_supplier():
 			payment_supplier = None
 			stock = None
 
+			if not form.stock_id.data:
+				flash('Please select a supplier obligation from the suggestions.', 'danger')
+				return render_template('cassiterite/pay_supplier.html', form=form, selected_stock_label=selected_stock_label, supplier_summaries=supplier_summaries, pending_reviews=pending_reviews, recent_settlements=recent_settlements, recent_suppliers=recent_suppliers, suppliers_pagination=suppliers_pagination, supplier_query=supplier_query)
+
 			stock = CassiteriteStock.query.get_or_404(form.stock_id.data)
 			payment_supplier = stock.supplier
 			supplier_id = _get_or_create_supplier_id(payment_supplier)
-			if amount_rwf > stock.remaining_to_pay():
+			stock_remaining = float(stock.remaining_to_pay() or 0.0)
+			if amount_rwf > stock_remaining:
 				flash(
-					f"Payment exceeds remaining balance ({stock.remaining_to_pay()} RWF).",
+					f"Payment exceeds remaining balance ({stock_remaining:,.2f} RWF).",
 					"danger",
 				)
-				return redirect(url_for("cassiterite.pay_supplier"))
+				return render_template('cassiterite/pay_supplier.html', form=form, selected_stock_label=selected_stock_label, supplier_summaries=supplier_summaries, pending_reviews=pending_reviews, recent_settlements=recent_settlements, recent_suppliers=recent_suppliers, suppliers_pagination=suppliers_pagination, supplier_query=supplier_query)
 
 			# --- create PaymentReview request; actual payment executes on boss approval ---
 			payload = {
@@ -397,7 +417,7 @@ def pay_supplier():
 		supplier_name = (r.supplier or '').strip()
 		net_balance = float(r.net_balance or 0.0)
 		total_paid = float(r.total_paid or 0.0)
-		remaining = float(net_balance - total_paid)
+		remaining = float(calculate_consolidated_supplier_remaining_balance(supplier_name) or 0.0)
 		latest_paid_at = getattr(r, 'latest_paid_at', None)
 		supplier_summaries.append({
 			'supplier': supplier_name,
@@ -442,6 +462,7 @@ def pay_supplier():
 	return render_template(
 		"cassiterite/pay_supplier.html",
 		form=form,
+		selected_stock_label=selected_stock_label,
 		supplier_summaries=supplier_summaries,
 		pending_reviews=pending_reviews,
 		recent_settlements=recent_settlements,
@@ -523,7 +544,7 @@ def pay_supplier_advance():
 			supplier_summary_map[key]['paid'] += float(payment.amount_rwf or payment.amount or 0)
 
 	for summary in supplier_summary_map.values():
-		summary['remaining'] = max(summary['owed'] - summary['paid'], 0.0)
+		summary['remaining'] = float(calculate_consolidated_supplier_remaining_balance(summary['supplier']) or 0.0)
 
 	form.existing_supplier.choices = [
 		('', 'Select existing supplier'),
@@ -658,46 +679,7 @@ def calculate_supplier_remaining_balance(supplier_name):
 	         Total Paid = SUM(settlement payments only)
 	         Remaining = Total Owed - Total Paid
 	"""
-	from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
-	
-	# Get all stocks for this supplier
-	stocks = CassiteriteStock.query.filter(
-		CassiteriteStock.supplier == supplier_name,
-		CassiteriteStock.is_deleted.is_(False)
-	).all()
-	
-	if not stocks:
-		return 0.0
-	
-	stock_ids = [s.id for s in stocks]
-	
-	# Calculate total allocated advances from cassiterite_advance_allocation
-	allocations = db.session.query(
-		CassiteriteAdvanceAllocation.stock_id,
-		func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0).label('allocated')
-	).filter(
-		CassiteriteAdvanceAllocation.stock_id.in_(stock_ids)
-	).group_by(CassiteriteAdvanceAllocation.stock_id).all()
-	
-	allocation_map = {a.stock_id: float(a.allocated) for a in allocations}
-	
-	# Calculate total owed (balance_to_pay minus allocations)
-	total_owed = sum(
-		max((s.balance_to_pay or 0.0) - allocation_map.get(s.id, 0.0), 0.0)
-		for s in stocks
-	)
-	
-	# Calculate total paid (settlements only, NOT advances)
-	total_paid = db.session.query(
-		func.coalesce(func.sum(CassiteriteSupplierPayment.amount_rwf), 0)
-	).filter(
-		CassiteriteSupplierPayment.supplier_name == supplier_name,
-		CassiteriteSupplierPayment.is_advance.is_(False),
-		CassiteriteSupplierPayment.is_deleted.is_(False)
-	).scalar() or 0.0
-	
-	# Calculate remaining
-	return max(total_owed - total_paid, 0.0)
+	return calculate_consolidated_supplier_remaining_balance(supplier_name)
 
 
 @cassiterite_bp.route('/supplier/payment/<int:payment_id>/receipt')
@@ -707,6 +689,8 @@ def supplier_receipt(payment_id):
 	Shows a printable receipt for a supplier payment.
 	Shows ALL stocks for the supplier + cumulative balance.
 	"""
+	from copper.models import CopperStock, CopperAdvanceAllocation
+
 	payment = CassiteriteSupplierPayment.query.filter(
 		CassiteriteSupplierPayment.id == payment_id,
 		CassiteriteSupplierPayment.is_deleted.is_(False),
@@ -741,24 +725,81 @@ def supplier_receipt(payment_id):
 		remaining_before = 0.0
 		remaining_after = max(float(payment.advance_remaining or 0.0), 0.0)
 		applied_to_stock = float(allocated_from_this_advance or 0.0)
+		all_supplier_stocks = []
+		all_supplier_stocks.extend(CassiteriteStock.query.filter(
+			CassiteriteStock.supplier == supplier_name,
+			CassiteriteStock.is_deleted.is_(False)
+		).all())
+		all_supplier_stocks.extend(CopperStock.query.filter(
+			CopperStock.supplier == supplier_name,
+			CopperStock.is_deleted.is_(False)
+		).all())
 		deductions_rows = []
-		deductions_summary = None
+		deductions_summary = {
+			'gross': 0.0,
+			'transport': 0.0,
+			'rma': 0.0,
+			'inkomane': 0.0,
+			'rra_3_percent': 0.0,
+			'net': 0.0,
+		}
+		for s in all_supplier_stocks:
+			mineral_name = 'Cassiterite' if isinstance(s, CassiteriteStock) else 'Coltan'
+			gross = float(getattr(s, 'amount_with_taxes', None) or getattr(s, 'amount', 0.0) or 0.0)
+			transport = float(getattr(s, 'tot_amount_tag', 0.0) or 0.0)
+			rma = float(getattr(s, 'rma', 0.0) or 0.0)
+			inkomane = float(getattr(s, 'inkomane', 0.0) or 0.0)
+			rra = float(getattr(s, 'rra_3_percent', 0.0) or 0.0)
+			net = float(getattr(s, 'balance_to_pay', None) or getattr(s, 'net_balance', 0.0) or 0.0)
+			deductions_rows.append({
+				'mineral': mineral_name,
+				'voucher_no': getattr(s, 'voucher_no', None) or str(getattr(s, 'id', '')),
+				'input_kg': float(getattr(s, 'input_kg', 0.0) or 0.0),
+				'gross': gross,
+				'transport': transport,
+				'rma': rma,
+				'inkomane': inkomane,
+				'rra_3_percent': rra,
+				'net': net,
+			})
+			deductions_summary['gross'] += gross
+			deductions_summary['transport'] += transport
+			deductions_summary['rma'] += rma
+			deductions_summary['inkomane'] += inkomane
+			deductions_summary['rra_3_percent'] += rra
+			deductions_summary['net'] += net
 		previous_payments = []
 		previous_payments_total = 0.0
 	else:
-		# Fetch ALL stocks for this supplier to show cumulative balance
-		all_supplier_stocks = CassiteriteStock.query.filter(
+		# Fetch ALL stocks for this supplier across both minerals so the receipt shows the full voucher/lot history.
+		all_supplier_stocks = []
+		all_supplier_stocks.extend(CassiteriteStock.query.filter(
 			CassiteriteStock.supplier == supplier_name,
 			CassiteriteStock.is_deleted.is_(False)
-		).all()
+		).all())
+		all_supplier_stocks.extend(CopperStock.query.filter(
+			CopperStock.supplier == supplier_name,
+			CopperStock.is_deleted.is_(False)
+		).all())
 		
 		# Get allocations per stock (advance deductions)
-		allocations = db.session.query(
-			CassiteriteAdvanceAllocation.stock_id,
-			func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0).label('allocated')
-		).filter(
-			CassiteriteAdvanceAllocation.stock_id.in_([s.id for s in all_supplier_stocks])
-		).group_by(CassiteriteAdvanceAllocation.stock_id).all()
+		cass_stock_ids = [s.id for s in all_supplier_stocks if isinstance(s, CassiteriteStock)]
+		copper_stock_ids = [s.id for s in all_supplier_stocks if isinstance(s, CopperStock)]
+		allocations = []
+		if cass_stock_ids:
+			allocations.extend(db.session.query(
+				CassiteriteAdvanceAllocation.stock_id,
+				func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0).label('allocated')
+			).filter(
+				CassiteriteAdvanceAllocation.stock_id.in_(cass_stock_ids)
+			).group_by(CassiteriteAdvanceAllocation.stock_id).all())
+		if copper_stock_ids:
+			allocations.extend(db.session.query(
+				CopperAdvanceAllocation.stock_id,
+				func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('allocated')
+			).filter(
+				CopperAdvanceAllocation.stock_id.in_(copper_stock_ids)
+			).group_by(CopperAdvanceAllocation.stock_id).all())
 		
 		allocation_map = {a.stock_id: float(a.allocated) for a in allocations}
 		
@@ -774,6 +815,7 @@ def supplier_receipt(payment_id):
 		}
 		
 		for s in all_supplier_stocks:
+			mineral_name = 'Cassiterite' if isinstance(s, CassiteriteStock) else 'Coltan'
 			gross = float(getattr(s, 'amount_with_taxes', None) or getattr(s, 'amount', 0.0) or 0.0)
 			transport = float(getattr(s, 'tot_amount_tag', 0.0) or 0.0)
 			rma = float(getattr(s, 'rma', 0.0) or 0.0)
@@ -782,6 +824,7 @@ def supplier_receipt(payment_id):
 			net = float(getattr(s, 'balance_to_pay', None) or getattr(s, 'net_balance', 0.0) or 0.0)
 			
 			deductions_rows.append({
+				'mineral': mineral_name,
 				'voucher_no': getattr(s, 'voucher_no', None) or str(getattr(s, 'id', '')),
 				'input_kg': float(getattr(s, 'input_kg', 0.0) or 0.0),
 				'gross': gross,
@@ -800,9 +843,8 @@ def supplier_receipt(payment_id):
 			deductions_summary['net'] += net
 		
 		# Supplier-wide remaining balance using utility function
-		remaining_before = calculate_supplier_remaining_balance(supplier_name)
-		remaining_after = remaining_before - (payment.amount_rwf or payment.amount or 0.0)
-		remaining_after = max(remaining_after, 0.0)
+		remaining_before = float(calculate_supplier_remaining_balance(supplier_name) or 0.0)
+		remaining_after = max(remaining_before - float(payment.amount_rwf or payment.amount or 0.0), 0.0)
 		applied_to_stock = 0.0
 		
 		# All payments to this supplier (not just one stock)
@@ -832,12 +874,93 @@ def supplier_receipt(payment_id):
 		deductions_summary=deductions_summary,
 		previous_payments=previous_payments,
 		previous_payments_total=previous_payments_total,
-	currency=payment.currency or 'RWF',
-	exchange_rate=payment.exchange_rate or 1.0,
+		currency=payment.currency or 'RWF',
+		exchange_rate=payment.exchange_rate or 1.0,
+	)
+
+
+@cassiterite_bp.route('/pay_supplier/search.json')
+@role_required('accountant')
+def pay_supplier_search():
+	"""AJAX endpoint: search suppliers by partial name and return remaining amount."""
+	# use safe_jsonify to ensure Decimal -> float conversion
+	from cassiterite.models import CassiteriteStock, CassiteriteSupplier
+
+	q = (request.args.get('q') or '').strip()
+	if not q:
+		return safe_jsonify([])
+
+	names = set()
+	try:
+		rows = db.session.query(CassiteriteStock.supplier).filter(CassiteriteStock.supplier.ilike(f"%{q}%")).distinct().all()
+		names.update([r[0] for r in rows if r[0]])
+	except Exception:
+		try:
+			db.session.rollback()
+		except Exception:
+			pass
+
+	try:
+		rows2 = db.session.query(CassiteriteSupplier.name).filter(CassiteriteSupplier.name.ilike(f"%{q}%")).distinct().all()
+		names.update([r[0] for r in rows2 if r[0]])
+	except Exception:
+		try:
+			db.session.rollback()
+		except Exception:
+			pass
+
+	results = []
+	for name in sorted(names):
+		try:
+			rem = calculate_supplier_remaining_balance(name)
+			results.append({'supplier': name, 'remaining': f"{rem:,.2f}"})
+		except Exception:
+			results.append({'supplier': name, 'remaining': '0.00'})
+
+	return safe_jsonify(results)
+
+
+@cassiterite_bp.route('/pay_supplier/stock-search.json')
+@role_required('accountant')
+def pay_supplier_stock_search():
+	"""AJAX endpoint: search cassiterite supplier obligations by voucher or supplier name."""
+	q = (request.args.get('q') or '').strip()
+	query = db.session.query(CassiteriteStock).filter(
+		CassiteriteStock.is_deleted.is_(False),
+		CassiteriteStock.balance_to_pay > 0,
+	)
+	if q:
+		like_q = f"%{q}%"
+		query = query.filter(or_(CassiteriteStock.voucher_no.ilike(like_q), CassiteriteStock.supplier.ilike(like_q)))
+
+	results = []
+	for stock in query.order_by(CassiteriteStock.date.desc()).limit(20).all():
+		try:
+			remaining = float(stock.remaining_to_pay() or 0.0)
+		except Exception:
+			remaining = 0.0
+		if remaining <= 0:
+			continue
+		results.append({
+			'id': stock.id,
+			'display': f"{stock.voucher_no} - {stock.supplier}",
+			'supplier': stock.supplier,
+			'remaining': f"{remaining:,.2f} RWF",
+		})
+
+	return safe_jsonify(results)
+
+
+@cassiterite_bp.route('/worker/payment/<int:payment_id>/receipt')
+@role_required('accountant', 'cashier', 'boss', 'admin')
+def worker_receipt(payment_id):
+	"""Shows a printable receipt for a cassiterite worker payment."""
+	payment = CassiteriteWorkerPayment.query.filter(
+		CassiteriteWorkerPayment.id == payment_id,
+		CassiteriteWorkerPayment.is_deleted.is_(False),
 	).first()
 	if not payment:
 		return render_template('404.html'), 404
-	# render the cassiterite full-page worker receipt
 	return render_template('receipts/cassiterite_worker_receipt.html', payment=payment)
 
 

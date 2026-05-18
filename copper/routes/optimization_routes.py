@@ -5,7 +5,8 @@ STEP 1 (mode="initial"): User enters targets → System filters recommended stoc
 STEP 2 (mode="edit"): User clicks "Edit Selection" → Shows ALL stocks for editing
 STEP 3 (mode="result"): User adjusts quantities → System re-optimizes with constraints
 """
-from flask import render_template, request, redirect, url_for, flash, session, jsonify
+from flask import render_template, request, redirect, url_for, flash, session
+from utils import safe_jsonify
 from datetime import datetime
 import json
 import uuid
@@ -392,9 +393,9 @@ def save_optimize_edits():
             except Exception:
                 continue
         session['optimization_edits'] = edits
-        return jsonify({'ok': True})
+        return safe_jsonify({'ok': True})
     except Exception:
-        return jsonify({'ok': False}), 400
+        return safe_jsonify({'ok': False}), 400
 
 
 @copper_bp.route('/optimize_stocks/totals', methods=['GET'])
@@ -450,13 +451,13 @@ def optimize_stocks_totals():
                 total += float(v)
             except Exception:
                 continue
-        return jsonify({
+        return safe_jsonify({
             'total_recommended': total,
             'quantities': quantities,
         })
     except Exception:
         # Don't raise—return empty safe response
-        return jsonify({'total_recommended': 0.0, 'quantities': {}})
+        return safe_jsonify({'total_recommended': 0.0, 'quantities': {}})
 
 
 @copper_bp.route('/optimize_stocks/confirm_output', methods=['POST'])

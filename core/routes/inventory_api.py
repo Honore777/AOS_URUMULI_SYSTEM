@@ -1,6 +1,7 @@
 import logging
 
-from flask import jsonify, request
+from flask import request
+from utils import safe_jsonify
 from flask_login import current_user
 
 from config import db
@@ -21,12 +22,12 @@ def api_register_push_token():
         token = (payload.get('token') or '').strip()
         user_agent = (payload.get('user_agent') or '').strip()[:255] or None
         if not token:
-            return jsonify({'error': 'Missing token'}), 400
+            return safe_jsonify({'error': 'Missing token'}), 400
 
         from core.models import PushToken
         uid = int(getattr(current_user, 'id', 0) or 0)
         if not uid:
-            return jsonify({'error': 'Not authenticated'}), 401
+            return safe_jsonify({'error': 'Not authenticated'}), 401
 
         row = PushToken.query.filter_by(token=token).first()
         if row:
@@ -45,14 +46,14 @@ def api_register_push_token():
             db.session.add(row)
 
         db.session.commit()
-        return jsonify({'ok': True})
+        return safe_jsonify({'ok': True})
     except Exception as e:
         logger.exception('api_register_push_token failed')
         try:
             db.session.rollback()
         except Exception:
             pass
-        return jsonify({'error': str(e)}), 500
+        return safe_jsonify({'error': str(e)}), 500
 
 
 @core_bp.route("/api/remaining_stock")
@@ -77,11 +78,11 @@ def api_remaining_stock():
         )
         total_remaining = float(copper_remaining_kg or 0.0) + float(cass_remaining_kg or 0.0)
 
-        return jsonify({
+        return safe_jsonify({
             'copper_remaining_kg': float(copper_remaining_kg or 0.0),
             'cassiterite_remaining_kg': float(cass_remaining_kg or 0.0),
             'total_remaining_kg': float(total_remaining or 0.0),
         })
     except Exception as e:
         logger.exception("api_remaining_stock failed")
-        return jsonify({'error': str(e)}), 500
+        return safe_jsonify({'error': str(e)}), 500

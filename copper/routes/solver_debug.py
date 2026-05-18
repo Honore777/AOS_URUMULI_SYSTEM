@@ -4,7 +4,7 @@ Solver debug endpoints (protected by `copper` blueprint auth).
 Allows an authenticated accountant to verify presence/version
 of solver binaries (`highs`, `cbc`) in the runtime image.
 """
-from flask import jsonify
+from utils import safe_jsonify
 import shutil
 import subprocess
 import os
@@ -36,4 +36,4 @@ def solvers_debug():
         results[cmd] = info
 
     results['OPTIMIZER_ALLOW_FALLBACK_TO_CBC'] = os.environ.get('OPTIMIZER_ALLOW_FALLBACK_TO_CBC', '0')
-    return jsonify(results)
+    return safe_jsonify(results)

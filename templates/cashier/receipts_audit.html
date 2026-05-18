@@ -1,0 +1,123 @@
+{% extends 'cashier/base.html' %}
+
+{% block title %}Receipts Audit{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+        <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Cash Control Desk</p>
+        <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Receipts Audit</h1>
+        <p class="mt-2 text-sm text-slate-600">Recent worker and supplier disbursement receipts with print/audit status.</p>
+    </div>
+    <a href="{{ url_for('core.cashier_approved_requests') }}" class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700">Back to Approved Requests</a>
+</div>
+
+<form method="get" class="mt-6 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-6">
+    <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Search</label>
+        <input type="text" name="q" value="{{ q or '' }}" placeholder="Receipt #, name, payment id" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+    </div>
+    <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Kind</label>
+        <select name="kind" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+            <option value="all" {% if kind == 'all' %}selected{% endif %}>All</option>
+            <option value="worker" {% if kind == 'worker' %}selected{% endif %}>Worker</option>
+            <option value="supplier" {% if kind == 'supplier' %}selected{% endif %}>Supplier</option>
+        </select>
+    </div>
+    <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Mineral</label>
+        <select name="mineral" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+            <option value="all" {% if mineral == 'all' %}selected{% endif %}>All</option>
+            <option value="copper" {% if mineral == 'copper' %}selected{% endif %}>Copper/Coltan</option>
+            <option value="cassiterite" {% if mineral == 'cassiterite' %}selected{% endif %}>Cassiterite</option>
+        </select>
+    </div>
+    <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Printed</label>
+        <select name="printed" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+            <option value="all" {% if printed == 'all' %}selected{% endif %}>All</option>
+            <option value="yes" {% if printed == 'yes' %}selected{% endif %}>Printed</option>
+            <option value="no" {% if printed == 'no' %}selected{% endif %}>Not Printed</option>
+        </select>
+    </div>
+    <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Limit</label>
+        <input type="number" min="20" max="500" name="limit" value="{{ limit or 150 }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+    </div>
+    <div class="flex items-end gap-2">
+        <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">Apply</button>
+        <a href="{{ url_for('core.cashier_receipts_audit') }}" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Reset</a>
+    </div>
+</form>
+
+<div class="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div class="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+        {% if focus_payment_id %}
+            Showing receipts for payment id: {{ focus_payment_id }}
+        {% else %}
+            Showing {{ rows|length }} receipt(s)
+        {% endif %}
+    </div>
+
+    {% if rows|length == 0 %}
+        <div class="px-4 py-8 text-sm text-slate-600">No receipts match the selected filters.</div>
+    {% else %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                    <tr>
+                        <th class="px-3 py-2 text-left">Receipt #</th>
+                        <th class="px-3 py-2 text-left">Kind</th>
+                        <th class="px-3 py-2 text-left">Counterparty</th>
+                        <th class="px-3 py-2 text-left">Mineral</th>
+                        <th class="px-3 py-2 text-left">Amount</th>
+                        <th class="px-3 py-2 text-left">Payment ID</th>
+                        <th class="px-3 py-2 text-left">Generated</th>
+                        <th class="px-3 py-2 text-left">Print Status</th>
+                        <th class="px-3 py-2 text-left">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for row in rows %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-3 py-2 font-semibold text-slate-900">{{ row.receipt_number }}</td>
+                            <td class="px-3 py-2">
+                                <span class="rounded-full px-2 py-1 text-xs font-bold {{ 'bg-indigo-100 text-indigo-700' if row.kind == 'worker' else 'bg-amber-100 text-amber-700' }}">{{ row.kind|capitalize }}</span>
+                                {% if row.payment_type %}
+                                    <span class="ml-1 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{{ row.payment_type }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2">{{ row.counterparty }}</td>
+                            <td class="px-3 py-2">{{ (row.mineral_type or '-')|capitalize }}</td>
+                            <td class="px-3 py-2 font-semibold">{{ '{:,.2f}'.format(row.amount or 0) }} {{ row.currency or 'RWF' }}</td>
+                            <td class="px-3 py-2">{{ row.payment_id or '-' }}</td>
+                            <td class="px-3 py-2">{{ row.generated_at.strftime('%Y-%m-%d %H:%M') if row.generated_at else '-' }}{% if row.generated_by %}<div class="text-xs text-slate-500">by {{ row.generated_by }}</div>{% endif %}</td>
+                            <td class="px-3 py-2">
+                                {% if row.is_printed %}
+                                    <span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-700">Printed</span>
+                                    {% if row.printed_at %}
+                                        <div class="mt-1 text-xs text-slate-500">{{ row.printed_at.strftime('%Y-%m-%d %H:%M') }}</div>
+                                    {% endif %}
+                                    {% if row.printed_by %}
+                                        <div class="text-xs text-slate-500">by {{ row.printed_by }}</div>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-700">Not Printed</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2">
+                                {% if row.view_url %}
+                                    <a href="{{ row.view_url }}" class="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700">View / Print</a>
+                                {% else %}
+                                    <span class="text-xs text-slate-400">Unavailable</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -4,7 +4,7 @@ Handles copper stock entry and export functionality
 """
 from datetime import datetime
 from io import BytesIO
-from flask import render_template, request, redirect, url_for, flash, jsonify, send_file
+from flask import render_template, request, redirect, url_for, flash, send_file
 import openpyxl
 import pandas as pd
 
@@ -17,7 +17,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from flask_login import current_user
 from sqlalchemy import func
 import logging
-from utils import trace_time
+from utils import trace_time, safe_jsonify
 import time
 from threading import Lock
 
@@ -582,7 +582,7 @@ def add_stock():
             # Check for duplicate voucher
             existing = CopperStock.query.filter_by(voucher_no=voucher).first()
             if existing:
-                return jsonify({"error": f"Voucher number {voucher} already exists."}), 400
+                return safe_jsonify({"error": f"Voucher number {voucher} already exists."}), 400
 
             confirm_new_supplier = (request.form.get('confirm_new_supplier') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
             try:
@@ -1092,7 +1092,7 @@ def export_filtered_stocks():
 @trace_time
 def filter_stocks():
     """Filter stocks by date range (and optional voucher) and return JSON with all recalculated metrics"""
-    from flask import request, jsonify
+    from flask import request
     from datetime import datetime
     try:
         data = request.get_json()
@@ -1254,7 +1254,7 @@ FROM (
             MAX_RETURN_ROWS = 2000
             if include_all and stocks_pagination.total > MAX_RETURN_ROWS:
                 logger.warning("filter_stocks: include_all requested but total %d > max %d", stocks_pagination.total, MAX_RETURN_ROWS)
-                return jsonify({'error': 'Request would return too many rows; please narrow your filter or use the export endpoint.'}), 400
+                return safe_jsonify({'error': 'Request would return too many rows; please narrow your filter or use the export endpoint.'}), 400
 
             outputs_query = CopperOutput.query.order_by(CopperOutput.date.desc())
             if start_date:
@@ -1777,13 +1777,7 @@ SELECT
             'moyenne': round(moyenne, 4),
             'moyenne_nb': round(moyenne_nb, 4)
         }
-        try:
-            from flask import jsonify
-            resp = jsonify(payload)
-        except Exception:
-            # fallback to manual json build if jsonify fails
-            import json
-            resp = json.dumps(payload)
+        resp = safe_jsonify(payload)
         json_time = time.perf_counter() - t_json
 
         # Finalize timings and log a full breakdown
@@ -1801,4 +1795,4 @@ SELECT
             db.session.rollback()
         except Exception:
             logger.exception("filter_stocks: rollback failed")
-        return jsonify({'error': 'internal server error'}), 500
+        return safe_jsonify({'error': 'internal server error'}), 500

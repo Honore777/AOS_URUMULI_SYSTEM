@@ -85,6 +85,7 @@
             <table class="form-table">
                 <thead>
                     <tr>
+                        <th>Mineral</th>
                         <th>Voucher / Lot</th>
                         <th style="text-align:right;">Input (kg)</th>
                         <th style="text-align:right;">Gross Balance</th>
@@ -98,6 +99,7 @@
                 <tbody>
                     {% for r in deductions_rows %}
                     <tr>
+                        <td>{{ r.mineral or '-' }}</td>
                         <td>{{ r.voucher_no or '-' }}</td>
                         <td style="text-align:right;">{{ '{:,.2f}'.format(r.input_kg or 0) }}</td>
                         <td style="text-align:right; font-weight: 700;">{{ '{:,.2f}'.format(r.gross or 0) }}</td>

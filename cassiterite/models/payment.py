@@ -49,14 +49,14 @@ class CassiteriteSupplierPayment(db.Model):
         index=True,
     )
     
-    amount = db.Column(db.Float, nullable=False)
+    amount = db.Column(db.Numeric(18, 2), nullable=False)
     # Original payment amount entered by user (can be USD or RWF).
-    input_amount = db.Column(db.Float, nullable=True)
+    input_amount = db.Column(db.Numeric(18, 2), nullable=True)
     currency = db.Column(db.String(10), nullable=False, default='RWF', index=True)
     # Exchange rate used at transaction time (RWF per 1 unit of currency).
     exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
     # Normalized amount used for obligations, debt and gross-profit math.
-    amount_rwf = db.Column(db.Float, nullable=False, default=0.0, index=True)
+    amount_rwf = db.Column(db.Numeric(18, 2), nullable=False, default=0.0, index=True)
     paid_at = db.Column(db.DateTime, default=datetime.utcnow)
     method = db.Column(db.String(50))  # cash, bank, momo
     reference = db.Column(db.String(100))  # receipt / transaction id
@@ -65,7 +65,7 @@ class CassiteriteSupplierPayment(db.Model):
     # Advance-payment/audit fields (additive, backwards compatible)
     supplier_name = db.Column(db.String(100), index=True, nullable=True)
     is_advance = db.Column(db.Boolean, nullable=False, default=False, index=True)
-    advance_remaining = db.Column(db.Float, nullable=False, default=0.0)
+    advance_remaining = db.Column(db.Numeric(18, 2), nullable=False, default=0.0)
 
     # Robust lifecycle fields for approval/disbursement workflow
     payment_type = db.Column(db.String(20), nullable=False, default='SETTLEMENT', index=True)
@@ -119,7 +119,7 @@ class CassiteriteAdvanceAllocation(db.Model):
         nullable=False,
         index=True,
     )
-    applied_amount = db.Column(db.Float, nullable=False, default=0.0)
+    applied_amount = db.Column(db.Numeric(18, 2), nullable=False, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     def __repr__(self):

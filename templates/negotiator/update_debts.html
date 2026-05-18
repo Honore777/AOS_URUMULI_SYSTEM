@@ -60,9 +60,17 @@
                         <select id="customer-select" name="customer" required class="w-full rounded border border-slate-300 px-3 py-2">
                             <option value="">-- Choose customer --</option>
                             {% for c in customers %}
-                            <option value="{{ c.name }}">{{ c.name }} (remaining {{ '{:,.0f}'.format(c.remaining or 0) }})</option>
+                            <option value="{{ c.name }}">{{ c.name }} ({{ c.balance_label or ('{:,.0f}'.format(c.remaining or 0) ~ ' ' ~ (c.currency or 'RWF')) }})</option>
                             {% endfor %}
                         </select>
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Find Customer (autocomplete)</label>
+                        <div class="relative">
+                            <input id="customer-search" type="text" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2" placeholder="Type customer name..." />
+                            <div id="customer-suggestions" class="absolute z-20 mt-1 hidden w-full rounded-lg border border-slate-200 bg-white shadow-lg"></div>
+                        </div>
                     </div>
 
                     <div>
@@ -82,7 +90,7 @@
                             <div class="rounded bg-white p-2"><p class="text-slate-600">Moyenne</p><p id="d-moy" class="font-bold text-slate-900">-</p></div>
                             <div class="rounded bg-white p-2"><p class="text-slate-600">NB</p><p id="d-nb" class="font-bold text-slate-900">-</p></div>
                         </div>
-                        <p class="mt-2 text-sm text-slate-700">Remaining for selected batch: <span id="d-rem" class="font-bold">0</span> RWF</p>
+                        <p class="mt-2 text-sm text-slate-700">Remaining for selected batch: <span id="d-rem" class="font-bold">0</span></p>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -99,7 +107,7 @@
                         </div>
                         <div>
                             <label class="mb-1 block text-sm font-semibold text-slate-700">Exchange Rate</label>
-                            <input type="number" name="exchange_rate" step="0.01" min="0" class="w-full rounded border border-slate-300 px-3 py-2" placeholder="Only if USD" />
+                            <input type="number" name="exchange_rate" step="any" min="0" class="w-full rounded border border-slate-300 px-3 py-2" placeholder="Only if USD" />
                         </div>
                     </div>
 
@@ -144,7 +152,7 @@
                                     <tr>
                                         <th class="px-3 py-2 text-left font-semibold">Receipt</th>
                                         <th class="px-3 py-2 text-left font-semibold">Customer</th>
-                                        <th class="px-3 py-2 text-right font-semibold">Amount (RWF)</th>
+                                        <th class="px-3 py-2 text-right font-semibold">Amount</th>
                                         <th class="px-3 py-2 text-left font-semibold">Action</th>
                                     </tr>
                                 </thead>
@@ -153,7 +161,12 @@
                                     <tr class="hover:bg-slate-50">
                                         <td class="px-3 py-2 font-bold text-slate-900">#{{ r.id }}</td>
                                         <td class="px-3 py-2 text-slate-700">{{ r.customer }}</td>
-                                        <td class="px-3 py-2 text-right font-semibold text-slate-900">{{ '{:,.2f}'.format(r.amount_rwf or 0) }}</td>
+                                        <td class="px-3 py-2 text-right font-semibold text-slate-900">
+                                            <div>{{ '{:,.2f}'.format(r.amount_input or 0) }} {{ r.currency or 'RWF' }}</div>
+                                            {% if (r.currency or 'RWF')|upper == 'USD' %}
+                                            <div class="text-xs text-slate-500">{{ '{:,.2f}'.format(r.amount_rwf or 0) }} RWF @ {{ '{:,.4f}'.format(r.exchange_rate or 1.0) }}</div>
+                                            {% endif %}
+                                        </td>
                                         <td class="px-3 py-2">
                                             <form method="post" action="{{ url_for('core.negotiator_handover_customer_receipt', receipt_id=r.id) }}">
                                                 <button class="rounded bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700">Handover to cashier</button>
@@ -176,9 +189,21 @@
     const batchOptions = JSON.parse(document.getElementById('batch-options-json').textContent || '[]');
     const customerSelect = document.getElementById('customer-select');
     const batchSelect = document.getElementById('batch-select');
+    const customerSearchInput = document.getElementById('customer-search');
+    const customerSuggestions = document.getElementById('customer-suggestions');
     const mineralInput = document.getElementById('mineral-type');
     const batchIdInput = document.getElementById('batch-id');
     const details = document.getElementById('batch-details');
+
+    function formatRemaining(r) {
+        const ccy = String(r.currency || 'RWF').toUpperCase();
+        const remDisplay = Number(r.remaining || 0);
+        const remRwf = Number(r.remaining_rwf || 0);
+        if (ccy === 'USD') {
+            return remDisplay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USD (' + remRwf.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RWF)';
+        }
+        return remRwf.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RWF';
+    }
 
     function fillBatchSelect(customerName) {
         batchSelect.innerHTML = '<option value="">-- Select batch --</option>';
@@ -192,12 +217,14 @@
         rows.forEach(r => {
             const opt = document.createElement('option');
             opt.value = r.batch_id;
-            opt.textContent = '[' + r.mineral_type.toUpperCase() + '] Batch ' + r.batch_id + ' (remaining ' + Number(r.remaining || 0).toLocaleString() + ')';
+            opt.textContent = '[' + r.mineral_type.toUpperCase() + '] Batch ' + r.batch_id + ' (remaining ' + formatRemaining(r) + ')';
             opt.dataset.mineral = r.mineral_type;
             opt.dataset.qty = r.qty || 0;
             opt.dataset.moy = r.moyenne || 0;
             opt.dataset.nb = r.moyenne_nb || 0;
             opt.dataset.remaining = r.remaining || 0;
+            opt.dataset.remainingRwf = r.remaining_rwf || 0;
+            opt.dataset.currency = r.currency || 'RWF';
             batchSelect.appendChild(opt);
         });
     }
@@ -221,8 +248,104 @@
         document.getElementById('d-qty').textContent = Number(opt.dataset.qty || 0).toFixed(2) + ' kg';
         document.getElementById('d-moy').textContent = Number(opt.dataset.moy || 0).toFixed(2);
         document.getElementById('d-nb').textContent = Number(opt.dataset.nb || 0).toFixed(2);
-        document.getElementById('d-rem').textContent = Number(opt.dataset.remaining || 0).toLocaleString();
+        const ccy = String(opt.dataset.currency || 'RWF').toUpperCase();
+        const remDisplay = Number(opt.dataset.remaining || 0);
+        const remRwf = Number(opt.dataset.remainingRwf || 0);
+        if (ccy === 'USD') {
+            document.getElementById('d-rem').textContent = remDisplay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USD (' + remRwf.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RWF)';
+        } else {
+            document.getElementById('d-rem').textContent = remRwf.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RWF';
+        }
     });
+
+    (function () {
+        if (!customerSearchInput || !customerSuggestions) return;
+        let lastQuery = '';
+
+        function hide() {
+            customerSuggestions.classList.add('hidden');
+            customerSuggestions.innerHTML = '';
+        }
+
+        function show(items) {
+            if (!items || items.length === 0) {
+                hide();
+                return;
+            }
+            customerSuggestions.innerHTML = items.map((nm) => (
+                `<button type="button" data-name="${encodeURIComponent(nm)}" class="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50">${nm}</button>`
+            )).join('');
+            customerSuggestions.classList.remove('hidden');
+        }
+
+        async function fetchCustomers(q) {
+            const res = await fetch(`{{ url_for('core.customers_autocomplete') }}?q=${encodeURIComponent(q)}`);
+            if (!res.ok) return [];
+            const data = await res.json();
+            return data && Array.isArray(data.results) ? data.results : [];
+        }
+
+        function selectCustomer(customerName) {
+            const target = String(customerName || '').trim().toLowerCase();
+            if (!target) return;
+            const match = Array.from(customerSelect.options).find(opt => String(opt.value || '').trim().toLowerCase() === target);
+            if (!match) return;
+            customerSelect.value = match.value;
+            customerSelect.dispatchEvent(new Event('change'));
+        }
+
+        customerSearchInput.addEventListener('input', async () => {
+            const q = (customerSearchInput.value || '').trim();
+            lastQuery = q;
+            if (q.length < 2) {
+                hide();
+                return;
+            }
+            try {
+                const items = await fetchCustomers(q);
+                if (lastQuery !== q) return;
+                show(items);
+            } catch (_) {
+                hide();
+            }
+        });
+
+        customerSuggestions.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-name]');
+            if (!btn) return;
+            const nm = decodeURIComponent(btn.getAttribute('data-name') || '');
+            if (nm) {
+                customerSearchInput.value = nm;
+                selectCustomer(nm);
+            }
+            hide();
+        });
+
+        customerSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                selectCustomer(customerSearchInput.value || '');
+                hide();
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (e.target === customerSearchInput || customerSuggestions.contains(e.target)) return;
+            hide();
+        });
+    })();
+    // Disable wheel changes to number inputs inside this form to avoid accidental value shifts
+    (function(){
+        const form = document.querySelector('form[action="{{ url_for('core.update_debts') }}"]');
+        if (!form) return;
+        form.addEventListener('wheel', function(e){
+            const el = document.activeElement;
+            if (!el) return;
+            if (el.tagName === 'INPUT' && el.type === 'number') {
+                e.preventDefault();
+            }
+        }, { passive: false });
+    })();
     </script>
 </body>
 </html>

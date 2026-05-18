@@ -6,7 +6,6 @@
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
     <style>
-        /* Print as full A4 page */
         @media print {
             @page { size: A4 portrait; margin: 10mm; }
             .no-print { display: none !important; }
@@ -17,13 +16,10 @@
         .receipt-wrapper { max-width: none; width: 100%; margin: 0 auto; padding: 20px; }
         .receipt-table th, .receipt-table td { border: 1px solid #d1d5db; padding: 0.6rem; }
         .receipt-table { border-collapse: collapse; width: 100%; }
-        .small-note { font-size: 0.85rem; color: #555; }
-        .convert-input { width: 100%; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; }
     </style>
 </head>
 <body class="bg-white">
     <div class="receipt-wrapper shadow-lg border border-gray-300 bg-white">
-        <!-- Header band -->
         <div class="flex items-center" style="background: linear-gradient(90deg, #e11d48 0%, #1e293b 100%); padding: 1rem;">
             <img src="/static/logo.png" alt="Company Logo" class="h-12 mr-4">
             <div>
@@ -35,7 +31,6 @@
         <div class="p-6">
             <p class="font-semibold text-lg mb-2">Worker: {{ payment.worker_name }}</p>
 
-            <!-- Details table -->
             <table class="receipt-table mt-2 mb-4 text-sm">
                 <tr>
                     <th>Date</th>
@@ -53,7 +48,7 @@
 
                 <tr>
                     <th>Paid Amount</th>
-                    <td colspan="3">{{ '{:,.2f}'.format(payment.amount) }} RWF</td>
+                    <td colspan="3">{{ '{:,.2f}'.format(payment.amount or 0) }} RWF</td>
                 </tr>
 
                 <tr>
@@ -62,43 +57,18 @@
                 </tr>
             </table>
 
-            <!-- USD conversion section (manual fields for printing/filling) -->
-            <div class="mb-4">
-                <h3 class="font-semibold mb-2">USD Conversion (fill manually if needed)</h3>
-                <p class="small-note mt-2">Enter an exchange rate and click Calculate USD to auto-fill the USD fields for convenience.</p>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium">Amount (USD)</label>
-                        <input id="amount_usd" name="amount_usd" class="convert-input" placeholder="e.g. 250.00" />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium">Remaining (USD)</label>
-                        <input id="remaining_usd" name="remaining_usd" class="convert-input" placeholder="e.g. 1,500.00" />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium">Exchange rate (RWF per USD)</label>
-                        <input id="exchange_rate" name="exchange_rate" class="convert-input" placeholder="e.g. 1100.00" />
-                    </div>
-                </div>
-
-                <div class="mt-2 no-print">
-                    <button type="button" onclick="convertToUSD()" class="px-3 py-1 bg-indigo-600 text-white rounded">Calculate USD</button>
-                    <button type="button" onclick="clearUSD()" class="ml-2 px-3 py-1 bg-gray-200 rounded">Clear USD</button>
-                </div>
-            </div>
-
-            <!-- Signature lines -->
             <div class="flex justify-between mt-8 mb-6">
                 <div>
                     <div class="border-t border-gray-400 w-40"></div>
-                    <p class="text-xs text-gray-600 mt-1">Worker Signature</p>
+                    <p class="text-xs text-gray-600 mt-1">Requested by / Accountant</p>
                 </div>
                 <div>
                     <div class="border-t border-gray-400 w-40"></div>
-                    <p class="text-xs text-gray-600 mt-1">Approved By</p>
+                    <p class="text-xs text-gray-600 mt-1">Cashier</p>
+                </div>
+                <div>
+                    <div class="border-t border-gray-400 w-40"></div>
+                    <p class="text-xs text-gray-600 mt-1">Approved by / Boss</p>
                 </div>
             </div>
 
@@ -106,20 +76,9 @@
             <div class="mt-6 no-print text-center">
                 <button onclick="window.print()" class="px-4 py-2 bg-pink-600 text-white rounded">Print</button>
                 <a href="{{ url_for('cassiterite.manage_expenses') }}" class="inline-block ml-4 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition">Back to Manage Expenses</a>
+                <a href="{{ url_for('core.cashier_receipts_audit') }}" class="inline-block ml-4 px-4 py-2 bg-slate-700 text-white rounded hover:bg-slate-800 transition">Back to Receipts Audit</a>
             </div>
         </div>
     </div>
-
-    <script>
-        function parseNum(val) { if (!val) return NaN; return Number(String(val).replace(/,/g, '')); }
-        function convertToUSD() {
-            const rate = parseNum(document.getElementById('exchange_rate').value);
-            if (!rate || isNaN(rate) || rate <= 0) { alert('Enter a valid exchange rate (RWF per USD).'); return; }
-            const paidRwf = parseNum("{{ '{:.2f}'.format(payment.amount) }}");
-            const amtUsd = (paidRwf / rate).toFixed(2);
-            document.getElementById('amount_usd').value = amtUsd;
-        }
-        function clearUSD() { document.getElementById('amount_usd').value = ''; document.getElementById('remaining_usd').value = ''; document.getElementById('exchange_rate').value = ''; }
-    </script>
 </body>
 </html>

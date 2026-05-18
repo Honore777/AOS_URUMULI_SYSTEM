@@ -7,6 +7,8 @@ import functools
 from flask import current_app
 import difflib
 import re
+from decimal import Decimal
+from flask import jsonify
 
 # Configure simple app-wide logging. Control level with the LOG_LEVEL env var.
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -43,6 +45,166 @@ def close_name_matches(input_name: str, candidates: list[str], limit: int = 5, c
         return []
     matches = difflib.get_close_matches(needle, keys, n=limit, cutoff=cutoff)
     return [mapping[m] for m in matches if m in mapping]
+
+
+def to_decimal(value) -> Decimal:
+    """Convert a numeric-like value to Decimal safely.
+
+    - Strings and ints convert directly; floats are converted via str()
+      to avoid binary float artifacts.
+    - None returns Decimal('0').
+    """
+    if value is None:
+        return Decimal('0')
+    if isinstance(value, Decimal):
+        return value
+    try:
+        if isinstance(value, float):
+            return Decimal(str(value))
+        return Decimal(value)
+    except Exception:
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return Decimal('0')
+
+
+def to_number(value) -> float:
+    """Convert Decimal/int/float-like to Python float for JSON/UI.
+
+    Prefer using `Decimal` for internal accounting; convert to float only
+    when preparing JSON or rendering templates.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, Decimal):
+        return float(value)
+    try:
+        return float(value)
+    except Exception:
+        try:
+            return float(str(value))
+        except Exception:
+            return 0.0
+
+
+def _convert_decimals(obj):
+    """Recursively convert Decimals in lists/dicts to floats for JSON."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _convert_decimals(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_convert_decimals(v) for v in obj]
+    return obj
+
+
+def safe_jsonify(payload):
+    """Flask-friendly jsonify that converts Decimal to float recursively.
+
+    Use this in API endpoints that may return SQLAlchemy Numeric values.
+    """
+    try:
+        return jsonify(_convert_decimals(payload))
+    except Exception:
+        # Fallback: attempt simple conversion via str()
+        return jsonify(str(payload))
+
+
+def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> float:
+    """Return the supplier-wide remaining balance across copper and cassiterite.
+
+    This is the shared source of truth for supplier-facing balance displays.
+    """
+    normalized = ' '.join((supplier_name or '').strip().lower().split())
+    if not normalized:
+        return 0.0
+
+    try:
+        from sqlalchemy import func, or_
+        from config import db
+        from copper.models import CopperStock, SupplierPayment as CopperSupplierPayment, CopperAdvanceAllocation
+        from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
+        from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+
+        supplier_like = f"%{'%'.join(normalized.split())}%"
+
+        copper_stock_debt = float(
+            db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0))
+            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+            .scalar()
+            or 0.0
+        )
+        cass_stock_debt = float(
+            db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0))
+            .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+            .scalar()
+            or 0.0
+        )
+
+        copper_allocation = float(
+            db.session.query(func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0))
+            .join(CopperStock, CopperStock.id == CopperAdvanceAllocation.stock_id)
+            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+            .scalar()
+            or 0.0
+        )
+        cass_allocation = float(
+            db.session.query(func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0))
+            .join(CassiteriteStock, CassiteriteStock.id == CassiteriteAdvanceAllocation.stock_id)
+            .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+            .scalar()
+            or 0.0
+        )
+
+        copper_paid = float(
+            db.session.query(func.coalesce(func.sum(func.coalesce(CopperSupplierPayment.amount_rwf, CopperSupplierPayment.amount)), 0))
+            .join(CopperStock, CopperStock.id == CopperSupplierPayment.stock_id, isouter=True)
+            .filter(
+                CopperSupplierPayment.is_deleted.is_(False),
+                CopperSupplierPayment.is_advance.is_(False),
+                or_(
+                    func.lower(CopperStock.supplier).ilike(supplier_like),
+                    func.lower(func.coalesce(CopperSupplierPayment.supplier_name, '')).ilike(supplier_like),
+                ),
+            )
+            .scalar()
+            or 0.0
+        )
+        cass_paid = float(
+            db.session.query(func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0))
+            .join(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id, isouter=True)
+            .filter(
+                CassiteriteSupplierPayment.is_deleted.is_(False),
+                CassiteriteSupplierPayment.is_advance.is_(False),
+                or_(
+                    func.lower(CassiteriteStock.supplier).ilike(supplier_like),
+                    func.lower(func.coalesce(CassiteriteSupplierPayment.supplier_name, '')).ilike(supplier_like),
+                ),
+            )
+            .scalar()
+            or 0.0
+        )
+
+        unified_advances = (
+            db.session.query(UnifiedSupplierAdvance.amount_rwf)
+            .filter(
+                UnifiedSupplierAdvance.is_deleted.is_(False),
+                UnifiedSupplierAdvance.supplier_name_norm == normalized,
+            )
+            .all()
+        )
+        advance_credit = float(sum(float(a[0] or 0.0) for a in unified_advances if float(a[0] or 0.0) > 0.0) or 0.0)
+        refund_debit = float(sum(abs(float(a[0] or 0.0)) for a in unified_advances if float(a[0] or 0.0) < 0.0) or 0.0)
+
+        allocation_total = copper_allocation + cass_allocation
+        stock_total = copper_stock_debt + cass_stock_debt
+        paid_total = copper_paid + cass_paid
+
+        remaining = stock_total + refund_debit - allocation_total - advance_credit - paid_total
+        return max(float(remaining or 0.0), 0.0)
+    except Exception:
+        return 0.0
 
 
 def trace_time(func):

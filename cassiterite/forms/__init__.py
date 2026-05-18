@@ -150,7 +150,7 @@ class CassiteriteSupplierPaymentForm(FlaskForm):
     )
     existing_supplier = SelectField('Existing Supplier (for advance)', choices=[], validators=[Optional()])
     new_supplier = StringField('Or New Supplier Name (for advance)', validators=[Optional(), Length(max=100)])
-    stock_id = SelectField('Stock (Lot Number)', coerce=int, validators=[Optional()])
+    stock_id = SelectField('Stock (Lot Number)', coerce=int, validators=[Optional()], validate_choice=False)
     amount = FloatField('Payment Amount', validators=[DataRequired()])
     currency = SelectField(
         'Currency',

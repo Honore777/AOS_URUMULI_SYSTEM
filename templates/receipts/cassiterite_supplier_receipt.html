@@ -70,6 +70,42 @@
                 </tr>
             </table>
 
+            {% if deductions_rows %}
+            <div class="mb-4">
+                <h3 class="font-semibold mb-2">Voucher / Lot Details Across Minerals</h3>
+                <table class="receipt-table text-sm">
+                    <thead>
+                        <tr>
+                            <th>Mineral</th>
+                            <th>Voucher / Lot</th>
+                            <th style="text-align:right;">Input (kg)</th>
+                            <th style="text-align:right;">Gross</th>
+                            <th style="text-align:right;">Transport</th>
+                            <th style="text-align:right;">RMA</th>
+                            <th style="text-align:right;">Inkomane</th>
+                            <th style="text-align:right;">RRA 3%</th>
+                            <th style="text-align:right;">Net</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in deductions_rows %}
+                        <tr>
+                            <td class="font-bold">{{ r.mineral or '-' }}</td>
+                            <td>{{ r.voucher_no }}</td>
+                            <td style="text-align:right;">{{ '{:,.2f}'.format(r.input_kg or 0) }}</td>
+                            <td style="text-align:right;">{{ '{:,.2f}'.format(r.gross or 0) }}</td>
+                            <td style="text-align:right;">{{ '{:,.2f}'.format(r.transport or 0) }}</td>
+                            <td style="text-align:right;">{{ '{:,.2f}'.format(r.rma or 0) }}</td>
+                            <td style="text-align:right;">{{ '{:,.2f}'.format(r.inkomane or 0) }}</td>
+                            <td style="text-align:right;">{{ '{:,.2f}'.format(r.rra_3_percent or 0) }}</td>
+                            <td style="text-align:right; font-weight: 700;">{{ '{:,.2f}'.format(r.net or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
             <!-- USD conversion section (manual fields for printing/filling) -->
             <div class="mb-4">
                 <h3 class="font-semibold mb-2">USD Conversion (fill manually if needed)</h3>
@@ -116,6 +152,7 @@
             <div class="mt-6 no-print text-center">
                 <button onclick="window.print()" class="px-4 py-2 bg-pink-600 text-white rounded">Print</button>
                 <a href="{{ url_for('cassiterite.pay_supplier') }}" class="inline-block ml-4 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition">Back to Pay Supplier</a>
+                <a href="{{ url_for('core.cashier_receipts_audit') }}" class="inline-block ml-4 px-4 py-2 bg-slate-700 text-white rounded hover:bg-slate-800 transition">Back to Receipts Audit</a>
             </div>
         </div>
     </div>

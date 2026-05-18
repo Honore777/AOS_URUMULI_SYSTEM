@@ -2,7 +2,8 @@ import logging
 from datetime import datetime
 import json
 
-from flask import render_template, request, redirect, url_for, flash, jsonify
+from flask import render_template, request, redirect, url_for, flash
+from utils import safe_jsonify
 from flask_login import current_user
 
 from config import db
@@ -450,7 +451,142 @@ def cashier_approved_requests_summary():
         else:
             pay += 1
 
-    return jsonify({'collections': col, 'payments': pay, 'max_id': max_id})
+    return safe_jsonify({'collections': col, 'payments': pay, 'max_id': max_id})
+
+
+@core_bp.route("/cashier/receipts-audit", methods=["GET"])
+@role_required("cashier", "boss", "admin", "accountant")
+def cashier_receipts_audit():
+    """Unified recent receipts view for cashier operations and auditing."""
+    from core.models import WorkerPaymentReceipt, SupplierPaymentReceipt
+
+    kind = (request.args.get('kind') or 'all').strip().lower()
+    mineral = (request.args.get('mineral') or 'all').strip().lower()
+    printed = (request.args.get('printed') or 'all').strip().lower()
+    q = (request.args.get('q') or '').strip().lower()
+    focus_payment_id = int(request.args.get('payment_id') or 0)
+
+    try:
+        limit = int(request.args.get('limit') or 150)
+    except Exception:
+        limit = 150
+    limit = max(20, min(limit, 500))
+
+    rows = []
+
+    if kind in {'all', 'worker'}:
+        w_query = WorkerPaymentReceipt.query.filter(WorkerPaymentReceipt.is_deleted.is_(False))
+        if mineral in {'copper', 'coltan', 'cassiterite'}:
+            w_query = w_query.filter(WorkerPaymentReceipt.mineral_type == mineral)
+        if printed == 'yes':
+            w_query = w_query.filter(WorkerPaymentReceipt.is_printed.is_(True))
+        elif printed == 'no':
+            w_query = w_query.filter(WorkerPaymentReceipt.is_printed.is_(False))
+
+        worker_rows = w_query.order_by(WorkerPaymentReceipt.generated_at.desc()).limit(limit).all()
+        for row in worker_rows:
+            endpoint = None
+            mt = (row.mineral_type or '').strip().lower()
+            if mt in {'copper', 'coltan'}:
+                endpoint = 'copper.worker_receipt'
+            elif mt == 'cassiterite':
+                endpoint = 'cassiterite.worker_receipt'
+
+            view_url = None
+            if endpoint and row.payment_id:
+                try:
+                    view_url = url_for(endpoint, payment_id=int(row.payment_id))
+                except Exception:
+                    view_url = None
+
+            rows.append({
+                'kind': 'worker',
+                'id': row.id,
+                'receipt_number': row.receipt_number,
+                'payment_id': row.payment_id,
+                'counterparty': row.worker_name,
+                'mineral_type': row.mineral_type,
+                'amount': row.amount,
+                'currency': row.currency,
+                'is_printed': bool(row.is_printed),
+                'printed_at': row.printed_at,
+                'printed_by': getattr(getattr(row, 'printed_by', None), 'username', None),
+                'generated_at': row.generated_at,
+                'generated_by': getattr(getattr(row, 'generated_by', None), 'username', None),
+                'view_url': view_url,
+            })
+
+    if kind in {'all', 'supplier'}:
+        s_query = SupplierPaymentReceipt.query.filter(SupplierPaymentReceipt.is_deleted.is_(False))
+        if mineral in {'copper', 'coltan', 'cassiterite'}:
+            s_query = s_query.filter(SupplierPaymentReceipt.mineral_type == mineral)
+        if printed == 'yes':
+            s_query = s_query.filter(SupplierPaymentReceipt.is_printed.is_(True))
+        elif printed == 'no':
+            s_query = s_query.filter(SupplierPaymentReceipt.is_printed.is_(False))
+
+        supplier_rows = s_query.order_by(SupplierPaymentReceipt.generated_at.desc()).limit(limit).all()
+        for row in supplier_rows:
+            endpoint = None
+            mt = (row.mineral_type or '').strip().lower()
+            if mt in {'copper', 'coltan'}:
+                endpoint = 'copper.supplier_receipt'
+            elif mt == 'cassiterite':
+                endpoint = 'cassiterite.supplier_receipt'
+
+            view_url = None
+            if endpoint and row.payment_id:
+                try:
+                    view_url = url_for(endpoint, payment_id=int(row.payment_id))
+                except Exception:
+                    view_url = None
+
+            rows.append({
+                'kind': 'supplier',
+                'id': row.id,
+                'receipt_number': row.receipt_number,
+                'payment_id': row.payment_id,
+                'counterparty': row.supplier_name,
+                'payment_type': row.payment_type,
+                'mineral_type': row.mineral_type,
+                'amount': row.amount,
+                'currency': row.currency,
+                'is_printed': bool(row.is_printed),
+                'printed_at': row.printed_at,
+                'printed_by': getattr(getattr(row, 'printed_by', None), 'username', None),
+                'generated_at': row.generated_at,
+                'generated_by': getattr(getattr(row, 'generated_by', None), 'username', None),
+                'view_url': view_url,
+            })
+
+    if q:
+        def _match_text(v):
+            return q in str(v or '').lower()
+
+        rows = [
+            row for row in rows
+            if _match_text(row.get('receipt_number'))
+            or _match_text(row.get('counterparty'))
+            or _match_text(row.get('payment_id'))
+            or _match_text(row.get('mineral_type'))
+            or _match_text(row.get('payment_type'))
+        ]
+
+    if focus_payment_id:
+        rows = [row for row in rows if int(row.get('payment_id') or 0) == focus_payment_id]
+
+    rows = sorted(rows, key=lambda r: r.get('generated_at') or datetime.min, reverse=True)[:limit]
+
+    return render_template(
+        'cashier/receipts_audit.html',
+        rows=rows,
+        kind=kind,
+        mineral=mineral,
+        printed=printed,
+        q=q,
+        limit=limit,
+        focus_payment_id=focus_payment_id,
+    )
 
 
 @core_bp.route("/cashier/pending-receipts", methods=["GET", "POST"])
@@ -830,7 +966,7 @@ def cashier_pending_receipts_summary():
         except Exception:
             pending_unearned_count = 0
 
-    return jsonify({'earned': int(pending_receipts_count or 0), 'unearned': int(pending_unearned_count or 0)})
+    return safe_jsonify({'earned': int(pending_receipts_count or 0), 'unearned': int(pending_unearned_count or 0)})
 
 
 @core_bp.route("/cashier/manual-cash", methods=["GET", "POST"])
@@ -1082,7 +1218,7 @@ def cashier_supplier_refund():
 def suppliers_autocomplete():
     q = (request.args.get('q') or '').strip()
     if not q:
-        return jsonify({'results': []})
+        return safe_jsonify({'results': []})
 
     q_norm = ' '.join(q.lower().split())
     try:
@@ -1099,9 +1235,9 @@ def suppliers_autocomplete():
             .all()
         )
         results = [nm for (nm,) in rows if nm]
-        return jsonify({'results': results})
+        return safe_jsonify({'results': results})
     except Exception:
-        return jsonify({'results': []})
+        return safe_jsonify({'results': []})
 
 
 @core_bp.route("/cashier/transactions", methods=["GET"])
@@ -1818,6 +1954,42 @@ def cashier_disburse_payment_review(review_id: int):
                         db.session.flush()
                         review.payment_id = int(payment.id)
 
+                        # Generate supplier payment receipt
+                        try:
+                            from datetime import datetime as dt
+                            from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                            
+                            current_year = dt.utcnow().year
+                            seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                            
+                            if not seq_row:
+                                seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                db.session.add(seq_row)
+                                db.session.flush()
+                            
+                            receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                            seq_row.next_sequence += 1
+                            db.session.add(seq_row)
+                            db.session.flush()
+
+                            receipt = SupplierPaymentReceipt(
+                                payment_id=int(payment.id),
+                                mineral_type='copper',
+                                receipt_number=receipt_number,
+                                supplier_name=stock.supplier,
+                                amount=amount_rwf,
+                                currency=currency,
+                                payment_type='SETTLEMENT',
+                                generated_at=dt.utcnow(),
+                                generated_by_id=getattr(current_user, 'id', None),
+                            )
+                            db.session.add(receipt)
+                            db.session.flush()
+                            logger.info(f"Generated receipt {receipt_number} for supplier payment (payment_id={payment.id})")
+                        except Exception as receipt_err:
+                            logger.error(f"Failed to generate supplier receipt: {receipt_err}")
+                            db.session.rollback()
+
                         boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
                         for (boss_id,) in boss_rows:
                             create_notification(
@@ -1852,6 +2024,42 @@ def cashier_disburse_payment_review(review_id: int):
                         db.session.add(payment)
                         db.session.flush()
                         review.payment_id = int(payment.id)
+
+                        # Generate supplier advance receipt
+                        try:
+                            from datetime import datetime as dt
+                            from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                            
+                            current_year = dt.utcnow().year
+                            seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                            
+                            if not seq_row:
+                                seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                db.session.add(seq_row)
+                                db.session.flush()
+                            
+                            receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                            seq_row.next_sequence += 1
+                            db.session.add(seq_row)
+                            db.session.flush()
+
+                            receipt = SupplierPaymentReceipt(
+                                payment_id=int(payment.id),
+                                mineral_type='copper',
+                                receipt_number=receipt_number,
+                                supplier_name=supplier_name,
+                                amount=amount_rwf,
+                                currency=currency,
+                                payment_type='ADVANCE',
+                                generated_at=dt.utcnow(),
+                                generated_by_id=getattr(current_user, 'id', None),
+                            )
+                            db.session.add(receipt)
+                            db.session.flush()
+                            logger.info(f"Generated receipt {receipt_number} for supplier advance (payment_id={payment.id})")
+                        except Exception as receipt_err:
+                            logger.error(f"Failed to generate supplier advance receipt: {receipt_err}")
+                            db.session.rollback()
 
                         try:
                             from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
@@ -1975,6 +2183,42 @@ def cashier_disburse_payment_review(review_id: int):
                         db.session.add(payment)
                         db.session.flush()
                         review.payment_id = int(payment.id)
+
+                        # Generate cassiterite supplier payment receipt
+                        try:
+                            from datetime import datetime as dt
+                            from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                            
+                            current_year = dt.utcnow().year
+                            seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                            
+                            if not seq_row:
+                                seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                db.session.add(seq_row)
+                                db.session.flush()
+                            
+                            receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                            seq_row.next_sequence += 1
+                            db.session.add(seq_row)
+                            db.session.flush()
+
+                            receipt = SupplierPaymentReceipt(
+                                payment_id=int(payment.id),
+                                mineral_type='cassiterite',
+                                receipt_number=receipt_number,
+                                supplier_name=stock.supplier,
+                                amount=amount_rwf,
+                                currency=currency,
+                                payment_type='SETTLEMENT',
+                                generated_at=dt.utcnow(),
+                                generated_by_id=getattr(current_user, 'id', None),
+                            )
+                            db.session.add(receipt)
+                            db.session.flush()
+                            logger.info(f"Generated receipt {receipt_number} for cassiterite supplier payment (payment_id={payment.id})")
+                        except Exception as receipt_err:
+                            logger.error(f"Failed to generate cassiterite supplier receipt: {receipt_err}")
+                            db.session.rollback()
                     else:
                         if supplier_id is None:
                             supplier_id = _resolve_cass_supplier_id(supplier_name)
@@ -1997,6 +2241,42 @@ def cashier_disburse_payment_review(review_id: int):
                         db.session.add(payment)
                         db.session.flush()
                         review.payment_id = int(payment.id)
+
+                        # Generate cassiterite supplier advance receipt
+                        try:
+                            from datetime import datetime as dt
+                            from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                            
+                            current_year = dt.utcnow().year
+                            seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                            
+                            if not seq_row:
+                                seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                db.session.add(seq_row)
+                                db.session.flush()
+                            
+                            receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                            seq_row.next_sequence += 1
+                            db.session.add(seq_row)
+                            db.session.flush()
+
+                            receipt = SupplierPaymentReceipt(
+                                payment_id=int(payment.id),
+                                mineral_type='cassiterite',
+                                receipt_number=receipt_number,
+                                supplier_name=supplier_name,
+                                amount=amount_rwf,
+                                currency=currency,
+                                payment_type='ADVANCE',
+                                generated_at=dt.utcnow(),
+                                generated_by_id=getattr(current_user, 'id', None),
+                            )
+                            db.session.add(receipt)
+                            db.session.flush()
+                            logger.info(f"Generated receipt {receipt_number} for cassiterite supplier advance (payment_id={payment.id})")
+                        except Exception as receipt_err:
+                            logger.error(f"Failed to generate cassiterite supplier advance receipt: {receipt_err}")
+                            db.session.rollback()
 
                         try:
                             from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
@@ -2074,6 +2354,9 @@ def cashier_disburse_payment_review(review_id: int):
                     raise ValueError('Unsupported mineral for supplier payment execution.')
 
             elif ("worker" in review_type) or ("mukozi" in review_type):
+                from datetime import datetime as dt
+                from core.models import WorkerPaymentReceipt, WorkerPaymentReceiptSequence
+                
                 worker_name = payload.get('worker_name') or review.customer
                 if mineral in {'coltan', 'copper'}:
                     from copper.models import WorkerPayment
@@ -2095,9 +2378,44 @@ def cashier_disburse_payment_review(review_id: int):
                     )
                 else:
                     raise ValueError('Unsupported mineral for worker payment execution.')
+                
                 db.session.add(payment)
                 db.session.flush()
                 review.payment_id = int(payment.id)
+
+                # Generate and store receipt
+                try:
+                    current_year = dt.utcnow().year
+                    seq_row = WorkerPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                    
+                    if not seq_row:
+                        seq_row = WorkerPaymentReceiptSequence(year=current_year, next_sequence=1)
+                        db.session.add(seq_row)
+                        db.session.flush()
+                    
+                    receipt_number = f"WKR-{current_year}-{seq_row.next_sequence:04d}"
+                    seq_row.next_sequence += 1
+                    db.session.add(seq_row)
+                    db.session.flush()
+
+                    receipt = WorkerPaymentReceipt(
+                        payment_id=int(payment.id),
+                        receipt_number=receipt_number,
+                        worker_name=worker_name,
+                        amount=amount_rwf,
+                        currency=currency,
+                        mineral_type=mineral,
+                        generated_at=dt.utcnow(),
+                        generated_by_id=getattr(current_user, 'id', None),
+                    )
+                    db.session.add(receipt)
+                    db.session.flush()
+                    
+                    logger.info(f"Generated receipt {receipt_number} for worker {worker_name} (payment_id={payment.id})")
+                except Exception as receipt_err:
+                    logger.error(f"Failed to generate receipt for worker payment: {receipt_err}")
+                    db.session.rollback()
+                    # Continue anyway - don't fail the entire disbursement
 
         review.disbursement_status = 'DISBURSED'
         review.disbursed_by_id = getattr(current_user, 'id', None)
@@ -2146,10 +2464,13 @@ def cashier_disburse_payment_review(review_id: int):
                 return redirect(url_for('copper.worker_receipt', payment_id=int(review.payment_id)))
             if mineral == 'cassiterite':
                 return redirect(url_for('cassiterite.worker_receipt', payment_id=int(review.payment_id)))
-    except Exception:
-        pass
+    except Exception as receipt_redirect_err:
+        logger.exception("Receipt auto-redirect failed for review_id=%s: %s", review_id, receipt_redirect_err)
+        flash('Request disbursed successfully, but auto-open receipt failed. Open it from Receipts Audit.', 'warning')
 
     flash('Request disbursed successfully.', 'success')
+    if review.payment_id:
+        return redirect(url_for('core.cashier_receipts_audit', payment_id=int(review.payment_id)))
     return redirect(url_for('core.cashier_dashboard'))
 
 

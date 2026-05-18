@@ -96,10 +96,10 @@ class CopperStock(db.Model):
         """Calculate remaining amount to pay supplier"""
         # Use DB-side aggregates to avoid loading payment rows into Python.
         from .payment import SupplierPayment, CopperAdvanceAllocation
-        total_paid = db.session.query(func.coalesce(func.sum(SupplierPayment.amount_rwf), 0)).filter(
+        total_paid = float(db.session.query(func.coalesce(func.sum(SupplierPayment.amount_rwf), 0)).filter(
             SupplierPayment.stock_id == self.id,
             SupplierPayment.is_deleted.is_(False),
-        ).scalar() or 0
+        ).scalar() or 0)
         unified_applied = 0.0
         try:
             from core.models import UnifiedSupplierAdvanceAllocation
@@ -127,7 +127,8 @@ class CopperStock(db.Model):
                 CopperAdvanceAllocation.stock_id == self.id,
             ).scalar() or 0.0
 
-        return max((self.net_balance or 0) - total_paid - float(advance_applied or 0.0) - float(unified_applied or 0.0), 0)
+        base_balance = float(self.net_balance or 0)
+        return max(base_balance - float(total_paid or 0.0) - float(advance_applied or 0.0) - float(unified_applied or 0.0), 0.0)
 
     def update_calculations(self):
         """

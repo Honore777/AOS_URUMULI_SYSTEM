@@ -30,7 +30,8 @@ class SupplierPaymentForm(FlaskForm):
     stock_id = SelectField(
         'Select Supplier Obligation',
         coerce=int,
-        validators=[Optional()]
+        validators=[Optional()],
+        validate_choice=False,
     )
     amount = FloatField(
         'Payment amount',
