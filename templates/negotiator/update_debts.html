@@ -152,6 +152,7 @@
                                     <tr>
                                         <th class="px-3 py-2 text-left font-semibold">Receipt</th>
                                         <th class="px-3 py-2 text-left font-semibold">Customer</th>
+                                        <th class="px-3 py-2 text-left font-semibold">Currency</th>
                                         <th class="px-3 py-2 text-right font-semibold">Amount</th>
                                         <th class="px-3 py-2 text-left font-semibold">Action</th>
                                     </tr>
@@ -161,11 +162,12 @@
                                     <tr class="hover:bg-slate-50">
                                         <td class="px-3 py-2 font-bold text-slate-900">#{{ r.id }}</td>
                                         <td class="px-3 py-2 text-slate-700">{{ r.customer }}</td>
+                                        <td class="px-3 py-2">
+                                            <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold {% if (r.currency or 'RWF')|upper == 'USD' %}bg-amber-100 text-amber-800{% else %}bg-emerald-100 text-emerald-800{% endif %}">{{ r.currency or 'RWF' }}</span>
+                                        </td>
                                         <td class="px-3 py-2 text-right font-semibold text-slate-900">
                                             <div>{{ '{:,.2f}'.format(r.amount_input or 0) }} {{ r.currency or 'RWF' }}</div>
-                                            {% if (r.currency or 'RWF')|upper == 'USD' %}
-                                            <div class="text-xs text-slate-500">{{ '{:,.2f}'.format(r.amount_rwf or 0) }} RWF @ {{ '{:,.4f}'.format(r.exchange_rate or 1.0) }}</div>
-                                            {% endif %}
+                                            <div class="text-xs text-slate-500">{{ '{:,.2f}'.format(r.amount_rwf or 0) }} RWF{% if (r.currency or 'RWF')|upper == 'USD' %} @ {{ '{:,.4f}'.format(r.exchange_rate or 1.0) }}{% endif %}</div>
                                         </td>
                                         <td class="px-3 py-2">
                                             <form method="post" action="{{ url_for('core.negotiator_handover_customer_receipt', receipt_id=r.id) }}">
@@ -193,6 +195,7 @@
     const customerSuggestions = document.getElementById('customer-suggestions');
     const mineralInput = document.getElementById('mineral-type');
     const batchIdInput = document.getElementById('batch-id');
+    const currencyInput = document.querySelector('select[name="currency"]');
     const details = document.getElementById('batch-details');
 
     function formatRemaining(r) {
@@ -210,6 +213,9 @@
         details.classList.add('hidden');
         mineralInput.value = '';
         batchIdInput.value = '';
+        if (currencyInput) {
+            currencyInput.value = 'RWF';
+        }
         if (!customerName) {
             return;
         }
@@ -251,6 +257,9 @@
         const ccy = String(opt.dataset.currency || 'RWF').toUpperCase();
         const remDisplay = Number(opt.dataset.remaining || 0);
         const remRwf = Number(opt.dataset.remainingRwf || 0);
+        if (currencyInput) {
+            currencyInput.value = ccy;
+        }
         if (ccy === 'USD') {
             document.getElementById('d-rem').textContent = remDisplay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USD (' + remRwf.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RWF)';
         } else {
@@ -336,7 +345,7 @@
     })();
     // Disable wheel changes to number inputs inside this form to avoid accidental value shifts
     (function(){
-        const form = document.querySelector('form[action="{{ url_for('core.update_debts') }}"]');
+        const form = document.querySelector("form[action='{{ url_for('core.update_debts') }}']");
         if (!form) return;
         form.addEventListener('wheel', function(e){
             const el = document.activeElement;

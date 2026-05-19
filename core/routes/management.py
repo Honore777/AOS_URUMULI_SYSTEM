@@ -456,13 +456,46 @@ def supplier_name_suggest():
         return safe_jsonify({"results": []})
 
 
-@core_bp.route("/accountant/suppliers/<supplier_norm>", methods=["GET"])
+@core_bp.route("/accountant/suppliers/<path:supplier_norm>", methods=["GET"])
 @role_required("accountant", "boss", "admin")
 def consolidated_supplier_ledger(supplier_norm: str):
     from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
     from utils import calculate_consolidated_supplier_remaining_balance
 
-    norm = ' '.join((supplier_norm or '').strip().lower().split())
+    # Resolve supplier name from parameter (could be slug, normalized name, or direct name)
+    input_norm = (supplier_norm or '').strip().lower()
+    if not input_norm:
+        abort(404)
+    
+    norm = None
+    was_slug_input = False
+    
+    # Strategy 1: If input looks like a slug (contains hyphens, no spaces/slashes),
+    # try to find the actual supplier name by matching the supplier_slug in DB
+    if '-' in input_norm and ' ' not in input_norm and '/' not in input_norm:
+        was_slug_input = True
+        slug_matches = (
+            db.session.query(UnifiedSupplierAdvance.supplier_name_norm)
+            .filter(
+                UnifiedSupplierAdvance.is_deleted.is_(False),
+                UnifiedSupplierAdvance.supplier_slug == input_norm,
+            )
+            .group_by(UnifiedSupplierAdvance.supplier_name_norm)
+            .first()
+        )
+        if slug_matches:
+            norm = slug_matches[0]
+    
+    # Strategy 2: If no match yet, try treating input as a normalized name
+    # OR if it was a slug, convert it to a spaced name for stock-only suppliers
+    if not norm:
+        if was_slug_input:
+            # Convert slug "name-with-hyphens" to "name with hyphens" for stock lookups
+            norm = ' '.join(input_norm.split('-'))
+        else:
+            # Already a normalized name
+            norm = ' '.join(input_norm.split())
+    
     if not norm:
         abort(404)
 
@@ -992,10 +1025,13 @@ def consolidated_supplier_ledger(supplier_norm: str):
     # inject an authoritative synthetic row here — receipts must match the
     # ledger's running balance computed from the same event stream.
 
+    from utils import generate_supplier_slug
+    
     return render_template(
         "suppliers/consolidated_ledger.html",
         supplier_name=supplier_name,
         supplier_norm=norm,
+        supplier_slug=generate_supplier_slug(supplier_name or norm),
         wallet_remaining=wallet_remaining,
         total_advanced=total_advanced,
         total_refunded=total_refunded,
@@ -1016,10 +1052,45 @@ def consolidated_supplier_ledger(supplier_norm: str):
     )
 
 
-@core_bp.route('/accountant/suppliers/<supplier_norm>/settlement-statement', methods=['GET'])
+@core_bp.route('/accountant/suppliers/<path:supplier_norm>/settlement-statement', methods=['GET'])
 @role_required('accountant', 'boss', 'admin', 'cashier')
 def supplier_settlement_statement(supplier_norm: str):
-    norm = ' '.join((supplier_norm or '').strip().lower().split())
+    from core.models import UnifiedSupplierAdvance
+    
+    # Resolve supplier name from parameter (could be slug, normalized name, or direct name)
+    input_norm = (supplier_norm or '').strip().lower()
+    if not input_norm:
+        abort(404)
+    
+    norm = None
+    was_slug_input = False
+    
+    # Strategy 1: If input looks like a slug (contains hyphens, no spaces/slashes),
+    # try to find the actual supplier name by matching the supplier_slug in DB
+    if '-' in input_norm and ' ' not in input_norm and '/' not in input_norm:
+        was_slug_input = True
+        slug_matches = (
+            db.session.query(UnifiedSupplierAdvance.supplier_name_norm)
+            .filter(
+                UnifiedSupplierAdvance.is_deleted.is_(False),
+                UnifiedSupplierAdvance.supplier_slug == input_norm,
+            )
+            .group_by(UnifiedSupplierAdvance.supplier_name_norm)
+            .first()
+        )
+        if slug_matches:
+            norm = slug_matches[0]
+    
+    # Strategy 2: If no match yet, try treating input as a normalized name
+    # OR if it was a slug, convert it to a spaced name for stock-only suppliers
+    if not norm:
+        if was_slug_input:
+            # Convert slug "name-with-hyphens" to "name with hyphens" for stock lookups
+            norm = ' '.join(input_norm.split('-'))
+        else:
+            # Already a normalized name
+            norm = ' '.join(input_norm.split())
+    
     if not norm:
         abort(404)
 
@@ -1145,10 +1216,13 @@ def supplier_settlement_statement(supplier_norm: str):
         'outstanding': summary_outstanding,
     }
 
+    from utils import generate_supplier_slug
+    
     return render_template(
         'receipts/supplier_settlement_statement.html',
         supplier_name=supplier_name,
         supplier_norm=norm,
+        supplier_slug=generate_supplier_slug(supplier_name or norm),
         reference=reference,
         statement_date=statement_date,
         rows=rows,
@@ -1224,12 +1298,15 @@ def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
     """Calculate outstanding amount for a batch using SINGLE SOURCE OF TRUTH.
     
     ╔════════════════════════════════════════════════════════════════════╗
-    ║ SOURCE: BulkOutputPlan.total_expected_amount - sum(CustomerReceipt)║
+    ║ SOURCE: BulkOutputPlan.total_expected_amount - sum(receipts)      ║
+    ║         - sum(allocations) - sum(deductions)                      ║
     ║ NO Output rows, NO debt_remaining tracking                         ║
     ╚════════════════════════════════════════════════════════════════════╝
     
     Formula:
         outstanding = total_expected_amount - sum(receipts.amount_rwf)
+                      - sum(allocations.applied_amount_rwf)
+                      - sum(deductions.amount_rwf)
     
     Args:
         mineral_type: 'copper'|'coltan'|'cassiterite'
@@ -1246,6 +1323,8 @@ def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
     Data Queries:
         1. BulkOutputPlan WHERE batch_id + mineral_type
         2. SUM(CustomerReceipt) WHERE batch_id + mineral_type
+        3. SUM(CustomerUnearnedAllocation) WHERE batch_id
+        4. SUM(BatchDeduction) WHERE batch_id
     """
     aliases = _mineral_aliases(mineral_type)
     if not aliases:
@@ -1262,21 +1341,22 @@ def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
     if not plans:
         return 0.0
 
-    # Total agreed amount
+    # Total agreed amount (in RWF)
     total_expected = float(sum(float(p.total_expected_amount or 0) for p in plans))
     
-    # Total paid so far (direct receipts)
+    # Total paid so far - sum of all CustomerReceipt.amount_rwf (already normalized)
     total_paid = (
-        db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+        db.session.query(func.coalesce(func.sum(CustomerReceipt.amount_rwf), 0))
         .filter(
             CustomerReceipt.batch_id == batch_id,
             CustomerReceipt.mineral_type.in_(aliases),
         )
         .scalar()
-        or 0
+        or 0.0
     )
+    total_paid = float(total_paid or 0)
 
-    # Include allocations from unearned receipts already applied to this batch
+    # Total allocated from unearned receipts (already in RWF)
     total_allocated = (
         db.session.query(func.coalesce(func.sum(CustomerUnearnedAllocation.applied_amount_rwf), 0))
         .filter(
@@ -1287,10 +1367,22 @@ def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
             ),
         )
         .scalar()
-        or 0
+        or 0.0
     )
+    total_allocated = float(total_allocated or 0)
 
-    return float(max(total_expected - float(total_paid or 0) - float(total_allocated or 0), 0.0))
+    # Total deducted (expenses, RMA, transport, etc. - all in RWF)
+    total_deducted = (
+        db.session.query(func.coalesce(func.sum(BatchDeduction.amount_rwf), 0))
+        .filter(
+            BatchDeduction.batch_id == batch_id,
+        )
+        .scalar()
+        or 0.0
+    )
+    total_deducted = float(total_deducted or 0)
+
+    return float(max(total_expected - total_paid - total_allocated - total_deducted, 0.0))
 
 
 def _apply_receipt_to_batch(mineral_type: str, batch_id: str, amount_rwf: float, stage: str) -> float:
@@ -1356,10 +1448,10 @@ def _apply_receipt_to_batch(mineral_type: str, batch_id: str, amount_rwf: float,
         logger.warning(f"_apply_receipt_to_batch: no plans found for batch={batch_id} mineral={mineral_type}")
         return 0.0
 
-    # Calculate total plan amount and what's already paid
+    # Calculate total plan amount and what's already paid (all in RWF)
     total_plan_amount = float(sum(float(p.total_expected_amount or 0) for p in plans))
     total_paid = (
-        db.session.query(func.coalesce(func.sum(func.coalesce(CustomerReceipt.amount_rwf, CustomerReceipt.amount_input)), 0))
+        db.session.query(func.coalesce(func.sum(CustomerReceipt.amount_rwf), 0))
         .filter(
             CustomerReceipt.batch_id == batch_id,
             CustomerReceipt.mineral_type.in_(aliases),
@@ -4376,21 +4468,19 @@ def cassiterite_customer_ledger_batch(customer: str, batch_id: str):
 def _batch_debt_options():
     """Return customer/batch outstanding options for debt update page.
     
-    Single source of truth: Use ONLY BulkOutputPlan + CustomerReceipt.
-    Outstanding = plan.total_expected_amount - sum(receipts.amount_rwf)
+    Single source of truth: Use ONLY BulkOutputPlan + CustomerReceipt (all in RWF).
+    Outstanding = plan.total_expected_amount - sum(receipts.amount_rwf) - sum(allocations) - sum(deductions)
     
-    NEGOTIATOR WORKFLOW: Only coltan/copper mineral type (not cassiterite).
+    NEGOTIATOR WORKFLOW: Only copper/cassiterite mineral type (not coltan).
     """
-    # Query all active agreements for COLTAN ONLY.
-    # We intentionally do NOT require total_expected_amount > 0 so that
-    # draft/advance-first agreements still show the customer in the dropdown.
+    # Query all active agreements for COPPER/CASSITERITE ONLY.
     plans = (
         BulkOutputPlan.query
         .filter(
             BulkOutputPlan.customer.isnot(None),
             BulkOutputPlan.batch_id.isnot(None),
             BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
-            BulkOutputPlan.mineral_type.in_(_mineral_aliases('copper')),  # Coltan only
+            BulkOutputPlan.mineral_type.in_(_mineral_aliases('copper')),  # Copper only
         )
         .all()
     )
@@ -4398,49 +4488,19 @@ def _batch_debt_options():
     receipts = (
         CustomerReceipt.query
         .filter(CustomerReceipt.customer.isnot(None), CustomerReceipt.batch_id.isnot(None))
-        .order_by(CustomerReceipt.received_at.asc(), CustomerReceipt.id.asc())
         .all()
     )
 
     allocations = (
         CustomerUnearnedAllocation.query
-        .join(CustomerUnearnedReceipt, CustomerUnearnedAllocation.unearned_id == CustomerUnearnedReceipt.id)
-        .filter(CustomerUnearnedReceipt.customer.isnot(None), CustomerUnearnedAllocation.batch_id.isnot(None))
-        .order_by(CustomerUnearnedAllocation.created_at.asc())
+        .filter(CustomerUnearnedAllocation.batch_id.isnot(None))
         .all()
     )
 
     deductions = (
         BatchDeduction.query
-        .join(BulkOutputPlan, BatchDeduction.batch_id == BulkOutputPlan.id)
-        .filter(BulkOutputPlan.customer.isnot(None), BulkOutputPlan.batch_id.isnot(None))
-        .order_by(BatchDeduction.created_at.asc())
         .all()
     )
-
-    def _to_base_currency(amount_input: float | None, amount_rwf: float | None, row_currency: str | None, row_rate: float | None, base_currency: str | None, base_rate: float | None) -> float:
-        row_currency = (row_currency or base_currency or 'RWF').upper()
-        base_currency = (base_currency or 'RWF').upper()
-        row_rate = float(row_rate or 1.0)
-        base_rate = float(base_rate or 1.0)
-        amount_input_val = float(amount_input or 0.0)
-        amount_rwf_val = float(amount_rwf or 0.0)
-
-        if base_currency == 'USD':
-            if row_currency == 'USD':
-                return amount_input_val
-            if base_rate > 0:
-                return amount_rwf_val / base_rate
-            if row_rate > 0:
-                return amount_input_val
-            return amount_rwf_val
-
-        if row_currency == 'USD':
-            if row_rate > 0:
-                return amount_input_val * row_rate
-            return amount_rwf_val
-
-        return amount_rwf_val if amount_rwf_val > 0 else amount_input_val
 
     rows_map: dict[tuple[str, str, str], dict] = {}
 
@@ -4453,18 +4513,22 @@ def _batch_debt_options():
         base_currency = (getattr(p, 'currency', None) or 'RWF').upper()
         base_rate = float(getattr(p, 'exchange_rate', 1.0) or 1.0)
 
-        receipts_for_plan = [r for r in receipts if r.batch_id == p.batch_id and r.mineral_type in aliases]
-        deductions_for_plan = [d for d in deductions if getattr(d.plan, 'id', None) == p.id]
-        allocations_for_plan = [a for a in allocations if a.batch_id == p.batch_id]
+        # Sum all RWF amounts directly (no currency conversion)
+        total_paid = float(sum(r.amount_rwf or 0 for r in receipts if r.batch_id == p.batch_id and r.mineral_type in aliases))
+        total_allocated = float(sum(a.applied_amount_rwf or 0 for a in allocations if a.batch_id == p.batch_id))
+        total_deducted = float(sum(d.amount_rwf or 0 for d in deductions if d.batch_id == p.batch_id))
 
-        paid = float(sum(_to_base_currency(r.amount_input, r.amount_rwf, r.currency, r.exchange_rate, base_currency, base_rate) for r in receipts_for_plan))
-        paid += float(sum(_to_base_currency(a.applied_amount_rwf, a.applied_amount_rwf, 'RWF', 1.0, base_currency, base_rate) for a in allocations_for_plan))
-        deducted = float(sum(_to_base_currency(d.amount_input, d.amount_rwf, d.currency, d.exchange_rate, base_currency, base_rate) for d in deductions_for_plan))
         planned_total = float(p.total_expected_amount or 0.0)
-        remaining = float(max(planned_total - deducted - paid, 0.0))
+        remaining_rwf = float(max(planned_total - total_paid - total_allocated - total_deducted, 0.0))
+        
+        # For display: convert RWF to USD if needed
+        remaining_display = remaining_rwf
+        if base_currency == 'USD' and base_rate > 0:
+            remaining_display = remaining_rwf / base_rate
+
         # Keep the customer visible even when the agreement is still draft/zero,
         # but only expose payment-selectable rows when there is real remaining debt.
-        row_visible = remaining > 0.01 or planned_total <= 0.01
+        row_visible = remaining_rwf > 0.01 or planned_total <= 0.01
 
         key = (canonical_mineral, p.customer, p.batch_id)
         rows_map[key] = {
@@ -4472,8 +4536,8 @@ def _batch_debt_options():
             'customer': p.customer,
             'batch_id': p.batch_id,
             'bulk_plan_id': int(p.id),
-            'remaining': remaining,
-            'remaining_rwf': float(remaining * base_rate if base_currency == 'USD' else remaining),
+            'remaining': remaining_display,
+            'remaining_rwf': remaining_rwf,
             'currency': base_currency,
             'exchange_rate': base_rate,
             'visible': row_visible,
@@ -4488,23 +4552,6 @@ def _batch_debt_options():
         if canonical_mineral:
             plan_map[(canonical_mineral, p.batch_id)] = p
 
-    # Deductions are linked to BulkOutputPlan via batch_id -> plan.id, not to a customer column.
-    deductions = (
-        BatchDeduction.query
-        .join(BulkOutputPlan, BatchDeduction.batch_id == BulkOutputPlan.id)
-        .filter(
-            BulkOutputPlan.customer == customer_name,
-            BulkOutputPlan.mineral_type.in_(aliases),
-        )
-        .all()
-    )
-    deductions_by_batch: dict[str, list[BatchDeduction]] = {}
-    for deduction in deductions:
-        batch_code = getattr(deduction.plan, 'batch_id', None)
-        if not batch_code:
-            continue
-        deductions_by_batch.setdefault(str(batch_code), []).append(deduction)
-
     for row in rows_map.values():
         p = plan_map.get((row['mineral_type'], row['batch_id']))
         if p:
@@ -4516,13 +4563,6 @@ def _batch_debt_options():
             row['moyenne'] = 0.0
             row['moyenne_nb'] = 0.0
             row['qty'] = 0.0
-
-    for row in rows:
-        p = plan_map.get((row['mineral_type'], row['batch_id']))
-        if not p:
-            continue
-        batch_deductions = deductions_by_batch.get(str(row['batch_id']), [])
-        row['deduction_rwf'] = float(sum(_to_base_currency(d.amount_input, d.amount_rwf, d.currency, d.exchange_rate, p.currency, p.exchange_rate) for d in batch_deductions))
 
     rows.sort(key=lambda x: (x['customer'].lower(), x['mineral_type'], x['batch_id']))
     customer_info: dict[str, dict] = {}
@@ -4552,6 +4592,7 @@ def _batch_debt_options():
             'balance_label': ' | '.join(balance_parts) if balance_parts else '0.00 RWF',
         })
     return customers, rows
+
 
 
 @core_bp.route('/receipts/update_debts', methods=['GET', 'POST'])
@@ -4608,14 +4649,15 @@ def update_debts():
             return redirect(url_for('core.update_debts'))
 
         outstanding = float(selected.get('remaining') or 0.0)
-        if outstanding <= 0 and receipt_type != CustomerReceiptType.ADVANCE.value:
+        outstanding_rwf = float(selected.get('remaining_rwf') or 0.0)
+        if outstanding_rwf <= 0 and receipt_type != CustomerReceiptType.ADVANCE.value:
             _flash_and_notify('This customer batch has no outstanding balance. Use advance-only if you are recording money before final agreement.', 'warning')
             return redirect(url_for('core.update_debts'))
-        if outstanding > 0 and amount_rwf - outstanding > 0.01:
+        if outstanding_rwf > 0 and amount_rwf - outstanding_rwf > 0.01:
             _flash_and_notify('Payment exceeds outstanding amount for selected batch.', 'danger')
             return redirect(url_for('core.update_debts'))
 
-        if receipt_type == CustomerReceiptType.ADVANCE.value and outstanding <= 0:
+        if receipt_type == CustomerReceiptType.ADVANCE.value and outstanding_rwf <= 0:
             boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
             advance_row = None
             try:

@@ -806,6 +806,7 @@ class UnifiedSupplierAdvance(db.Model):
         id = db.Column(db.Integer, primary_key=True)
         supplier_name = db.Column(db.String(120), nullable=False, index=True)
         supplier_name_norm = db.Column(db.String(140), nullable=False, index=True)
+        supplier_slug = db.Column(db.String(140), nullable=True, index=True, unique=False)
 
         source_mineral_type = db.Column(db.String(20), nullable=True, index=True)
         source_payment_id = db.Column(db.Integer, nullable=True, index=True)

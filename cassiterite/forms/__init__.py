@@ -1,5 +1,6 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField, FloatField, DateField, SubmitField, SelectField, TextAreaField, SelectMultipleField
+from wtforms.fields import DateTimeLocalField
 from wtforms.validators import DataRequired, InputRequired, Length, Optional, ValidationError, NumberRange
 
 class CassiteriteWorkerPaymentForm(FlaskForm):
@@ -77,8 +78,8 @@ class AddCassiteriteStockForm(FlaskForm):
     tc = FloatField('TC', validators=[Optional()])
     exchange = FloatField('Exchange Rate', validators=[Optional()])
     transport_tag = FloatField('Transport/Tag Per Kg', validators=[Optional()])
-    rma = FloatField('RMA', validators=[Optional()])
-    inkomane = FloatField('Inkomane', validators=[Optional()])
+    rma_default = FloatField('RMA DEFAULT', validators=[Optional()])
+    inkomane_default = FloatField('Inkomane DEFAULT ', validators=[Optional()])
     advance_payment_ids = SelectMultipleField('Use supplier advances', choices=[], coerce=int, validators=[Optional()])
     submit = SubmitField('Add Cassiterite Stock')
 
@@ -162,6 +163,11 @@ class CassiteriteSupplierPaymentForm(FlaskForm):
         'Exchange Rate (RWF per currency unit)',
         validators=[Optional(), NumberRange(min=0.0001)],
         default=1.0
+    )
+    paid_at = DateTimeLocalField(
+        'Payment Date / Time',
+        format='%Y-%m-%dT%H:%M',
+        validators=[Optional()],
     )
     method = SelectField('Payment Method', 
                         choices=[('cash', 'Cash'), ('bank', 'Bank Transfer'), ('momo', 'Mobile Money')],

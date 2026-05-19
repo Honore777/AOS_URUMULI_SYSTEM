@@ -174,7 +174,7 @@ class CassiteriteStock(db.Model):
             self.amount = ((self.u_price or 0) - (self.tc or 0)) / 1000
             self.amount_with_taxes = (self.amount or 0) * (self.exchange or 0) * (self.input_kg or 0)
             self.tot_amount_tag = (self.transport_tag or 0) * (self.input_kg or 0)
-            rra_base = (((self.lme or 0) * (self.percentage or 0) / 100) - 500) / 1000
+            rra_base = (((self.lme or 0) * (self.percentage or 0) / 100) - 100) / 1000
             self.rra_3_percent = (rra_base * (self.exchange or 0) * (self.input_kg or 0) * 3) / 100
             self.balance_to_pay = (self.amount_with_taxes or 0) - (self.tot_amount_tag or 0) - (self.rma or 0) - (self.inkomane or 0) - (self.rra_3_percent or 0)
             self.net_balance = self.balance_to_pay

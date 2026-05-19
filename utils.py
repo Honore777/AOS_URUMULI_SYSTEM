@@ -28,6 +28,29 @@ def normalize_counterparty_name(name: str) -> str:
     return ' '.join(raw.split())
 
 
+def generate_supplier_slug(name: str) -> str:
+    """Generate a URL-safe slug from supplier name.
+    
+    Examples:
+    - 'HARERIMANA ARSENE' -> 'harerimana-arsene'
+    - '/COMIKA/SEZEKEYE' -> 'comika-sezekeye'
+    - 'Jean-Paul O\'Brien' -> 'jean-paul-obrien'
+    """
+    if not name:
+        return ''
+    # Lowercase and process
+    slug = (name or '').strip().lower()
+    # Replace slashes and spaces with hyphens FIRST
+    slug = re.sub(r'[\s/]+', '-', slug)
+    # Remove other special chars (keep only alphanumeric and hyphens)
+    slug = re.sub(r'[^a-z0-9\-]', '', slug)
+    # Collapse multiple hyphens
+    slug = re.sub(r'-+', '-', slug)
+    # Remove leading/trailing hyphens
+    slug = slug.strip('-')
+    return slug
+
+
 def close_name_matches(input_name: str, candidates: list[str], limit: int = 5, cutoff: float = 0.86) -> list[str]:
     needle = normalize_counterparty_name(input_name)
     if not needle:
@@ -205,6 +228,177 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
         return max(float(remaining or 0.0), 0.0)
     except Exception:
         return 0.0
+
+
+def calculate_consolidated_supplier_remaining_balances(supplier_names):
+    """Return remaining balances for many suppliers in one batch.
+
+    Keys in the returned mapping are normalized supplier names. The helper
+    uses grouped queries for the common path and falls back to the single
+    supplier helper for any names that do not match the grouped queries.
+    """
+    normalized_names = [
+        ' '.join((name or '').strip().lower().split())
+        for name in (supplier_names or [])
+    ]
+    normalized_names = [name for name in normalized_names if name]
+    if not normalized_names:
+        return {}
+
+    unique_names = sorted(set(normalized_names))
+
+    try:
+        from config import db
+        from copper.models import CopperStock, SupplierPayment as CopperSupplierPayment, CopperAdvanceAllocation
+        from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
+        from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+        from sqlalchemy import func, or_
+
+        copper_supplier_expr = func.lower(func.trim(CopperStock.supplier))
+        cass_supplier_expr = func.lower(func.trim(CassiteriteStock.supplier))
+        copper_payment_supplier_expr = func.lower(func.trim(func.coalesce(CopperStock.supplier, CopperSupplierPayment.supplier_name)))
+        cass_payment_supplier_expr = func.lower(func.trim(func.coalesce(CassiteriteStock.supplier, CassiteriteSupplierPayment.supplier_name)))
+
+        stock_totals = {}
+        allocation_totals = {}
+        paid_totals = {}
+        refund_totals = {}
+
+        for supplier_norm, stock_debt in (
+            db.session.query(
+                copper_supplier_expr.label('supplier_norm'),
+                func.coalesce(func.sum(CopperStock.net_balance), 0).label('stock_debt'),
+            )
+            .filter(
+                CopperStock.is_deleted.is_(False),
+                copper_supplier_expr.in_(unique_names),
+            )
+            .group_by(copper_supplier_expr)
+            .all()
+        ):
+            stock_totals[supplier_norm] = float(stock_totals.get(supplier_norm, 0.0) + float(stock_debt or 0.0))
+
+        for supplier_norm, stock_debt in (
+            db.session.query(
+                cass_supplier_expr.label('supplier_norm'),
+                func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0).label('stock_debt'),
+            )
+            .filter(
+                CassiteriteStock.is_deleted.is_(False),
+                cass_supplier_expr.in_(unique_names),
+            )
+            .group_by(cass_supplier_expr)
+            .all()
+        ):
+            stock_totals[supplier_norm] = float(stock_totals.get(supplier_norm, 0.0) + float(stock_debt or 0.0))
+
+        for supplier_norm, allocation_total in (
+            db.session.query(
+                copper_supplier_expr.label('supplier_norm'),
+                func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0).label('allocation_total'),
+            )
+            .join(CopperStock, CopperStock.id == CopperAdvanceAllocation.stock_id)
+            .filter(
+                CopperStock.is_deleted.is_(False),
+                copper_supplier_expr.in_(unique_names),
+            )
+            .group_by(copper_supplier_expr)
+            .all()
+        ):
+            allocation_totals[supplier_norm] = float(allocation_totals.get(supplier_norm, 0.0) + float(allocation_total or 0.0))
+
+        for supplier_norm, allocation_total in (
+            db.session.query(
+                cass_supplier_expr.label('supplier_norm'),
+                func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0).label('allocation_total'),
+            )
+            .join(CassiteriteStock, CassiteriteStock.id == CassiteriteAdvanceAllocation.stock_id)
+            .filter(
+                CassiteriteStock.is_deleted.is_(False),
+                cass_supplier_expr.in_(unique_names),
+            )
+            .group_by(cass_supplier_expr)
+            .all()
+        ):
+            allocation_totals[supplier_norm] = float(allocation_totals.get(supplier_norm, 0.0) + float(allocation_total or 0.0))
+
+        for supplier_norm, paid_total in (
+            db.session.query(
+                copper_payment_supplier_expr.label('supplier_norm'),
+                func.coalesce(func.sum(func.coalesce(CopperSupplierPayment.amount_rwf, CopperSupplierPayment.amount)), 0).label('paid_total'),
+            )
+            .join(CopperStock, CopperStock.id == CopperSupplierPayment.stock_id, isouter=True)
+            .filter(
+                CopperSupplierPayment.is_deleted.is_(False),
+                CopperSupplierPayment.is_advance.is_(False),
+                copper_payment_supplier_expr.in_(unique_names),
+            )
+            .group_by(copper_payment_supplier_expr)
+            .all()
+        ):
+            paid_totals[supplier_norm] = float(paid_totals.get(supplier_norm, 0.0) + float(paid_total or 0.0))
+
+        for supplier_norm, paid_total in (
+            db.session.query(
+                cass_payment_supplier_expr.label('supplier_norm'),
+                func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0).label('paid_total'),
+            )
+            .join(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id, isouter=True)
+            .filter(
+                CassiteriteSupplierPayment.is_deleted.is_(False),
+                CassiteriteSupplierPayment.is_advance.is_(False),
+                cass_payment_supplier_expr.in_(unique_names),
+            )
+            .group_by(cass_payment_supplier_expr)
+            .all()
+        ):
+            paid_totals[supplier_norm] = float(paid_totals.get(supplier_norm, 0.0) + float(paid_total or 0.0))
+
+        unified_rows = (
+            db.session.query(
+                UnifiedSupplierAdvance.supplier_name_norm,
+                UnifiedSupplierAdvance.amount_rwf,
+            )
+            .filter(
+                UnifiedSupplierAdvance.is_deleted.is_(False),
+                UnifiedSupplierAdvance.supplier_name_norm.in_(unique_names),
+            )
+            .all()
+        )
+        for supplier_norm, amount_rwf in unified_rows:
+            value = float(amount_rwf or 0.0)
+            if value > 0:
+                paid_totals[supplier_norm] = float(paid_totals.get(supplier_norm, 0.0) + value)
+            elif value < 0:
+                refund_totals[supplier_norm] = float(refund_totals.get(supplier_norm, 0.0) + abs(value))
+
+        remaining_map = {}
+        for supplier_norm in unique_names:
+            stock_total = float(stock_totals.get(supplier_norm, 0.0))
+            allocation_total = float(allocation_totals.get(supplier_norm, 0.0))
+            paid_total = float(paid_totals.get(supplier_norm, 0.0))
+            refund_debit = float(refund_totals.get(supplier_norm, 0.0))
+            remaining_map[supplier_norm] = max(stock_total + refund_debit - allocation_total - paid_total, 0.0)
+
+        missing = [name for name in unique_names if name not in remaining_map]
+        for name in missing:
+            remaining_map[name] = float(calculate_consolidated_supplier_remaining_balance(name) or 0.0)
+
+        return remaining_map
+    except Exception:
+        return {name: float(calculate_consolidated_supplier_remaining_balance(name) or 0.0) for name in unique_names}
+
+
+def make_slug(name: str) -> str:
+    """Return a URL-friendly slug for supplier names.
+
+    Uses the same normalization rules as `normalize_counterparty_name` but
+    joins words with hyphens so slugs are safe in URLs (no spaces or slashes).
+    """
+    normalized = normalize_counterparty_name(name)
+    if not normalized:
+        return ''
+    return '-'.join(normalized.split())
 
 
 def trace_time(func):

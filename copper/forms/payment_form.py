@@ -4,6 +4,7 @@ For recording supplier payments
 """
 from flask_wtf import FlaskForm
 from wtforms import SelectField, FloatField, StringField, TextAreaField, SubmitField
+from wtforms.fields import DateTimeLocalField
 from wtforms.validators import DataRequired, InputRequired, NumberRange, Optional
 
 
@@ -47,6 +48,11 @@ class SupplierPaymentForm(FlaskForm):
         'Exchange Rate (RWF per currency unit)',
         validators=[Optional(), NumberRange(min=0.0001)],
         default=1.0,
+    )
+    paid_at = DateTimeLocalField(
+        'Payment Date / Time',
+        format='%Y-%m-%dT%H:%M',
+        validators=[Optional()],
     )
     method = SelectField(
         'Payment Method',

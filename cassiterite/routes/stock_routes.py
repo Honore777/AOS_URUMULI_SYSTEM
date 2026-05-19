@@ -197,6 +197,11 @@ def add_stock():
                 return redirect(url_for('cassiterite.add_stock'))
 
             # Create new stock
+            rma_total = (form.rma_default.data or 0) * (form.input_kg.data or 0)
+            inkomane_total = (
+                    (form.inkomane_default.data or 0)
+                    * (form.input_kg.data or 0)
+                )
             stock = CassiteriteStock(
                 date=form.date.data,
                 voucher_no=form.voucher_no.data,
@@ -209,8 +214,8 @@ def add_stock():
                 tc=form.tc.data,
                 exchange=form.exchange.data,
                 transport_tag=form.transport_tag.data,
-                rma=form.rma.data,
-                inkomane=form.inkomane.data
+                rma=rma_total,
+                inkomane=inkomane_total
             )
 
             # Run DB-side calculations on the new stock
@@ -897,7 +902,7 @@ def cassiterite_filter_stocks():
         offset = (page - 1) * per_page
 
         # Build SQL WHERE fragments for stocks and outputs based on filters
-        stock_where = '1=1'
+        stock_where = 's.is_deleted = FALSE'
         output_where = '1=1'
         params = {'per_page': per_page, 'offset': offset}
         if start_date:
@@ -991,7 +996,7 @@ FROM (
             timings['page_sql'] = 0.0
         except Exception:
             logger.exception('cassiterite.filter_stocks: page SQL failed; falling back to ORM paginate')
-            stocks_local_q = stocks_query.filter(CassiteriteStock.local_balance > 0)
+            stocks_local_q = stocks_query.filter(CassiteriteStock.is_deleted.is_(False), CassiteriteStock.local_balance > 0)
             stocks_pagination = stocks_local_q.paginate(page=page, per_page=per_page, error_out=False)
             filtered_stocks = stocks_pagination.items
             page_stock_ids = [s.id for s in filtered_stocks]

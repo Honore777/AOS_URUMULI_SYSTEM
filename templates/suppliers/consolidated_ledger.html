@@ -19,7 +19,7 @@
                 <a href="{{ url_for('core.boss_dashboard') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 shadow-sm">
                     Subira inyuma
                 </a>
-                <a href="{{ url_for('core.supplier_settlement_statement', supplier_norm=supplier_norm) }}" target="_blank" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 shadow-sm">
+                <a href="{{ url_for('core.supplier_settlement_statement', supplier_norm=supplier_slug) }}" target="_blank" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 shadow-sm">
                     Urutonde rw'ibyabaye mukwishyura
                 </a>
                 <a href="{{ url_for('entry_point') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-900 text-white font-semibold hover:bg-slate-800 shadow-sm">
@@ -80,13 +80,13 @@
                 <p class="mt-1 text-sm text-slate-500">Igitabo mbaruramari.</p>
                 <div class="mt-4 flex flex-col gap-3">
                     <div class="flex flex-wrap gap-2">
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='30d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '30d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 30 days</a>
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='90d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '90d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 90 days</a>
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='month') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'month' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">This month</a>
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='all') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'all' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">All time</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug, preset='30d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '30d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 30 days</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug, preset='90d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '90d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 90 days</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug, preset='month') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'month' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">This month</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug, preset='all') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'all' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">All time</a>
                     </div>
 
-                    <form method="GET" action="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm) }}" class="grid grid-cols-1 gap-3 md:grid-cols-5">
+                    <form method="GET" action="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug) }}" class="grid grid-cols-1 gap-3 md:grid-cols-5">
                         <div>
                             <label class="block text-xs font-semibold text-slate-600">From</label>
                             <input type="date" name="from" value="{{ filter_from.strftime('%Y-%m-%d') if filter_from else '' }}" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />

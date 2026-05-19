@@ -10,6 +10,18 @@
 <body class="bg-gray-50">
 <div class="max-w-2xl mx-auto py-12 px-4">
     <h1 class="text-3xl font-bold text-gray-900 mb-8">Add Cassiterite Stock</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="mb-6 space-y-2">
+                {% for category, message in messages %}
+                    <div class="p-4 rounded-lg border shadow-sm {% if category in ['success', 'info'] %}bg-green-100 text-green-800 border-green-200{% elif category == 'warning' %}bg-yellow-100 text-yellow-900 border-yellow-200{% else %}bg-red-100 text-red-800 border-red-200{% endif %}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
     
     <form method="POST" class="bg-white shadow-md rounded-lg p-8 space-y-6">
         {{ form.hidden_tag() }}
@@ -162,11 +174,11 @@
                 {% endif %}
             </div>
             <div>
-                {{ form.rma.label(class="block text-gray-700 font-medium mb-2") }}
-                {{ form.rma(class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500") }}
-                {% if form.rma.errors %}
+                {{ form.rma_default.label(class="block text-gray-700 font-medium mb-2") }}
+                {{ form.rma_default(class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500") }}
+                {% if form.rma_default.errors %}
                     <div class="text-red-500 text-sm mt-1">
-                        {% for error in form.rma.errors %}
+                        {% for error in form.rma_default.errors %}
                             <p>• {{ error }}</p>
                         {% endfor %}
                     </div>
@@ -175,11 +187,11 @@
         </div>
         
         <div>
-            {{ form.inkomane.label(class="block text-gray-700 font-medium mb-2") }}
-            {{ form.inkomane(class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500") }}
-            {% if form.inkomane.errors %}
+            {{ form.inkomane_default.label(class="block text-gray-700 font-medium mb-2") }}
+            {{ form.inkomane_default(class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500") }}
+            {% if form.inkomane_default.errors %}
                 <div class="text-red-500 text-sm mt-1">
-                    {% for error in form.inkomane.errors %}
+                    {% for error in form.inkomane_default.errors %}
                         <p>• {{ error }}</p>
                     {% endfor %}
                 </div>

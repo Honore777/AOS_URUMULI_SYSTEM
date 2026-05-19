@@ -15,7 +15,7 @@ from copper import copper_bp
 from core.auth import role_required
 from flask import request
 from sqlalchemy import func, or_
-from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance
+from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -416,6 +416,7 @@ def pay_supplier():
         input_amount = float(form.amount.data or 0)
         currency = (form.currency.data or 'RWF').upper()
         exchange_rate_input = form.exchange_rate.data
+        requested_paid_at = form.paid_at.data or datetime.utcnow()
         try:
             amount_rwf, exchange_rate = _normalize_amount_to_rwf(input_amount, currency, exchange_rate_input)
         except ValueError as exc:
@@ -728,8 +729,12 @@ def pay_supplier():
         total_paid = float(r.get('total_paid') or 0.0)
         remaining = float(r.get('remaining') or 0.0)
         latest_paid_at = r.get('latest_paid_at')
+        supplier_norm = ' '.join((supplier_name or '').strip().lower().split())
+        supplier_slug = '-'.join(supplier_norm.split()) if supplier_norm else ''
         supplier_summaries.append({
             'supplier': supplier_name,
+            'supplier_norm': supplier_norm,
+            'supplier_slug': supplier_slug,
             'vouchers': r.get('minerals') or '',
             'net_balance': net_balance,
             'total_paid': total_paid,
@@ -799,13 +804,14 @@ def pay_supplier_advance():
     # Step 2: Build supplier summary with CORRECT "owed" = net_balance - allocations
     supplier_summary_map = {}
     supplier_names = sorted({(r.supplier or '').strip() for r in stock_rows if (r.supplier or '').strip()})
+    remaining_map = calculate_consolidated_supplier_remaining_balances(supplier_names)
     for row in stock_rows:
         key = (row.supplier or '').strip()
         if not key:
             continue
         summary = supplier_summary_map.setdefault(key, {'supplier': key, 'owed': 0.0, 'paid': 0.0, 'remaining': 0.0})
         # Update: Calculate remaining balance using consolidated supplier balance
-        net_owed = float(calculate_consolidated_supplier_remaining_balance(key) or 0.0)
+        net_owed = float(remaining_map.get(' '.join(key.lower().split()), 0.0))
         summary['owed'] += net_owed
 
     # Step 3: Add only SETTLEMENT payments (NOT advances) to "paid"
@@ -834,7 +840,7 @@ def pay_supplier_advance():
 
     # Step 4: Calculate remaining
     for summary in supplier_summary_map.values():
-        summary['remaining'] = float(calculate_consolidated_supplier_remaining_balance(summary['supplier']) or 0.0)
+        summary['remaining'] = float(remaining_map.get(' '.join(summary['supplier'].lower().split()), 0.0))
 
     supplier_names = sorted({(r.supplier or '').strip() for r in stock_rows if (r.supplier or '').strip()})
     form.existing_supplier.choices = [
@@ -858,6 +864,7 @@ def pay_supplier_advance():
         input_amount = float(form.amount.data or 0)
         currency = (form.currency.data or 'RWF').upper()
         exchange_rate_input = form.exchange_rate.data
+        requested_paid_at = form.paid_at.data or datetime.utcnow()
         try:
             amount_rwf, exchange_rate = _normalize_amount_to_rwf(input_amount, currency, exchange_rate_input)
         except ValueError as exc:
@@ -907,6 +914,7 @@ def pay_supplier_advance():
             'exchange_rate': exchange_rate,
             'amount_input': input_amount,
             'amount_rwf': amount_rwf,
+            'paid_at': requested_paid_at.strftime('%Y-%m-%dT%H:%M'),
         }
         review = PaymentReview(
             mineral_type='coltan',
@@ -940,7 +948,7 @@ def pay_supplier_advance():
                 (
                     '<p>Nyakubahwa Muyobozi,</p>'
                     f'<p>Umucungamutungo {getattr(current_user, "username", "Unknown")} ({getattr(current_user, "email", "Unknown")}) yasabye kwemeza advance supplier:</p>'
-                    f'<p>Supplier: {supplier}, Amafaranga: {amount_rwf:,.2f} RWF ({input_amount:,.2f} {currency}), Uburyo: {form.method.data}, Reference: {form.reference.data}, Impamvu: {form.note.data}</p>'
+                    f'<p>Supplier: {supplier}, Amafaranga: {amount_rwf:,.2f} RWF ({input_amount:,.2f} {currency}), Itariki: {requested_paid_at.strftime("%Y-%m-%d %H:%M")}, Uburyo: {form.method.data}, Reference: {form.reference.data}, Impamvu: {form.note.data}</p>'
                     '<p>Murakoze,<br>Urumuli Smart System</p>'
                 ),
                 boss_email,

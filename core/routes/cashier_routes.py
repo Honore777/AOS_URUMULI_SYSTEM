@@ -74,6 +74,27 @@ def _money_from_payload(payload: dict, review=None):
     return currency, float(exchange_rate), float(amount_input), float(amount_rwf), float(amount_cash)
 
 
+def _parse_request_datetime(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        raw_value = value.strip()
+        if not raw_value:
+            return None
+        for fmt in ('%Y-%m-%dT%H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M'):
+            try:
+                return datetime.strptime(raw_value, fmt)
+            except Exception:
+                continue
+        try:
+            return datetime.fromisoformat(raw_value)
+        except Exception:
+            return None
+    return None
+
+
 def _cashier_accounts_context():
     accounts = CashAccount.query.order_by(CashAccount.name).all()
     recon_map = {}
@@ -1932,6 +1953,7 @@ def cashier_disburse_payment_review(review_id: int):
                             raise ValueError('Stock not found for supplier settlement request.')
                         if float(amount_rwf) > float(stock.remaining_to_pay() or 0.0):
                             raise ValueError('Requested payment now exceeds remaining supplier debt.')
+                        requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                         if supplier_id is None:
                             supplier_id = _resolve_copper_supplier_id(stock.supplier)
                         payment = SupplierPayment(
@@ -1950,6 +1972,7 @@ def cashier_disburse_payment_review(review_id: int):
                             is_advance=False,
                             advance_remaining=0.0,
                         )
+                        payment.paid_at = requested_paid_at
                         db.session.add(payment)
                         db.session.flush()
                         review.payment_id = int(payment.id)
@@ -1987,8 +2010,7 @@ def cashier_disburse_payment_review(review_id: int):
                             db.session.flush()
                             logger.info(f"Generated receipt {receipt_number} for supplier payment (payment_id={payment.id})")
                         except Exception as receipt_err:
-                            logger.error(f"Failed to generate supplier receipt: {receipt_err}")
-                            db.session.rollback()
+                            logger.exception("Failed to generate supplier receipt: %s", receipt_err)
 
                         boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
                         for (boss_id,) in boss_rows:
@@ -2003,6 +2025,7 @@ def cashier_disburse_payment_review(review_id: int):
                                 related_id=int(review.id),
                             )
                     else:
+                        requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                         if supplier_id is None:
                             supplier_id = _resolve_copper_supplier_id(supplier_name)
                         payment = SupplierPayment(
@@ -2021,6 +2044,7 @@ def cashier_disburse_payment_review(review_id: int):
                             is_advance=True,
                             advance_remaining=float(amount_rwf or 0.0),
                         )
+                        payment.paid_at = requested_paid_at
                         db.session.add(payment)
                         db.session.flush()
                         review.payment_id = int(payment.id)
@@ -2058,8 +2082,7 @@ def cashier_disburse_payment_review(review_id: int):
                             db.session.flush()
                             logger.info(f"Generated receipt {receipt_number} for supplier advance (payment_id={payment.id})")
                         except Exception as receipt_err:
-                            logger.error(f"Failed to generate supplier advance receipt: {receipt_err}")
-                            db.session.rollback()
+                            logger.exception("Failed to generate supplier advance receipt: %s", receipt_err)
 
                         try:
                             from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
@@ -2162,6 +2185,7 @@ def cashier_disburse_payment_review(review_id: int):
                             raise ValueError('Stock not found for supplier settlement request.')
                         if float(amount_rwf) > float(stock.remaining_to_pay() or 0.0):
                             raise ValueError('Requested payment now exceeds remaining supplier debt.')
+                        requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                         if supplier_id is None:
                             supplier_id = _resolve_cass_supplier_id(stock.supplier)
                         payment = CassiteriteSupplierPayment(
@@ -2180,6 +2204,7 @@ def cashier_disburse_payment_review(review_id: int):
                             is_advance=False,
                             advance_remaining=0.0,
                         )
+                        payment.paid_at = requested_paid_at
                         db.session.add(payment)
                         db.session.flush()
                         review.payment_id = int(payment.id)
@@ -2217,9 +2242,9 @@ def cashier_disburse_payment_review(review_id: int):
                             db.session.flush()
                             logger.info(f"Generated receipt {receipt_number} for cassiterite supplier payment (payment_id={payment.id})")
                         except Exception as receipt_err:
-                            logger.error(f"Failed to generate cassiterite supplier receipt: {receipt_err}")
-                            db.session.rollback()
+                            logger.exception("Failed to generate cassiterite supplier receipt: %s", receipt_err)
                     else:
+                        requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                         if supplier_id is None:
                             supplier_id = _resolve_cass_supplier_id(supplier_name)
                         payment = CassiteriteSupplierPayment(
@@ -2238,6 +2263,7 @@ def cashier_disburse_payment_review(review_id: int):
                             is_advance=True,
                             advance_remaining=amount_rwf,
                         )
+                        payment.paid_at = requested_paid_at
                         db.session.add(payment)
                         db.session.flush()
                         review.payment_id = int(payment.id)
@@ -2275,8 +2301,7 @@ def cashier_disburse_payment_review(review_id: int):
                             db.session.flush()
                             logger.info(f"Generated receipt {receipt_number} for cassiterite supplier advance (payment_id={payment.id})")
                         except Exception as receipt_err:
-                            logger.error(f"Failed to generate cassiterite supplier advance receipt: {receipt_err}")
-                            db.session.rollback()
+                            logger.exception("Failed to generate cassiterite supplier advance receipt: %s", receipt_err)
 
                         try:
                             from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
@@ -2413,8 +2438,7 @@ def cashier_disburse_payment_review(review_id: int):
                     
                     logger.info(f"Generated receipt {receipt_number} for worker {worker_name} (payment_id={payment.id})")
                 except Exception as receipt_err:
-                    logger.error(f"Failed to generate receipt for worker payment: {receipt_err}")
-                    db.session.rollback()
+                    logger.exception("Failed to generate receipt for worker payment: %s", receipt_err)
                     # Continue anyway - don't fail the entire disbursement
 
         review.disbursement_status = 'DISBURSED'

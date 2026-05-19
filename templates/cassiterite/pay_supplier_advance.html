@@ -84,6 +84,13 @@
                     </div>
                 </div>
 
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">{{ form.paid_at.label }}</label>
+                        {{ form.paid_at(class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2", type="datetime-local") }}
+                    </div>
+                </div>
+
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-gray-700 font-medium mb-1">{{ form.reference.label }}</label>

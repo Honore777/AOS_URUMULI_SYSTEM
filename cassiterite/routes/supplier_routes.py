@@ -11,7 +11,7 @@ from core.auth import role_required
 from flask import url_for, flash
 from config import db
 from sqlalchemy import func, or_
-from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance
+from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -216,6 +216,7 @@ def pay_supplier():
 		input_amount = float(form.amount.data or 0)
 		currency = (form.currency.data or 'RWF').upper()
 		exchange_rate_input = form.exchange_rate.data
+		requested_paid_at = form.paid_at.data or datetime.utcnow()
 		try:
 			amount_rwf, exchange_rate = _normalize_amount_to_rwf(input_amount, currency, exchange_rate_input)
 		except ValueError as exc:
@@ -392,6 +393,7 @@ def pay_supplier():
 	# per-supplier receipt links if needed (restore regression where they disappeared).
 	page_supplier_names = [((r.supplier or '').strip()) for r in rows if (r.supplier or '').strip()]
 	payments_map = {}
+	remaining_map = calculate_consolidated_supplier_remaining_balances(page_supplier_names)
 	if page_supplier_names:
 		payment_rows = (
 			db.session.query(CassiteriteSupplierPayment, CassiteriteStock.supplier.label('stock_supplier'))
@@ -417,7 +419,7 @@ def pay_supplier():
 		supplier_name = (r.supplier or '').strip()
 		net_balance = float(r.net_balance or 0.0)
 		total_paid = float(r.total_paid or 0.0)
-		remaining = float(calculate_consolidated_supplier_remaining_balance(supplier_name) or 0.0)
+		remaining = float(remaining_map.get(' '.join(supplier_name.lower().split()), 0.0) if supplier_name else 0.0)
 		latest_paid_at = getattr(r, 'latest_paid_at', None)
 		supplier_summaries.append({
 			'supplier': supplier_name,
@@ -498,6 +500,7 @@ def pay_supplier_advance():
 	stock_ids = [r.id for r in stock_rows]
 	supplier_summary_map = {}
 	supplier_names = sorted({(row.supplier or '').strip() for row in stock_rows if (row.supplier or '').strip()})
+	remaining_map = calculate_consolidated_supplier_remaining_balances(supplier_names)
 	for row in stock_rows:
 		key = (row.supplier or '').strip()
 		if not key:
@@ -544,7 +547,7 @@ def pay_supplier_advance():
 			supplier_summary_map[key]['paid'] += float(payment.amount_rwf or payment.amount or 0)
 
 	for summary in supplier_summary_map.values():
-		summary['remaining'] = float(calculate_consolidated_supplier_remaining_balance(summary['supplier']) or 0.0)
+		summary['remaining'] = float(remaining_map.get(' '.join(summary['supplier'].lower().split()), 0.0))
 
 	form.existing_supplier.choices = [
 		('', 'Select existing supplier'),
@@ -567,6 +570,7 @@ def pay_supplier_advance():
 		input_amount = float(form.amount.data or 0)
 		currency = (form.currency.data or 'RWF').upper()
 		exchange_rate_input = form.exchange_rate.data
+		requested_paid_at = form.paid_at.data or datetime.utcnow()
 		try:
 			amount_rwf, exchange_rate = _normalize_amount_to_rwf(input_amount, currency, exchange_rate_input)
 		except ValueError as exc:
@@ -616,6 +620,7 @@ def pay_supplier_advance():
 			'exchange_rate': exchange_rate,
 			'amount_input': input_amount,
 			'amount_rwf': amount_rwf,
+			'paid_at': requested_paid_at.strftime('%Y-%m-%dT%H:%M'),
 		}
 		review = PaymentReview(
 			mineral_type='cassiterite',
@@ -649,7 +654,7 @@ def pay_supplier_advance():
 				(
 					'<p>Nyakubahwa Muyobozi,</p>'
 					f'<p>Umucungamutungo {getattr(current_user, "username", "Unknown")} ({getattr(current_user, "email", "Unknown")}) yasabye kwemeza advance supplier:</p>'
-					f'<p>Supplier: {supplier}, Amafaranga: {amount_rwf:,.2f} RWF ({input_amount:,.2f} {currency}), Uburyo: {form.method.data}, Reference: {form.reference.data}, Impamvu: {form.note.data}</p>'
+					f'<p>Supplier: {supplier}, Amafaranga: {amount_rwf:,.2f} RWF ({input_amount:,.2f} {currency}), Itariki: {requested_paid_at.strftime("%Y-%m-%d %H:%M")}, Uburyo: {form.method.data}, Reference: {form.reference.data}, Impamvu: {form.note.data}</p>'
 					'<p>Murakoze,<br>Urumuli Smart System</p>'
 				),
 				boss_email,
