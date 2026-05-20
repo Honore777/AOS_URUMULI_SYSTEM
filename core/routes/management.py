@@ -1874,7 +1874,7 @@ def boss_dashboard_data():
             plans_q = plans_q.filter(BulkOutputPlan.created_at >= datetime.combine(d_from, time.min))
         if d_to:
             plans_q = plans_q.filter(BulkOutputPlan.created_at <= datetime.combine(d_to, time.max))
-        copper_total_sales = plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0
+        copper_total_sales = float(plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0)
 
         # Stock-side: restrict to lots in the date window (original supplier
         # cost basis is by stock.date).
@@ -1885,16 +1885,16 @@ def boss_dashboard_data():
             stock_q = stock_q.filter(CopperStock.date <= d_to)
 
         # Original cost basis for this window
-        copper_cost_basis = stock_q.with_entities(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar() or 0
+        copper_cost_basis = float(stock_q.with_entities(func.coalesce(func.sum(CopperStock.net_balance), 0)).scalar() or 0.0)
 
         # Inventory Value (current cost of remaining Coltan stock in this window)
         inv_q = stock_q.filter(CopperStock.local_balance > 0, CopperStock.input_kg > 0)
-        copper_inventory_value = inv_q.with_entities(
+        copper_inventory_value = float(inv_q.with_entities(
             func.coalesce(
                 func.sum(CopperStock.net_balance * CopperStock.local_balance / CopperStock.input_kg),
                 0,
             )
-        ).scalar() or 0
+        ).scalar() or 0.0)
 
         # Supplier payments filtered by the same stock window
         pay_q = db.session.query(
@@ -1907,14 +1907,14 @@ def boss_dashboard_data():
             pay_q = pay_q.filter(SupplierPayment.paid_at >= datetime.combine(d_from, time.min))
         if d_to:
             pay_q = pay_q.filter(SupplierPayment.paid_at <= datetime.combine(d_to, time.max))
-        copper_supplier_payments = pay_q.scalar() or 0
+        copper_supplier_payments = float(pay_q.scalar() or 0.0)
 
         # COGS for this window and gross profit = Sales - COGS
-        copper_cogs = (copper_cost_basis or 0) - (copper_inventory_value or 0)
-        copper_gross_profit = (copper_total_sales or 0) - (copper_cogs or 0)
+        copper_cogs = float((copper_cost_basis or 0.0) - (copper_inventory_value or 0.0))
+        copper_gross_profit = float((copper_total_sales or 0.0) - (copper_cogs or 0.0))
 
         # Supplier debt = original supplier cost - payments
-        copper_supplier_debt = copper_cost_basis - copper_supplier_payments
+        copper_supplier_debt = float(copper_cost_basis - copper_supplier_payments)
         plans_q = BulkOutputPlan.query.filter(
             BulkOutputPlan.mineral_type.in_(aliases),
             BulkOutputPlan.total_expected_amount.isnot(None),

@@ -27,7 +27,7 @@ def upgrade():
                existing_server_default=sa.text('now()'))
 
     with op.batch_alter_table('bulk_output_plan', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_bulk_output_plan_currency'), ['currency'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_bulk_output_plan_currency ON bulk_output_plan (currency)")
 
     with op.batch_alter_table('cash_account', schema=None) as batch_op:
         batch_op.alter_column('created_at',
@@ -41,7 +41,7 @@ def upgrade():
                nullable=True,
                existing_server_default=sa.text('CURRENT_TIMESTAMP'))
         batch_op.drop_index(batch_op.f('uq_cash_reconciliation_account_day'), postgresql_where='(is_deleted = false)')
-        batch_op.create_index(batch_op.f('ix_cash_reconciliation_is_deleted'), ['is_deleted'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cash_reconciliation_is_deleted ON cash_reconciliation (is_deleted)")
 
     with op.batch_alter_table('cash_transaction', schema=None) as batch_op:
         batch_op.alter_column('created_at',
@@ -50,40 +50,41 @@ def upgrade():
                existing_server_default=sa.text('CURRENT_TIMESTAMP'))
 
     with op.batch_alter_table('cassiterite_output', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_cassiterite_output_date'), ['date'], unique=False)
-        batch_op.create_index(batch_op.f('ix_cassiterite_output_stock_id'), ['stock_id'], unique=False)
+        # Use idempotent creation to avoid errors when the index already exists
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cassiterite_output_date ON cassiterite_output (date)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cassiterite_output_stock_id ON cassiterite_output (stock_id)")
 
     with op.batch_alter_table('cassiterite_stock', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_cassiterite_stock_date'))
         batch_op.drop_index(batch_op.f('ix_cassiterite_stock_date_id'))
         batch_op.drop_index(batch_op.f('ix_cassiterite_stock_local_balance'))
-        batch_op.create_index(batch_op.f('ix_cassiterite_stock_is_deleted'), ['is_deleted'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cassiterite_stock_is_deleted ON cassiterite_stock (is_deleted)")
 
     with op.batch_alter_table('cassiterite_supplier', schema=None) as batch_op:
         batch_op.drop_constraint(batch_op.f('cassiterite_supplier_name_key'), type_='unique')
         batch_op.drop_index(batch_op.f('ix_cassiterite_supplier_name'))
-        batch_op.create_index(batch_op.f('ix_cassiterite_supplier_name'), ['name'], unique=True)
-        batch_op.create_index(batch_op.f('ix_cassiterite_supplier_created_at'), ['created_at'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cassiterite_supplier_name ON cassiterite_supplier (name)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cassiterite_supplier_created_at ON cassiterite_supplier (created_at)")
 
     with op.batch_alter_table('cassiterite_supplier_payment', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_cassiterite_supplier_payment_is_deleted'), ['is_deleted'], unique=False)
-        batch_op.create_index(batch_op.f('ix_cassiterite_supplier_payment_stock_id'), ['stock_id'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cassiterite_supplier_payment_is_deleted ON cassiterite_supplier_payment (is_deleted)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_cassiterite_supplier_payment_stock_id ON cassiterite_supplier_payment (stock_id)")
 
     with op.batch_alter_table('copper_output', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_copper_output_date'), ['date'], unique=False)
-        batch_op.create_index(batch_op.f('ix_copper_output_stock_id'), ['stock_id'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_copper_output_date ON copper_output (date)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_copper_output_stock_id ON copper_output (stock_id)")
 
     with op.batch_alter_table('copper_stock', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_copper_stock_date'))
         batch_op.drop_index(batch_op.f('ix_copper_stock_date_id'))
         batch_op.drop_index(batch_op.f('ix_copper_stock_local_balance'))
-        batch_op.create_index(batch_op.f('ix_copper_stock_is_deleted'), ['is_deleted'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_copper_stock_is_deleted ON copper_stock (is_deleted)")
 
     with op.batch_alter_table('copper_supplier', schema=None) as batch_op:
         batch_op.drop_constraint(batch_op.f('copper_supplier_name_key'), type_='unique')
         batch_op.drop_index(batch_op.f('ix_copper_supplier_name'))
-        batch_op.create_index(batch_op.f('ix_copper_supplier_name'), ['name'], unique=True)
-        batch_op.create_index(batch_op.f('ix_copper_supplier_created_at'), ['created_at'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_copper_supplier_name ON copper_supplier (name)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_copper_supplier_created_at ON copper_supplier (created_at)")
 
     with op.batch_alter_table('customer_unearned_receipt', schema=None) as batch_op:
         batch_op.alter_column('received_at',
@@ -93,7 +94,7 @@ def upgrade():
                existing_type=postgresql.TIMESTAMP(),
                nullable=False)
         batch_op.drop_index(batch_op.f('ix_customer_unearned_receipt_cash_account_id'))
-        batch_op.create_index(batch_op.f('ix_customer_unearned_receipt_mineral_type'), ['mineral_type'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_customer_unearned_receipt_mineral_type ON customer_unearned_receipt (mineral_type)")
 
     with op.batch_alter_table('expense_transaction', schema=None) as batch_op:
         batch_op.create_foreign_key(None, 'user', ['disbursed_by_id'], ['id'])
@@ -102,21 +103,21 @@ def upgrade():
         batch_op.create_foreign_key(None, 'user', ['approved_by_id'], ['id'])
 
     with op.batch_alter_table('loan', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_loan_disbursed_rwf'), ['disbursed_rwf'], unique=False)
-        batch_op.create_index(batch_op.f('ix_loan_repaid_rwf'), ['repaid_rwf'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_loan_disbursed_rwf ON loan (disbursed_rwf)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_loan_repaid_rwf ON loan (repaid_rwf)")
 
     with op.batch_alter_table('push_token', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_push_token_created_at'), ['created_at'], unique=False)
-        batch_op.create_index(batch_op.f('ix_push_token_last_seen_at'), ['last_seen_at'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_push_token_created_at ON push_token (created_at)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_push_token_last_seen_at ON push_token (last_seen_at)")
 
     with op.batch_alter_table('supplier_payment', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_supplier_payment_is_deleted'), ['is_deleted'], unique=False)
-        batch_op.create_index(batch_op.f('ix_supplier_payment_stock_id'), ['stock_id'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_supplier_payment_is_deleted ON supplier_payment (is_deleted)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_supplier_payment_stock_id ON supplier_payment (stock_id)")
 
     with op.batch_alter_table('supplier_payment_receipt', schema=None) as batch_op:
         batch_op.drop_constraint(batch_op.f('supplier_payment_receipt_receipt_number_key'), type_='unique')
         batch_op.drop_index(batch_op.f('ix_supplier_payment_receipt_receipt_number'))
-        batch_op.create_index(batch_op.f('ix_supplier_payment_receipt_receipt_number'), ['receipt_number'], unique=True)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_supplier_payment_receipt_receipt_number ON supplier_payment_receipt (receipt_number)")
 
     with op.batch_alter_table('unified_supplier_advance', schema=None) as batch_op:
         batch_op.alter_column('paid_at',
@@ -127,22 +128,22 @@ def upgrade():
                existing_type=postgresql.TIMESTAMP(),
                nullable=True,
                existing_server_default=sa.text('CURRENT_TIMESTAMP'))
-        batch_op.create_index(batch_op.f('ix_unified_supplier_advance_amount_rwf'), ['amount_rwf'], unique=False)
-        batch_op.create_index(batch_op.f('ix_unified_supplier_advance_created_at'), ['created_at'], unique=False)
-        batch_op.create_index(batch_op.f('ix_unified_supplier_advance_currency'), ['currency'], unique=False)
-        batch_op.create_index(batch_op.f('ix_unified_supplier_advance_is_deleted'), ['is_deleted'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_unified_supplier_advance_amount_rwf ON unified_supplier_advance (amount_rwf)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_unified_supplier_advance_created_at ON unified_supplier_advance (created_at)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_unified_supplier_advance_currency ON unified_supplier_advance (currency)")
+        op.execute("CREATE INDEX IF NOT EXISTS ix_unified_supplier_advance_is_deleted ON unified_supplier_advance (is_deleted)")
 
     with op.batch_alter_table('unified_supplier_advance_allocation', schema=None) as batch_op:
         batch_op.alter_column('created_at',
                existing_type=postgresql.TIMESTAMP(),
                nullable=True,
                existing_server_default=sa.text('CURRENT_TIMESTAMP'))
-        batch_op.create_index(batch_op.f('ix_unified_supplier_advance_allocation_created_at'), ['created_at'], unique=False)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_unified_supplier_advance_allocation_created_at ON unified_supplier_advance_allocation (created_at)")
 
     with op.batch_alter_table('worker_payment_receipt', schema=None) as batch_op:
         batch_op.drop_constraint(batch_op.f('worker_payment_receipt_receipt_number_key'), type_='unique')
         batch_op.drop_index(batch_op.f('ix_worker_payment_receipt_receipt_number'))
-        batch_op.create_index(batch_op.f('ix_worker_payment_receipt_receipt_number'), ['receipt_number'], unique=True)
+        op.execute("CREATE INDEX IF NOT EXISTS ix_worker_payment_receipt_receipt_number ON worker_payment_receipt (receipt_number)")
 
     # ### end Alembic commands ###
 

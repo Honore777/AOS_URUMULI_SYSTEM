@@ -708,9 +708,11 @@ def cashier_pending_receipts():
             if existing_tx:
                 tx = existing_tx
             else:
+                account_balance = float(account.current_balance or 0.0)
+                receipt_amount = float(amt_cash or 0.0)
                 tx = CashTransaction(
                     account_id=account.id,
-                    amount=float(amt_cash),
+                    amount=receipt_amount,
                     currency=receipt_currency,
                     exchange_rate=float(row.exchange_rate or 1.0),
                     amount_input=float(row.amount_input or 0.0),
@@ -720,7 +722,7 @@ def cashier_pending_receipts():
                     note=f"Collected unearned receipt #{row.id}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                account.current_balance = float((account.current_balance or 0.0) + float(amt_cash))
+                account.current_balance = float(account_balance + receipt_amount)
                 db.session.add(tx)
                 db.session.add(account)
                 db.session.flush()
@@ -855,9 +857,11 @@ def cashier_pending_receipts():
         if existing_tx:
             tx = existing_tx
         else:
+            account_balance = float(account.current_balance or 0.0)
+            receipt_amount = float(amt_cash or 0.0)
             tx = CashTransaction(
                 account_id=account.id,
-                amount=float(amt_cash),
+                amount=receipt_amount,
                 currency=receipt_currency,
                 exchange_rate=float(receipt.exchange_rate or 1.0),
                 amount_input=float(receipt.amount_input or 0.0),
@@ -867,7 +871,7 @@ def cashier_pending_receipts():
                 note=f"Collected receipt #{receipt.id}",
                 created_by_id=getattr(current_user, 'id', None),
             )
-            account.current_balance = float((account.current_balance or 0.0) + float(amt_cash))
+            account.current_balance = float(account_balance + receipt_amount)
             db.session.add(tx)
             db.session.add(account)
             db.session.flush()
@@ -1387,7 +1391,8 @@ def cashier_disburse_payment_review(review_id: int):
                     note=note or f"Loan disbursement - {loan.lender_name}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                account.current_balance = float((account.current_balance or 0.0) + tx_amount)
+                account_balance = float(account.current_balance or 0.0)
+                account.current_balance = float(account_balance + float(tx_amount or 0.0))
                 db.session.add(tx)
                 db.session.add(account)
                 db.session.flush()
@@ -1405,7 +1410,7 @@ def cashier_disburse_payment_review(review_id: int):
                     created_at=datetime.utcnow(),
                     note=note,
                 )
-                loan.disbursed_rwf = float((loan.disbursed_rwf or 0.0) + float(amount_rwf or 0.0))
+                loan.disbursed_rwf = float(float(loan.disbursed_rwf or 0.0) + float(amount_rwf or 0.0))
                 loan.status = 'DISBURSED'
                 db.session.add(entry)
                 db.session.add(loan)
@@ -1467,7 +1472,8 @@ def cashier_disburse_payment_review(review_id: int):
                     note=note or f"Lender repayment - {lender_name}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                account.current_balance = float((account.current_balance or 0.0) - tx_amount)
+                account_balance = float(account.current_balance or 0.0)
+                account.current_balance = float(account_balance - float(tx_amount or 0.0))
                 if account.current_balance < 0:
                     raise ValueError('Insufficient funds in selected cash account.')
 
@@ -1542,23 +1548,27 @@ def cashier_disburse_payment_review(review_id: int):
                     raise ValueError('Transfer accounts not found.')
                 if (from_acc.currency or 'RWF').upper() != (to_acc.currency or 'RWF').upper():
                     raise ValueError('Transfer accounts must have the same currency.')
-                if float(from_acc.current_balance or 0.0) < float(tx_amount):
+                from_balance = float(from_acc.current_balance or 0.0)
+                to_balance = float(to_acc.current_balance or 0.0)
+                transfer_amount = float(tx_amount or 0.0)
+
+                if from_balance < transfer_amount:
                     raise ValueError('Insufficient funds in source account for transfer.')
 
                 # OUT from source
                 out_tx = CashTransaction(
                     account_id=from_acc.id,
-                    amount=tx_amount,
+                    amount=transfer_amount,
                     currency=(from_acc.currency or 'RWF').upper(),
                     exchange_rate=float(exchange_rate or 1.0),
-                    amount_input=float(amount_input or tx_amount),
-                    amount_rwf=float(amount_rwf or tx_amount),
+                    amount_input=float(amount_input or transfer_amount),
+                    amount_rwf=float(amount_rwf or transfer_amount),
                     direction='OUT',
                     reference=reference,
                     note=note or f"Transfer OUT to {to_acc.name}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                from_acc.current_balance = float((from_acc.current_balance or 0.0) - tx_amount)
+                from_acc.current_balance = float(from_balance - transfer_amount)
                 db.session.add(out_tx)
                 db.session.add(from_acc)
                 db.session.flush()
@@ -1566,17 +1576,17 @@ def cashier_disburse_payment_review(review_id: int):
                 # IN to destination
                 in_tx = CashTransaction(
                     account_id=to_acc.id,
-                    amount=tx_amount,
+                    amount=transfer_amount,
                     currency=(to_acc.currency or 'RWF').upper(),
                     exchange_rate=float(exchange_rate or 1.0),
-                    amount_input=float(amount_input or tx_amount),
-                    amount_rwf=float(amount_rwf or tx_amount),
+                    amount_input=float(amount_input or transfer_amount),
+                    amount_rwf=float(amount_rwf or transfer_amount),
                     direction='IN',
                     reference=reference,
                     note=note or f"Transfer IN from {from_acc.name}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                to_acc.current_balance = float((to_acc.current_balance or 0.0) + tx_amount)
+                to_acc.current_balance = float(to_balance + transfer_amount)
                 db.session.add(in_tx)
                 db.session.add(to_acc)
                 db.session.flush()
@@ -1638,7 +1648,8 @@ def cashier_disburse_payment_review(review_id: int):
                     note=note or f"Collect unearned receipt #{row.id}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                account.current_balance = float((account.current_balance or 0.0) + tx_amount)
+                account_balance = float(account.current_balance or 0.0)
+                account.current_balance = float(account_balance + float(tx_amount or 0.0))
                 row.is_collected = True
                 row.collected_by_id = getattr(current_user, 'id', None)
                 row.collected_at = datetime.utcnow()
@@ -1700,7 +1711,8 @@ def cashier_disburse_payment_review(review_id: int):
                     note=note or f"Collect receipt #{receipt.id}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                account.current_balance = float((account.current_balance or 0.0) + tx_amount)
+                account_balance = float(account.current_balance or 0.0)
+                account.current_balance = float(account_balance + float(tx_amount or 0.0))
                 receipt.is_collected = True
                 receipt.collected_by_id = getattr(current_user, 'id', None)
                 receipt.collected_at = datetime.utcnow()
@@ -1772,7 +1784,8 @@ def cashier_disburse_payment_review(review_id: int):
                     note=note or f"Supplier refund - {supplier_name}",
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                account.current_balance = float((account.current_balance or 0.0) + tx_amount)
+                account_balance = float(account.current_balance or 0.0)
+                account.current_balance = float(account_balance + float(tx_amount or 0.0))
                 db.session.add(tx)
                 db.session.add(account)
                 db.session.flush()
@@ -1850,11 +1863,13 @@ def cashier_disburse_payment_review(review_id: int):
                     created_by_id=getattr(current_user, 'id', None),
                 )
                 if direction == 'IN':
-                    account.current_balance = float((account.current_balance or 0.0) + tx_amount)
+                    account_balance = float(account.current_balance or 0.0)
+                    account.current_balance = float(account_balance + float(tx_amount or 0.0))
                 else:
                     if float(account.current_balance or 0.0) < float(tx_amount):
                         raise ValueError('Insufficient funds in selected cash account for cash OUT.')
-                    account.current_balance = float((account.current_balance or 0.0) - tx_amount)
+                    account_balance = float(account.current_balance or 0.0)
+                    account.current_balance = float(account_balance - float(tx_amount or 0.0))
                 db.session.add(tx)
                 db.session.add(account)
                 db.session.flush()
@@ -1905,7 +1920,8 @@ def cashier_disburse_payment_review(review_id: int):
                     note=note or reference,
                     created_by_id=getattr(current_user, 'id', None),
                 )
-                cash_account.current_balance = float((cash_account.current_balance or 0.0) - tx_amount)
+                cash_balance = float(cash_account.current_balance or 0.0)
+                cash_account.current_balance = float(cash_balance - float(tx_amount or 0.0))
                 db.session.add(cash_tx)
                 db.session.add(cash_account)
                 db.session.flush()
