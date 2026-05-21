@@ -15,7 +15,7 @@ from copper import copper_bp
 from core.auth import role_required
 from flask import request
 from sqlalchemy import func, or_
-from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances
+from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances, build_consolidated_supplier_choices
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -842,11 +842,7 @@ def pay_supplier_advance():
     for summary in supplier_summary_map.values():
         summary['remaining'] = float(remaining_map.get(' '.join(summary['supplier'].lower().split()), 0.0))
 
-    supplier_names = sorted({(r.supplier or '').strip() for r in stock_rows if (r.supplier or '').strip()})
-    form.existing_supplier.choices = [
-        ('', 'Select existing supplier'),
-        *[(s, f"{s} - Owed: {supplier_summary_map.get(s, {}).get('remaining', 0.0):,.2f} RWF") for s in supplier_names],
-    ]
+    form.existing_supplier.choices = build_consolidated_supplier_choices()
     form.stock_id.choices = []
 
     page = request.args.get('page', 1, type=int)
@@ -969,6 +965,110 @@ def pay_supplier_advance():
         pending_reviews=pending_reviews,
         recent_advances=recent_advances,
     )
+
+
+@copper_bp.route('/pay_supplier_advance/historical', methods=['GET', 'POST'])
+@role_required('accountant', 'admin')
+def pay_supplier_advance_historical():
+    """Record a historical supplier advance (opening-balance import).
+
+    This bypasses boss approval and cashier disbursement and creates
+    a unified advance row marked `is_historical`.
+    """
+    from flask_login import current_user
+    from copper.models import CopperSupplier, CopperStock
+    from cassiterite.models import CassiteriteSupplier, CassiteriteStock
+    from core.models import UnifiedSupplierAdvance
+
+    form = SupplierPaymentForm()
+
+    page = request.args.get('page', 1, type=int)
+    recent_advances = (
+        SupplierPayment.query
+        .filter(
+            SupplierPayment.is_advance.is_(True),
+            SupplierPayment.is_deleted.is_(False),
+        )
+        .order_by(SupplierPayment.paid_at.desc(), SupplierPayment.id.desc())
+        .paginate(page=page, per_page=10, error_out=False)
+    )
+
+    form.existing_supplier.choices = build_consolidated_supplier_choices()
+
+    if form.validate_on_submit():
+        input_amount = float(form.amount.data or 0)
+        currency = (form.currency.data or 'RWF').upper()
+        exchange_rate_input = form.exchange_rate.data
+        requested_paid_at = form.paid_at.data or datetime.utcnow()
+        import_batch = (request.form.get('import_batch') or '').strip()
+        try:
+            amount_rwf, exchange_rate = _normalize_amount_to_rwf(input_amount, currency, exchange_rate_input)
+        except ValueError as exc:
+            flash(str(exc), 'danger')
+            return render_template('copper/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
+
+        typed_new = (form.new_supplier.data or '').strip()
+        selected_existing = (form.existing_supplier.data or '').strip()
+        supplier = (typed_new or selected_existing or '').strip()
+        if not supplier:
+            flash('Please select an existing supplier or enter a new supplier name for advance payment.', 'danger')
+            return render_template('copper/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
+
+        supplier_id = _get_or_create_supplier_id(supplier)
+
+        # Create a supplier payment record for history (optional)
+        payment = SupplierPayment(
+            stock_id=None,
+            supplier_id=supplier_id,
+            supplier_name=supplier,
+            amount=amount_rwf,
+            input_amount=input_amount,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            amount_rwf=amount_rwf,
+            method=form.method.data,
+            reference=form.reference.data,
+            note=(form.note.data or '') + (f" [import_batch:{import_batch}]" if import_batch else ''),
+            payment_type='ADVANCE',
+            is_advance=True,
+            approval_status='APPROVED',
+            disbursement_status='DISBURSED',
+            advance_remaining=float(amount_rwf or 0.0),
+            created_by_id=getattr(current_user, 'id', None),
+        )
+        payment.paid_at = requested_paid_at
+        db.session.add(payment)
+        db.session.flush()
+
+        # Create unified advance marked historical
+        def _norm_supplier(nm):
+            return ' '.join((nm or '').strip().lower().split())
+
+        unified = UnifiedSupplierAdvance(
+            supplier_name=supplier,
+            supplier_name_norm=_norm_supplier(supplier),
+            source_mineral_type='historical',
+            source_payment_id=None,
+            input_amount=float(input_amount) if input_amount is not None else None,
+            currency=(currency or 'RWF'),
+            exchange_rate=float(exchange_rate or 1.0),
+            amount_rwf=float(amount_rwf or 0.0),
+            paid_at=payment.paid_at,
+            method=form.method.data,
+            reference=form.reference.data,
+            note=(form.note.data or '') + (f" [import_batch:{import_batch}]" if import_batch else ''),
+            advance_remaining=float(amount_rwf or 0.0),
+            created_by_id=getattr(current_user, 'id', None),
+            is_historical=True,
+        )
+        db.session.add(unified)
+        db.session.flush()
+
+        db.session.commit()
+        flash(f'Historical advance of {amount_rwf:,.2f} RWF recorded for {supplier}.', 'success')
+        return redirect(url_for('copper.pay_supplier_advance_historical'))
+
+    return render_template('copper/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
 
 
 @copper_bp.route('/pay_worker', methods=['GET', 'POST'])

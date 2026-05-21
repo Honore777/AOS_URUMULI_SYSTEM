@@ -233,6 +233,7 @@
               (function () {
                 const input = document.getElementById('supplier-input');
                 const holder = document.getElementById('supplier-suggest');
+                const form = input ? input.closest('form') : null;
                 if (!input || !holder) return;
 
                 holder.innerHTML = `
@@ -279,6 +280,7 @@
                       try { e.preventDefault(); } catch (err) {}
                       input.value = it.name;
                       hide();
+                                            if (form) form.submit();
                     });
                     list.appendChild(btn);
                   });

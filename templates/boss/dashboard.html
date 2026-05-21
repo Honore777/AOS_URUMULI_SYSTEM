@@ -357,6 +357,7 @@
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Type</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umukiriya</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Reference</th>
+                                        <th class="px-4 py-3 text-left text-sm font-semibold">Note</th>
                                         <th class="px-4 py-3 text-left text-sm font-semibold">Impamvu</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umubare w'amafaranga</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Status </th>
@@ -378,7 +379,8 @@
                                             </div>
                                         {% endif %}
                                     </td>
-                                            <td class="px-4 py-3 text-sm text-gray-700">{{ r.display_comment or r.boss_comment or '-' }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.request_payload_note or '-' }}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.display_comment or r.boss_comment or '-' }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700 font-semibold">
                                         <div>{{ r.display_amount or ('{:,.2f}'.format(r.amount or 0) ~ ' ' ~ (r.currency or 'RWF')) }}</div>
                                         {% if r.display_amount_note %}
@@ -422,6 +424,7 @@
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Type</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umukiriya</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Reference</th>
+                                <th class="px-4 py-3 text-left text-sm font-semibold">Note</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Impamvu</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umubare w'amafaranga</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
@@ -442,6 +445,7 @@
                                             </div>
                                         {% endif %}
                                     </td>
+                                    <td class="px-4 py-3 text-sm text-gray-700">{{ r.request_payload_note or '-' }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700">{{ r.display_comment or r.boss_comment or '-' }}</td>
                                     <td class="px-4 py-3 text-sm text-gray-700 font-semibold">
                                         <div>{{ r.display_amount or ('{:,.2f}'.format(r.amount or 0) ~ ' ' ~ (r.currency or 'RWF')) }}</div>

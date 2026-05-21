@@ -95,6 +95,22 @@ def _parse_request_datetime(value):
     return None
 
 
+def _parse_receipt_audit_date(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        raw_value = value.strip()
+        if not raw_value:
+            return None
+        try:
+            return datetime.strptime(raw_value, '%Y-%m-%d').date()
+        except Exception:
+            return None
+    return None
+
+
 def _cashier_accounts_context():
     accounts = CashAccount.query.order_by(CashAccount.name).all()
     recon_map = {}
@@ -485,15 +501,76 @@ def cashier_receipts_audit():
     mineral = (request.args.get('mineral') or 'all').strip().lower()
     printed = (request.args.get('printed') or 'all').strip().lower()
     q = (request.args.get('q') or '').strip().lower()
+    from_date = _parse_receipt_audit_date(request.args.get('from'))
+    to_date = _parse_receipt_audit_date(request.args.get('to'))
     focus_payment_id = int(request.args.get('payment_id') or 0)
 
     try:
-        limit = int(request.args.get('limit') or 150)
+        per_page = int(request.args.get('per_page') or request.args.get('limit') or 50)
     except Exception:
-        limit = 150
-    limit = max(20, min(limit, 500))
+        per_page = 50
+    per_page = max(20, min(per_page, 200))
+
+    try:
+        page = int(request.args.get('page') or 1)
+    except Exception:
+        page = 1
+    page = max(page, 1)
 
     rows = []
+
+    def _matches_date(value):
+        if not from_date and not to_date:
+            return True
+        if not value:
+            return False
+        row_date = value.date() if hasattr(value, 'date') else value
+        if from_date and row_date < from_date:
+            return False
+        if to_date and row_date > to_date:
+            return False
+        return True
+
+    def _matches_text(row):
+        if not q:
+            return True
+        def _match_text(v):
+            return q in str(v or '').lower()
+        return (
+            _match_text(row.get('receipt_number'))
+            or _match_text(row.get('counterparty'))
+            or _match_text(row.get('payment_id'))
+            or _match_text(row.get('mineral_type'))
+            or _match_text(row.get('payment_type'))
+            or _match_text(row.get('note'))
+        )
+
+    def _append_row(kind_label, row_obj, endpoint=None, payment_type=None):
+        view_url = None
+        if endpoint and getattr(row_obj, 'payment_id', None):
+            try:
+                view_url = url_for(endpoint, payment_id=int(row_obj.payment_id))
+            except Exception:
+                view_url = None
+
+        rows.append({
+            'kind': kind_label,
+            'id': row_obj.id,
+            'receipt_number': row_obj.receipt_number,
+            'payment_id': row_obj.payment_id,
+            'counterparty': getattr(row_obj, 'worker_name', None) or getattr(row_obj, 'supplier_name', None),
+            'payment_type': payment_type,
+            'mineral_type': row_obj.mineral_type,
+            'amount': row_obj.amount,
+            'currency': row_obj.currency,
+            'is_printed': bool(row_obj.is_printed),
+            'printed_at': row_obj.printed_at,
+            'printed_by': getattr(getattr(row_obj, 'printed_by', None), 'username', None),
+            'generated_at': row_obj.generated_at,
+            'generated_by': getattr(getattr(row_obj, 'generated_by', None), 'username', None),
+            'view_url': view_url,
+            'note': getattr(row_obj, 'note', None),
+        })
 
     if kind in {'all', 'worker'}:
         w_query = WorkerPaymentReceipt.query.filter(WorkerPaymentReceipt.is_deleted.is_(False))
@@ -504,7 +581,12 @@ def cashier_receipts_audit():
         elif printed == 'no':
             w_query = w_query.filter(WorkerPaymentReceipt.is_printed.is_(False))
 
-        worker_rows = w_query.order_by(WorkerPaymentReceipt.generated_at.desc()).limit(limit).all()
+        if from_date:
+            w_query = w_query.filter(WorkerPaymentReceipt.generated_at >= datetime.combine(from_date, datetime.min.time()))
+        if to_date:
+            w_query = w_query.filter(WorkerPaymentReceipt.generated_at <= datetime.combine(to_date, datetime.max.time()))
+
+        worker_rows = w_query.order_by(WorkerPaymentReceipt.generated_at.desc(), WorkerPaymentReceipt.id.desc()).all()
         for row in worker_rows:
             endpoint = None
             mt = (row.mineral_type or '').strip().lower()
@@ -512,30 +594,7 @@ def cashier_receipts_audit():
                 endpoint = 'copper.worker_receipt'
             elif mt == 'cassiterite':
                 endpoint = 'cassiterite.worker_receipt'
-
-            view_url = None
-            if endpoint and row.payment_id:
-                try:
-                    view_url = url_for(endpoint, payment_id=int(row.payment_id))
-                except Exception:
-                    view_url = None
-
-            rows.append({
-                'kind': 'worker',
-                'id': row.id,
-                'receipt_number': row.receipt_number,
-                'payment_id': row.payment_id,
-                'counterparty': row.worker_name,
-                'mineral_type': row.mineral_type,
-                'amount': row.amount,
-                'currency': row.currency,
-                'is_printed': bool(row.is_printed),
-                'printed_at': row.printed_at,
-                'printed_by': getattr(getattr(row, 'printed_by', None), 'username', None),
-                'generated_at': row.generated_at,
-                'generated_by': getattr(getattr(row, 'generated_by', None), 'username', None),
-                'view_url': view_url,
-            })
+            _append_row('worker', row, endpoint=endpoint)
 
     if kind in {'all', 'supplier'}:
         s_query = SupplierPaymentReceipt.query.filter(SupplierPaymentReceipt.is_deleted.is_(False))
@@ -546,7 +605,12 @@ def cashier_receipts_audit():
         elif printed == 'no':
             s_query = s_query.filter(SupplierPaymentReceipt.is_printed.is_(False))
 
-        supplier_rows = s_query.order_by(SupplierPaymentReceipt.generated_at.desc()).limit(limit).all()
+        if from_date:
+            s_query = s_query.filter(SupplierPaymentReceipt.generated_at >= datetime.combine(from_date, datetime.min.time()))
+        if to_date:
+            s_query = s_query.filter(SupplierPaymentReceipt.generated_at <= datetime.combine(to_date, datetime.max.time()))
+
+        supplier_rows = s_query.order_by(SupplierPaymentReceipt.generated_at.desc(), SupplierPaymentReceipt.id.desc()).all()
         for row in supplier_rows:
             endpoint = None
             mt = (row.mineral_type or '').strip().lower()
@@ -554,49 +618,21 @@ def cashier_receipts_audit():
                 endpoint = 'copper.supplier_receipt'
             elif mt == 'cassiterite':
                 endpoint = 'cassiterite.supplier_receipt'
+            _append_row('supplier', row, endpoint=endpoint, payment_type=row.payment_type)
 
-            view_url = None
-            if endpoint and row.payment_id:
-                try:
-                    view_url = url_for(endpoint, payment_id=int(row.payment_id))
-                except Exception:
-                    view_url = None
-
-            rows.append({
-                'kind': 'supplier',
-                'id': row.id,
-                'receipt_number': row.receipt_number,
-                'payment_id': row.payment_id,
-                'counterparty': row.supplier_name,
-                'payment_type': row.payment_type,
-                'mineral_type': row.mineral_type,
-                'amount': row.amount,
-                'currency': row.currency,
-                'is_printed': bool(row.is_printed),
-                'printed_at': row.printed_at,
-                'printed_by': getattr(getattr(row, 'printed_by', None), 'username', None),
-                'generated_at': row.generated_at,
-                'generated_by': getattr(getattr(row, 'generated_by', None), 'username', None),
-                'view_url': view_url,
-            })
-
-    if q:
-        def _match_text(v):
-            return q in str(v or '').lower()
-
-        rows = [
-            row for row in rows
-            if _match_text(row.get('receipt_number'))
-            or _match_text(row.get('counterparty'))
-            or _match_text(row.get('payment_id'))
-            or _match_text(row.get('mineral_type'))
-            or _match_text(row.get('payment_type'))
-        ]
+    rows = [row for row in rows if _matches_date(row.get('generated_at')) and _matches_text(row)]
 
     if focus_payment_id:
         rows = [row for row in rows if int(row.get('payment_id') or 0) == focus_payment_id]
 
-    rows = sorted(rows, key=lambda r: r.get('generated_at') or datetime.min, reverse=True)[:limit]
+    rows = sorted(rows, key=lambda r: (r.get('generated_at') or datetime.min, r.get('id') or 0), reverse=True)
+    total_rows = len(rows)
+    total_pages = max((total_rows + per_page - 1) // per_page, 1) if total_rows else 1
+    if page > total_pages:
+        page = total_pages
+    start = (page - 1) * per_page
+    end = start + per_page
+    rows = rows[start:end]
 
     return render_template(
         'cashier/receipts_audit.html',
@@ -605,7 +641,13 @@ def cashier_receipts_audit():
         mineral=mineral,
         printed=printed,
         q=q,
-        limit=limit,
+        from_date=from_date,
+        to_date=to_date,
+        per_page=per_page,
+        limit=per_page,
+        page=page,
+        total_rows=total_rows,
+        total_pages=total_pages,
         focus_payment_id=focus_payment_id,
     )
 

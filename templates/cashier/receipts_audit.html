@@ -43,7 +43,15 @@
     </div>
     <div>
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Limit</label>
-        <input type="number" min="20" max="500" name="limit" value="{{ limit or 150 }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+        <input type="number" min="20" max="200" name="per_page" value="{{ per_page or limit or 50 }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+    </div>
+    <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">From</label>
+        <input type="date" name="from" value="{{ from_date.strftime('%Y-%m-%d') if from_date else '' }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+    </div>
+    <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">To</label>
+        <input type="date" name="to" value="{{ to_date.strftime('%Y-%m-%d') if to_date else '' }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
     </div>
     <div class="flex items-end gap-2">
         <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">Apply</button>
@@ -120,4 +128,19 @@
         </div>
     {% endif %}
 </div>
+{% if total_pages and total_pages > 1 %}
+<div class="mt-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+    <div>
+        Page {{ page }} of {{ total_pages }} · {{ total_rows }} receipt(s)
+    </div>
+    <div class="flex items-center gap-2">
+        {% if page > 1 %}
+            <a href="{{ url_for('core.cashier_receipts_audit') }}?kind={{ kind }}&mineral={{ mineral }}&printed={{ printed }}&q={{ q|urlencode }}&from={{ from_date.strftime('%Y-%m-%d') if from_date else '' }}&to={{ to_date.strftime('%Y-%m-%d') if to_date else '' }}&per_page={{ per_page }}&page={{ page - 1 }}{% if focus_payment_id %}&payment_id={{ focus_payment_id }}{% endif %}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100">Previous</a>
+        {% endif %}
+        {% if page < total_pages %}
+            <a href="{{ url_for('core.cashier_receipts_audit') }}?kind={{ kind }}&mineral={{ mineral }}&printed={{ printed }}&q={{ q|urlencode }}&from={{ from_date.strftime('%Y-%m-%d') if from_date else '' }}&to={{ to_date.strftime('%Y-%m-%d') if to_date else '' }}&per_page={{ per_page }}&page={{ page + 1 }}{% if focus_payment_id %}&payment_id={{ focus_payment_id }}{% endif %}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100">Next</a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
 {% endblock %}

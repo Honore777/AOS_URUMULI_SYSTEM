@@ -823,6 +823,9 @@ class UnifiedSupplierAdvance(db.Model):
 
         advance_remaining = db.Column(db.Numeric(18, 2), nullable=False, default=0.0, index=True)
 
+        # Mark rows that were imported as historical opening balances
+        is_historical = db.Column(db.Boolean, nullable=False, default=False, index=True)
+
         created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
         created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 

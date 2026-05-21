@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Record Historical Supplier Advance - Copper</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-gray-100 min-h-screen">
+<div class="container mx-auto p-6">
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">Record Historical Supplier Advance</h1>
+            <p class="text-sm text-gray-600">Use this page to import historical advances. Visible only to authorized users.</p>
+        </div>
+        <a href="{{ url_for('copper.dashboard') }}" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition">Back to Dashboard</a>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="mb-4 p-4 rounded {{ 'bg-green-100 text-green-800' if category=='success' else 'bg-red-100 text-red-800' }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="bg-white p-6 rounded shadow mb-8">
+        <h2 class="text-xl font-semibold mb-4">📥 Import Historical Advance</h2>
+        <form method="POST" action="{{ url_for('copper.pay_supplier_advance_historical') }}" class="space-y-4">
+            {{ form.hidden_tag() }}
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Search supplier</label>
+                    <input type="text" id="supplier-search" class="w-full border rounded p-2" placeholder="Type to search supplier">
+                    <div id="supplier-suggest" class="relative"></div>
+                    <p class="mt-1 text-xs text-gray-500">Use autocomplete to find existing suppliers quickly.</p>
+                    <label class="block text-gray-700 font-medium mt-4 mb-1">Existing Supplier Dropdown</label>
+                    {{ form.existing_supplier(class="w-full border rounded p-2") }}
+                    <p class="mt-1 text-xs text-gray-500">Or type a brand new supplier below if needed.</p>
+                    {{ form.new_supplier(class="w-full border rounded p-2 mt-2", placeholder="Enter new supplier if not listed") }}
+                </div>
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Import batch / reason</label>
+                    <input name="import_batch" class="w-full border rounded p-2" placeholder="Batch ID, source note, or month-year" />
+                    <p class="mt-1 text-xs text-gray-500">Used only for audit grouping. It does not change the accounting amounts.</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Amount</label>
+                    {{ form.amount(class="w-full border rounded p-2") }}
+                </div>
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Method</label>
+                    {{ form.method(class="w-full border rounded p-2") }}
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Currency</label>
+                    {{ form.currency(class="w-full border rounded p-2") }}
+                </div>
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Exchange Rate</label>
+                    {{ form.exchange_rate(class="w-full border rounded p-2") }}
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Payment Date</label>
+                    {{ form.paid_at(class="w-full border rounded p-2", type="datetime-local") }}
+                </div>
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">Reference</label>
+                    {{ form.reference(class="w-full border rounded p-2") }}
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-gray-700 font-medium mb-1">Note</label>
+                {{ form.note(class="w-full border rounded p-2", rows="3") }}
+            </div>
+
+            {{ form.submit(class="bg-amber-600 text-white px-4 py-2 rounded") }}
+        </form>
+    </div>
+
+    <h3 class="text-xl font-semibold mt-10 mb-4">Recent Advance Payments</h3>
+    <div class="bg-white rounded shadow overflow-x-auto">
+        <table class="min-w-full">
+            <thead class="bg-amber-100">
+                <tr>
+                    <th class="px-4 py-2 text-left">Date</th>
+                    <th class="px-4 py-2 text-left">Supplier</th>
+                    <th class="px-4 py-2 text-right">Entered Amount</th>
+                    <th class="px-4 py-2 text-right">RWF Equivalent</th>
+                    <th class="px-4 py-2 text-right">Advance Remaining</th>
+                    <th class="px-4 py-2 text-left">Method</th>
+                    <th class="px-4 py-2 text-left">Reference</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for payment in recent_advances.items %}
+                <tr class="border-t">
+                    <td class="px-4 py-2">{{ payment.paid_at.strftime('%Y-%m-%d %H:%M') if payment.paid_at else '-' }}</td>
+                    <td class="px-4 py-2">{{ payment.supplier_name or 'Unknown' }}</td>
+                    <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} {{ payment.currency or 'RWF' }}</td>
+                    <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(payment.amount_rwf or payment.amount or 0) }} RWF</td>
+                    <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(payment.advance_remaining or 0) }}</td>
+                    <td class="px-4 py-2">{{ payment.method or '-' }}</td>
+                    <td class="px-4 py-2">{{ payment.reference or '-' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="px-4 py-4 text-center text-gray-500">No advance payments yet.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+<script>
+    (function () {
+        const input = document.getElementById('supplier-search');
+        const holder = document.getElementById('supplier-suggest');
+        const select = document.querySelector('select[name="existing_supplier"]');
+        if (!input || !holder || !select) return;
+
+        holder.innerHTML = '<div class="absolute z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg hidden" id="supplier-suggest-list"></div>';
+        const list = holder.querySelector('#supplier-suggest-list');
+        let lastQ = '';
+        let inflight = null;
+
+        function hide() {
+            if (list) list.classList.add('hidden');
+            if (list) list.innerHTML = '';
+        }
+
+        function render(items) {
+            if (!items || items.length === 0) {
+                hide();
+                return;
+            }
+            list.innerHTML = '';
+            items.forEach((it) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-b-0';
+                        const wallet = Number(it.wallet_remaining || 0);
+                        const net = Number(it.net_ledger_rwf || 0);
+                        const fmt = (v) => {
+                            try { return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+                            catch (e) { return Number(v || 0).toFixed(2); }
+                        };
+                        btn.innerHTML = `
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="font-semibold text-slate-900">${(it.name || '').toString()}</div>
+                                <div class="text-right text-xs leading-5">
+                                    <div class="font-bold text-emerald-700">Wallet: ${fmt(wallet)} RWF</div>
+                                    <div class="text-slate-600">Net: ${fmt(net)} RWF</div>
+                                </div>
+                            </div>
+                        `;
+                btn.addEventListener('mousedown', (e) => {
+                    try { e.preventDefault(); } catch (err) {}
+                    input.value = it.name || '';
+                    for (const opt of select.options) {
+                        if ((opt.value || '').toLowerCase() === (it.name || '').toLowerCase()) {
+                            select.value = opt.value;
+                            break;
+                        }
+                    }
+                    hide();
+                });
+                list.appendChild(btn);
+            });
+            list.classList.remove('hidden');
+        }
+
+        async function fetchSuggest(q) {
+            if (inflight) {
+                try { inflight.abort(); } catch (e) {}
+            }
+            inflight = new AbortController();
+            const resp = await fetch(`{{ url_for('core.supplier_name_suggest') }}?with_balances=1&q=${encodeURIComponent(q)}`, {
+                signal: inflight.signal,
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!resp.ok) return [];
+            const data = await resp.json();
+            return (data && data.results) ? data.results : [];
+        }
+
+        let t = null;
+        input.addEventListener('input', () => {
+            const q = (input.value || '').trim();
+            if (q === lastQ) return;
+            lastQ = q;
+            if (t) clearTimeout(t);
+            if (!q) {
+                hide();
+                return;
+            }
+            t = setTimeout(async () => {
+                try {
+                    const items = await fetchSuggest(q);
+                    render(items);
+                } catch (e) {
+                    hide();
+                }
+            }, 160);
+        });
+
+        input.addEventListener('blur', () => {
+            setTimeout(hide, 120);
+        });
+    })();
+</script>
+</body>
+</html>

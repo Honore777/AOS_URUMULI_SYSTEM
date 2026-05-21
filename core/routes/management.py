@@ -1703,6 +1703,7 @@ def boss_dashboard():
         if not p:
             p = _safe_payload(getattr(r, 'boss_comment', None))
         r.request_payload_reference = (p.get('reference') or '').strip() if isinstance(p, dict) else ''
+        r.request_payload_note = (p.get('note') or '').strip() if isinstance(p, dict) else ''
         r.related_url = None
         r.related_label = None
         if isinstance(p, dict):
@@ -1746,6 +1747,7 @@ def boss_dashboard():
         if not p:
             p = _safe_payload(getattr(r, 'boss_comment', None))
         r.request_payload_reference = (p.get('reference') or '').strip() if isinstance(p, dict) else ''
+        r.request_payload_note = (p.get('note') or '').strip() if isinstance(p, dict) else ''
         r.related_url = None
         r.related_label = None
         if isinstance(p, dict):

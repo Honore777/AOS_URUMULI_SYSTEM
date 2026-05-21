@@ -4,14 +4,14 @@ from flask_login import current_user
 from datetime import datetime
 
 from cassiterite.models.workers_payment import CassiteriteWorkerPayment
-from cassiterite.forms import CassiteriteWorkerPaymentForm
+from cassiterite.forms import CassiteriteWorkerPaymentForm, CassiteriteSupplierPaymentForm
 from cassiterite.models.payment import CassiteriteSupplierPayment, CassiteriteSupplier
 from cassiterite.routes import cassiterite_bp
 from core.auth import role_required
 from flask import url_for, flash
 from config import db
 from sqlalchemy import func, or_
-from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances
+from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances, build_consolidated_supplier_choices
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -325,6 +325,8 @@ def pay_supplier():
 	if page < 1:
 		page = 1
 
+	from core.models import UnifiedSupplierAdvance
+
 	# Subquery: total net balance (owed) per supplier from stocks
 	stock_net_subq = (
 		db.session.query(
@@ -333,6 +335,44 @@ def pay_supplier():
 		)
 		.filter(CassiteriteStock.is_deleted.is_(False))
 		.group_by(CassiteriteStock.supplier)
+		.subquery()
+	)
+
+	# Subquery: suppliers that exist only via advance imports or standalone payments.
+	advance_supplier_subq = (
+		db.session.query(
+			UnifiedSupplierAdvance.supplier_name.label('supplier')
+		)
+		.filter(
+			UnifiedSupplierAdvance.is_deleted.is_(False),
+			UnifiedSupplierAdvance.supplier_name.isnot(None),
+			func.trim(UnifiedSupplierAdvance.supplier_name) != '',
+		)
+		.group_by(UnifiedSupplierAdvance.supplier_name)
+		.subquery()
+	)
+
+	standalone_payment_supplier_subq = (
+		db.session.query(
+			CassiteriteSupplierPayment.supplier_name.label('supplier')
+		)
+		.filter(
+			CassiteriteSupplierPayment.is_deleted.is_(False),
+			CassiteriteSupplierPayment.stock_id.is_(None),
+			CassiteriteSupplierPayment.supplier_name.isnot(None),
+			func.trim(CassiteriteSupplierPayment.supplier_name) != '',
+		)
+		.group_by(CassiteriteSupplierPayment.supplier_name)
+		.subquery()
+	)
+
+	# Master supplier list for the table: stock obligations + advance-only suppliers.
+	supplier_name_union = (
+		db.session.query(stock_net_subq.c.supplier.label('supplier'))
+		.union(
+			db.session.query(advance_supplier_subq.c.supplier.label('supplier')),
+			db.session.query(standalone_payment_supplier_subq.c.supplier.label('supplier')),
+		)
 		.subquery()
 	)
 
@@ -362,18 +402,19 @@ def pay_supplier():
 
 	base_q = (
 		db.session.query(
-			stock_net_subq.c.supplier.label('supplier'),
+			supplier_name_union.c.supplier.label('supplier'),
 			stock_net_subq.c.total_net.label('net_balance'),
 			func.coalesce(payments_subq.c.total_paid, 0).label('total_paid'),
 			payments_subq.c.latest_paid_at.label('latest_paid_at'),
 			func.coalesce(vouchers_subq.c.vouchers, '').label('vouchers')
 		)
-		.outerjoin(payments_subq, payments_subq.c.supplier == stock_net_subq.c.supplier)
-		.outerjoin(vouchers_subq, vouchers_subq.c.supplier == stock_net_subq.c.supplier)
+		.outerjoin(stock_net_subq, stock_net_subq.c.supplier == supplier_name_union.c.supplier)
+		.outerjoin(payments_subq, payments_subq.c.supplier == supplier_name_union.c.supplier)
+		.outerjoin(vouchers_subq, vouchers_subq.c.supplier == supplier_name_union.c.supplier)
 	)
 
 	if supplier_query:
-		base_q = base_q.filter(stock_net_subq.c.supplier.ilike(f"%{supplier_query}%"))
+		base_q = base_q.filter(supplier_name_union.c.supplier.ilike(f"%{supplier_query}%"))
 
 	# Count and paginate
 	count_q = db.session.query(func.count()).select_from(base_q.subquery())
@@ -549,10 +590,7 @@ def pay_supplier_advance():
 	for summary in supplier_summary_map.values():
 		summary['remaining'] = float(remaining_map.get(' '.join(summary['supplier'].lower().split()), 0.0))
 
-	form.existing_supplier.choices = [
-		('', 'Select existing supplier'),
-		*[(s, f"{s} - Owed: {supplier_summary_map.get(s, {}).get('remaining', 0.0):,.2f} RWF") for s in supplier_names],
-	]
+	form.existing_supplier.choices = build_consolidated_supplier_choices()
 	form.stock_id.choices = []
 
 	page = request.args.get('page', 1, type=int)
@@ -675,6 +713,108 @@ def pay_supplier_advance():
 		pending_reviews=pending_reviews,
 		recent_advances=recent_advances,
 	)
+
+
+@cassiterite_bp.route('/pay_supplier_advance/historical', methods=['GET', 'POST'])
+@role_required('accountant', 'admin')
+def pay_supplier_advance_historical():
+	"""Record a historical supplier advance for cassiterite.
+
+	Bypasses boss approval and cashier flows and marks the unified advance
+	with `is_historical=True`.
+	"""
+	from flask_login import current_user
+	from copper.models import CopperSupplier, CopperStock
+	from cassiterite.models import CassiteriteSupplier, CassiteriteStock
+	from core.models import UnifiedSupplierAdvance
+
+	form = CassiteriteSupplierPaymentForm()
+
+	page = request.args.get('page', 1, type=int)
+	recent_advances = (
+		CassiteriteSupplierPayment.query
+		.filter(
+			CassiteriteSupplierPayment.is_advance.is_(True),
+			CassiteriteSupplierPayment.is_deleted.is_(False),
+		)
+		.order_by(CassiteriteSupplierPayment.paid_at.desc(), CassiteriteSupplierPayment.id.desc())
+		.paginate(page=page, per_page=10, error_out=False)
+	)
+
+	form.existing_supplier.choices = build_consolidated_supplier_choices()
+
+	if form.validate_on_submit():
+		input_amount = float(form.amount.data or 0)
+		currency = (form.currency.data or 'RWF').upper()
+		exchange_rate_input = form.exchange_rate.data
+		requested_paid_at = form.paid_at.data or datetime.utcnow()
+		import_batch = (request.form.get('import_batch') or '').strip()
+		try:
+			amount_rwf, exchange_rate = _normalize_amount_to_rwf(input_amount, currency, exchange_rate_input)
+		except ValueError as exc:
+			flash(str(exc), 'danger')
+			return render_template('cassiterite/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
+
+		typed_new = (form.new_supplier.data or '').strip()
+		selected_existing = (form.existing_supplier.data or '').strip()
+		supplier = (typed_new or selected_existing or '').strip()
+		if not supplier:
+			flash('Please select an existing supplier or enter a new supplier name for advance payment.', 'danger')
+			return render_template('cassiterite/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
+
+		supplier_id = _get_or_create_supplier_id(supplier)
+
+		payment = CassiteriteSupplierPayment(
+			stock_id=None,
+			supplier_id=supplier_id,
+			supplier_name=supplier,
+			amount=amount_rwf,
+			input_amount=input_amount,
+			currency=currency,
+			exchange_rate=exchange_rate,
+			amount_rwf=amount_rwf,
+			method=form.method.data,
+			reference=form.reference.data,
+			note=(form.note.data or '') + (f" [import_batch:{import_batch}]" if import_batch else ''),
+			payment_type='ADVANCE',
+			is_advance=True,
+			approval_status='APPROVED',
+			disbursement_status='DISBURSED',
+			advance_remaining=float(amount_rwf or 0.0),
+			created_by_id=getattr(current_user, 'id', None),
+		)
+		payment.paid_at = requested_paid_at
+		db.session.add(payment)
+		db.session.flush()
+
+		def _norm_supplier(nm):
+			return ' '.join((nm or '').strip().lower().split())
+
+		unified = UnifiedSupplierAdvance(
+			supplier_name=supplier,
+			supplier_name_norm=_norm_supplier(supplier),
+			source_mineral_type='historical',
+			source_payment_id=None,
+			input_amount=float(input_amount) if input_amount is not None else None,
+			currency=(currency or 'RWF'),
+			exchange_rate=float(exchange_rate or 1.0),
+			amount_rwf=float(amount_rwf or 0.0),
+			paid_at=payment.paid_at,
+			method=form.method.data,
+			reference=form.reference.data,
+			note=(form.note.data or '') + (f" [import_batch:{import_batch}]" if import_batch else ''),
+			advance_remaining=float(amount_rwf or 0.0),
+			created_by_id=getattr(current_user, 'id', None),
+			is_historical=True,
+		)
+		db.session.add(unified)
+		db.session.flush()
+
+		db.session.commit()
+		flash(f'Historical advance of {amount_rwf:,.2f} RWF recorded for {supplier}.', 'success')
+		return redirect(url_for('cassiterite.pay_supplier_advance_historical'))
+
+	return render_template('cassiterite/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
 
 
 def calculate_supplier_remaining_balance(supplier_name):

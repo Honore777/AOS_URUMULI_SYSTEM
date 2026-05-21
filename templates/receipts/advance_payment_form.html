@@ -58,7 +58,6 @@
 
         <!-- Main Content -->
         <div style="padding: 1.5rem;">
-            <!-- Supplier Information -->
             <div class="section-title">SUPPLIER INFORMATION</div>
             <table class="form-table">
                 <tr>
@@ -69,13 +68,12 @@
                 </tr>
                 <tr>
                     <th>Payment Method</th>
-                    <td>{{ payment.method }}</td>
+                    <td>{{ payment.method or '-' }}</td>
                     <th>Payment Currency</th>
                     <td>{{ payment.currency or 'RWF' }}</td>
                 </tr>
             </table>
 
-            <!-- Payment Details -->
             <div class="section-title">ADVANCE PAYMENT DETAILS</div>
             <table class="form-table">
                 <tr>
@@ -100,6 +98,12 @@
                 {% if (payment.currency or 'RWF')|upper == 'USD' %}
                 <tr>
                     <th>Original Currency / Audit Trail</th>
+                    <td style="text-align: right; font-weight: 600; color: #1d4ed8;">{{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} USD</td>
+                    <th>Exchange Rate Used</th>
+                    <td style="text-align: right; font-weight: 600; color: #7c3aed;">{{ '{:,.2f}'.format(payment.exchange_rate or 0) }} RWF/USD</td>
+                </tr>
+                {% endif %}
+            </table>
 
             {% if deductions_rows and deductions_rows|length > 0 %}
             <div class="section-title">VOUCHER / LOT DETAILS ACROSS MINERALS</div>
@@ -134,14 +138,7 @@
                 </tbody>
             </table>
             {% endif %}
-                    <td style="text-align: right; font-weight: 600; color: #1d4ed8;">{{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} USD</td>
-                    <th>Exchange Rate Used</th>
-                    <td style="text-align: right; font-weight: 600; color: #7c3aed;">{{ '{:,.2f}'.format(payment.exchange_rate or 0) }} RWF/USD</td>
-                </tr>
-                {% endif %}
-            </table>
 
-            <!-- Notes Section -->
             {% if payment.note %}
             <div class="section-title">NOTES / REMARKS</div>
             <div style="padding: 1rem; background-color: #fef3c7; border-left: 4px solid #f59e0b; font-size: 0.9rem; color: #92400e;">
@@ -149,7 +146,6 @@
             </div>
             {% endif %}
 
-            <!-- Approval Signatures -->
             <div class="signature-row">
                 <div class="signature-box">
                     <div class="signature-line"></div>
@@ -173,7 +169,6 @@
                 </div>
             </div>
 
-            <!-- Footer -->
             <div style="margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; text-align: center; font-size: 0.8rem; color: #6b7280;">
                 <p>This document is an official authorization for advance payment. Please retain for records.</p>
                 <button onclick="window.print()" class="no-print mt-4 px-4 py-2 bg-slate-800 text-white rounded hover:bg-slate-900 transition text-sm">Print Form</button>

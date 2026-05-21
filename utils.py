@@ -225,7 +225,7 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
         paid_total = copper_paid + cass_paid
 
         remaining = stock_total + refund_debit - allocation_total - advance_credit - paid_total
-        return max(float(remaining or 0.0), 0.0)
+        return float(remaining or 0.0)
     except Exception:
         return 0.0
 
@@ -378,7 +378,7 @@ def calculate_consolidated_supplier_remaining_balances(supplier_names):
             allocation_total = float(allocation_totals.get(supplier_norm, 0.0))
             paid_total = float(paid_totals.get(supplier_norm, 0.0))
             refund_debit = float(refund_totals.get(supplier_norm, 0.0))
-            remaining_map[supplier_norm] = max(stock_total + refund_debit - allocation_total - paid_total, 0.0)
+            remaining_map[supplier_norm] = float(stock_total + refund_debit - allocation_total - paid_total)
 
         missing = [name for name in unique_names if name not in remaining_map]
         for name in missing:
@@ -387,6 +387,108 @@ def calculate_consolidated_supplier_remaining_balances(supplier_names):
         return remaining_map
     except Exception:
         return {name: float(calculate_consolidated_supplier_remaining_balance(name) or 0.0) for name in unique_names}
+
+def build_consolidated_supplier_choices():
+    """Build supplier select choices with live cross-mineral remaining balances."""
+    try:
+        from config import db
+        from sqlalchemy import func
+        from copper.models import CopperSupplier, CopperStock, SupplierPayment as CopperSupplierPayment
+        from cassiterite.models import CassiteriteSupplier, CassiteriteStock, CassiteriteSupplierPayment
+        from core.models import UnifiedSupplierAdvance
+
+        seen = set()
+        supplier_names = []
+
+        def add_rows(rows):
+            for (name,) in rows or []:
+                clean = (name or '').strip()
+                if not clean:
+                    continue
+                key = normalize_counterparty_name(clean)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                supplier_names.append(clean)
+
+        add_rows(
+            db.session.query(CopperSupplier.name)
+            .filter(CopperSupplier.is_deleted.is_(False))
+            .order_by(CopperSupplier.name.asc())
+            .all()
+        )
+        add_rows(
+            db.session.query(CassiteriteSupplier.name)
+            .filter(CassiteriteSupplier.is_deleted.is_(False))
+            .order_by(CassiteriteSupplier.name.asc())
+            .all()
+        )
+        add_rows(
+            db.session.query(func.trim(CopperStock.supplier))
+            .filter(
+                CopperStock.is_deleted.is_(False),
+                func.trim(CopperStock.supplier).isnot(None),
+                func.trim(CopperStock.supplier) != '',
+            )
+            .group_by(func.trim(CopperStock.supplier))
+            .order_by(func.trim(CopperStock.supplier).asc())
+            .all()
+        )
+        add_rows(
+            db.session.query(func.trim(CassiteriteStock.supplier))
+            .filter(
+                CassiteriteStock.is_deleted.is_(False),
+                func.trim(CassiteriteStock.supplier).isnot(None),
+                func.trim(CassiteriteStock.supplier) != '',
+            )
+            .group_by(func.trim(CassiteriteStock.supplier))
+            .order_by(func.trim(CassiteriteStock.supplier).asc())
+            .all()
+        )
+        add_rows(
+            db.session.query(UnifiedSupplierAdvance.supplier_name)
+            .filter(
+                UnifiedSupplierAdvance.is_deleted.is_(False),
+                UnifiedSupplierAdvance.supplier_name.isnot(None),
+                func.trim(UnifiedSupplierAdvance.supplier_name) != '',
+            )
+            .group_by(UnifiedSupplierAdvance.supplier_name)
+            .order_by(UnifiedSupplierAdvance.supplier_name.asc())
+            .all()
+        )
+        add_rows(
+            db.session.query(CopperSupplierPayment.supplier_name)
+            .filter(
+                CopperSupplierPayment.is_deleted.is_(False),
+                CopperSupplierPayment.supplier_name.isnot(None),
+                func.trim(CopperSupplierPayment.supplier_name) != '',
+            )
+            .group_by(CopperSupplierPayment.supplier_name)
+            .order_by(CopperSupplierPayment.supplier_name.asc())
+            .all()
+        )
+        add_rows(
+            db.session.query(CassiteriteSupplierPayment.supplier_name)
+            .filter(
+                CassiteriteSupplierPayment.is_deleted.is_(False),
+                CassiteriteSupplierPayment.supplier_name.isnot(None),
+                func.trim(CassiteriteSupplierPayment.supplier_name) != '',
+            )
+            .group_by(CassiteriteSupplierPayment.supplier_name)
+            .order_by(CassiteriteSupplierPayment.supplier_name.asc())
+            .all()
+        )
+
+        supplier_names = sorted(supplier_names, key=lambda item: item.lower())
+        remaining_map = calculate_consolidated_supplier_remaining_balances(supplier_names)
+        choices = [('', 'Select existing supplier')]
+        for name in supplier_names:
+            normalized = normalize_counterparty_name(name)
+            remaining = float(remaining_map.get(normalized, 0.0))
+            choices.append((name, f"{name} [{remaining:,.2f} RWF]"))
+        return choices
+    except Exception:
+        return [('', 'Select existing supplier')]
 
 
 def make_slug(name: str) -> str:
