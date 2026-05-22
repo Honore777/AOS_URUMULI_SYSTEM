@@ -386,6 +386,9 @@ def cashier_approved_requests():
         r.direction = (p.get('direction') or '').strip().upper() or None
         r.requires_cash_account = bool(r.method == 'CASH')
 
+        if review_type in {'stock_delete', 'stock_edit'} or r.action in {'delete_stock', 'edit_stock'}:
+            continue
+
         # Infer direction when it isn't explicitly stored in payload.
         if not r.direction:
             if r.action in {'collect_receipt', 'collect_unearned_receipt', 'supplier_refund', 'loan_disbursement'}:
@@ -454,6 +457,9 @@ def cashier_approved_requests_summary():
         review_type = (getattr(r, 'type', None) or '').strip().lower()
 
         if review_type == 'batch_agreement' or action == 'batch_agreement':
+            continue
+
+        if review_type in {'stock_delete', 'stock_edit'} or action in {'delete_stock', 'edit_stock'}:
             continue
 
         if not action:

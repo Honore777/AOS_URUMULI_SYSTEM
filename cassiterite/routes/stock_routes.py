@@ -350,6 +350,15 @@ def delete_stock(stock_id):
             # Create approval request instead of directly deleting
             from core.models import PaymentReview, PaymentReviewStatus
             import json
+
+            existing = PaymentReview.query.filter_by(
+                payment_id=stock_id,
+                type='stock_delete',
+                status=PaymentReviewStatus.PENDING_REVIEW.value,
+            ).first()
+            if existing:
+                flash(f"A delete request for stock {voucher} is already pending boss review.", "warning")
+                return redirect(url_for('cassiterite.dashboard'))
             
             payload = {
                 'action': 'delete_stock',
@@ -357,6 +366,7 @@ def delete_stock(stock_id):
                 'voucher_no': voucher,
                 'supplier': stock.supplier,
                 'delete_reason': request.form.get('delete_reason') or 'Deleted from dashboard.',
+                'note': request.form.get('delete_reason') or 'Deleted from dashboard.',
                 'mineral_type': 'cassiterite'
             }
             
@@ -480,6 +490,15 @@ def edit_stock(stock_id):
             # Create approval request instead of directly editing
             from core.models import PaymentReview, PaymentReviewStatus
             import json
+
+            existing = PaymentReview.query.filter_by(
+                payment_id=stock_id,
+                type='stock_edit',
+                status=PaymentReviewStatus.PENDING_REVIEW.value,
+            ).first()
+            if existing:
+                flash(f"An edit request for stock {voucher} is already pending boss review.", "warning")
+                return redirect(url_for('cassiterite.dashboard'))
             
             # Parse incoming fields for the payload
             from datetime import datetime as _dt2
@@ -517,6 +536,7 @@ def edit_stock(stock_id):
                 'exchange': exchange,
                 'transport_tag': transport_tag,
                 'change_reason': change_reason,
+                'note': change_reason or 'No reason provided',
                 'mineral_type': 'cassiterite'
             }
             

@@ -1021,6 +1021,8 @@ def consolidated_supplier_ledger(supplier_norm: str):
             'balance': running_filtered,
         })
 
+    ledger_running_balance = float(ledger_entries[-1]['balance'] if ledger_entries else supplier_remaining)
+
     # ledger_entries remains the running sequence produced from events; do not
     # inject an authoritative synthetic row here — receipts must match the
     # ledger's running balance computed from the same event stream.
@@ -1036,6 +1038,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
         total_advanced=total_advanced,
         total_refunded=total_refunded,
         supplier_remaining=supplier_remaining,
+        ledger_running_balance=ledger_running_balance,
         allocation_rows=allocation_rows,
         advances=advances,
         copper_debt=copper_debt,
@@ -1731,7 +1734,11 @@ def boss_dashboard():
     )
     by_payment: dict = {}
     for r in raw_reviews:
-        key = r.payment_id if r.payment_id is not None else f"rev-{r.id}"
+        review_type = (r.type or "").strip().lower()
+        if review_type in {"stock_delete", "stock_edit"}:
+            key = f"rev-{r.id}"
+        else:
+            key = r.payment_id if r.payment_id is not None else f"rev-{r.id}"
         best = by_payment.get(key)
         r_time = r.reviewed_at or r.created_at
         best_time = (best.reviewed_at or best.created_at) if best else None
@@ -1970,7 +1977,7 @@ def boss_dashboard_data():
             plans_q = plans_q.filter(BulkOutputPlan.created_at >= datetime.combine(d_from, time.min))
         if d_to:
             plans_q = plans_q.filter(BulkOutputPlan.created_at <= datetime.combine(d_to, time.max))
-        cass_total_sales = plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0
+        cass_total_sales = float(plans_q.with_entities(func.coalesce(func.sum(BulkOutputPlan.total_expected_amount), 0)).scalar() or 0.0)
 
         # Stock-side cost basis by lot.date
         stock_q = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False))
@@ -1979,15 +1986,15 @@ def boss_dashboard_data():
         if d_to:
             stock_q = stock_q.filter(CassiteriteStock.date <= d_to)
 
-        cass_cost_basis = stock_q.with_entities(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar() or 0
+        cass_cost_basis = float(stock_q.with_entities(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).scalar() or 0.0)
 
         inv_q = stock_q.filter(CassiteriteStock.local_balance > 0, CassiteriteStock.input_kg > 0)
-        cass_inventory_value = inv_q.with_entities(
+        cass_inventory_value = float(inv_q.with_entities(
             func.coalesce(
                 func.sum(CassiteriteStock.balance_to_pay * CassiteriteStock.local_balance / CassiteriteStock.input_kg),
                 0,
             )
-        ).scalar() or 0
+        ).scalar() or 0.0)
 
         pay_q = db.session.query(
             func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)
@@ -1998,12 +2005,12 @@ def boss_dashboard_data():
             pay_q = pay_q.filter(CassiteriteSupplierPayment.paid_at >= datetime.combine(d_from, time.min))
         if d_to:
             pay_q = pay_q.filter(CassiteriteSupplierPayment.paid_at <= datetime.combine(d_to, time.max))
-        cass_supplier_payments = pay_q.scalar() or 0
+        cass_supplier_payments = float(pay_q.scalar() or 0.0)
 
         # COGS for this window and gross profit = Sales - COGS
-        cass_cogs = (cass_cost_basis or 0) - (cass_inventory_value or 0)
-        cass_gross_profit = (cass_total_sales or 0) - (cass_cogs or 0)
-        cass_supplier_debt = cass_cost_basis - cass_supplier_payments
+        cass_cogs = float((cass_cost_basis or 0.0) - (cass_inventory_value or 0.0))
+        cass_gross_profit = float((cass_total_sales or 0.0) - (cass_cogs or 0.0))
+        cass_supplier_debt = float((cass_cost_basis or 0.0) - (cass_supplier_payments or 0.0))
         plans_q = BulkOutputPlan.query.filter(
             BulkOutputPlan.mineral_type.in_(aliases),
             BulkOutputPlan.total_expected_amount.isnot(None),
@@ -2028,8 +2035,8 @@ def boss_dashboard_data():
                 wp_q = wp_q.filter(CassiteriteWorkerPayment.paid_at <= datetime.combine(d_to, time.max))
         except Exception:
             wp_q = CassiteriteWorkerPayment.query
-        cass_worker_payments = wp_q.with_entities(func.coalesce(func.sum(CassiteriteWorkerPayment.amount), 0)).scalar()
-        cass_cash_position = cass_total_sales - cass_customer_debt
+        cass_worker_payments = float(wp_q.with_entities(func.coalesce(func.sum(CassiteriteWorkerPayment.amount), 0)).scalar() or 0.0)
+        cass_cash_position = float(cass_total_sales - cass_customer_debt)
         return {
             'total_sales': cass_total_sales,
             # Inventory Value (Cassiterite)

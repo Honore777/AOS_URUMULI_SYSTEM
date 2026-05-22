@@ -45,8 +45,8 @@
                 <div class="text-sm opacity-90">RWF</div>
             </div>
             <div class="rounded-2xl bg-red-600 p-4 text-white shadow-lg">
-                <div class="text-xs font-semibold uppercase tracking-wide text-red-100">Agaciro ka stock ye</div>
-                <div class="mt-2 text-3xl font-black">{{ '{:,.2f}'.format(supplier_remaining or 0) }}</div>
+                <div class="text-xs font-semibold uppercase tracking-wide text-red-100">Ayo tumusigayemwo</div>
+                <div class="mt-2 text-3xl font-black">{{ '{:,.2f}'.format(ledger_running_balance or supplier_remaining or 0) }}</div>
                 <div class="text-sm opacity-90">RWF, running balance across both minerals</div>
             </div>
         </div>
