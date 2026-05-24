@@ -398,7 +398,14 @@
                     <tr class="hover:bg-gray-100">
                         <td class="px-4 py-2">{{ payment.paid_at.strftime('%Y-%m-%d %H:%M') if payment.paid_at else '-' }}</td>
                         <td class="px-4 py-2">{{ payment.supplier_name or 'Unknown' }}</td>
-                        <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(payment.amount_rwf or payment.amount or 0) }} RWF</td>
+                        <td class="px-4 py-2 text-right">
+                            {% if (payment.currency or 'RWF')|upper == 'USD' %}
+                                {{ '{:,.2f}'.format(payment.input_amount or payment.amount or 0) }} USD
+                                <div class="text-xs text-gray-500">{{ '{:,.2f}'.format(payment.amount_rwf or payment.amount or 0) }} RWF</div>
+                            {% else %}
+                                {{ '{:,.2f}'.format(payment.amount_rwf or payment.amount or 0) }} RWF
+                            {% endif %}
+                        </td>
                         <td class="px-4 py-2">{{ payment.method or '-' }}</td>
                         <td class="px-4 py-2">{{ payment.reference or '-' }}</td>
                         <td class="px-4 py-2 text-center">

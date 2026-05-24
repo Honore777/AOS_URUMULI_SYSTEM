@@ -137,6 +137,7 @@
                             <th class="px-4 py-3 text-left font-semibold">Description</th>
                             <th class="px-4 py-3 text-right font-semibold">Debit (RWF)</th>
                             <th class="px-4 py-3 text-right font-semibold">Credit (RWF)</th>
+                            <th class="px-4 py-3 text-right font-semibold">Original Amount</th>
                             <th class="px-4 py-3 text-right font-semibold">Running Balance</th>
                         </tr>
                     </thead>
@@ -148,6 +149,11 @@
                             <td class="px-4 py-3 text-slate-600">{{ row.description }}</td>
                             <td class="px-4 py-3 text-right font-extrabold text-red-700">{% if row.debit %}{{ '{:,.2f}'.format(row.debit) }}{% endif %}</td>
                             <td class="px-4 py-3 text-right font-extrabold text-emerald-700">{% if row.credit %}{{ '{:,.2f}'.format(row.credit) }}{% endif %}</td>
+                            <td class="px-4 py-3 text-right font-semibold text-slate-700">
+                                {% if (row.original_currency or '') == 'USD' and row.original_amount %}
+                                    {{ '{:,.2f}'.format(row.original_amount) }} USD
+                                {% endif %}
+                            </td>
                             <td class="px-4 py-3 text-right font-bold text-slate-900">{{ '{:,.2f}'.format(row.balance or 0) }}</td>
                         </tr>
                         {% endfor %}

@@ -346,7 +346,14 @@
   <ul>
   {% for payment in s.payments %}
     <li class="mb-1">
-      <span class="text-xs text-gray-500">{{ payment.date }} - {{ payment.amount | round(2) }} RWF</span>
+      <span class="text-xs text-gray-500">
+        {{ payment.date }} -
+        {% if (payment.currency or 'RWF') == 'USD' %}
+          {{ '{:,.2f}'.format(payment.amount_input or 0) }} USD ({{ '{:,.2f}'.format(payment.amount_rwf or 0) }} RWF)
+        {% else %}
+          {{ '{:,.2f}'.format(payment.amount_rwf or 0) }} RWF
+        {% endif %}
+      </span>
       <a href="{{ url_for('copper.supplier_receipt', payment_id=payment.id) }}"
          class="ml-2 inline-block px-2 py-1 bg-pink-600 text-white rounded no-print hover:bg-pink-700 transition text-xs">
         View / Print Receipt

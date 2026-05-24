@@ -601,6 +601,25 @@ def pay_supplier():
             .all()
         )
 
+    # Include suppliers that exist only in unified advances (e.g., historical imports)
+    # so table rows stay consistent with autocomplete suggestions.
+    from core.models import UnifiedSupplierAdvance
+
+    advance_suppliers = (
+        db.session.query(
+            UnifiedSupplierAdvance.supplier_name_norm.label('supplier_norm'),
+            func.max(UnifiedSupplierAdvance.supplier_name).label('supplier_name'),
+            func.max(UnifiedSupplierAdvance.paid_at).label('latest_paid_at'),
+        )
+        .filter(
+            UnifiedSupplierAdvance.is_deleted.is_(False),
+            UnifiedSupplierAdvance.supplier_name_norm.isnot(None),
+            func.trim(UnifiedSupplierAdvance.supplier_name_norm) != '',
+        )
+        .group_by(UnifiedSupplierAdvance.supplier_name_norm)
+        .all()
+    )
+
     # Merge by normalized supplier name so the user sees a single row per supplier.
     merged = {}
     def _ensure(name: str | None) -> dict:
@@ -659,6 +678,22 @@ def pay_supplier():
             row['latest_paid_at'] = r.latest_paid_at
         row['minerals'].add('Cassiterite')
 
+    for r in advance_suppliers:
+        name = (r.supplier_name or '').strip() or (r.supplier_norm or '').strip()
+        row = _ensure(name)
+        if not row:
+            continue
+        if r.latest_paid_at and (row['latest_paid_at'] is None or r.latest_paid_at > row['latest_paid_at']):
+            row['latest_paid_at'] = r.latest_paid_at
+        row['minerals'].add('Advance')
+
+    merged_supplier_names = [
+        (row.get('supplier') or '').strip()
+        for row in merged.values()
+        if (row.get('supplier') or '').strip()
+    ]
+    remaining_map = calculate_consolidated_supplier_remaining_balances(merged_supplier_names)
+
     rows = []
     for norm, r in merged.items():
         supplier_name = (r.get('supplier') or '').strip()
@@ -668,8 +703,8 @@ def pay_supplier():
             continue
         net_balance = float(r.get('net_balance') or 0.0)
         total_paid = float(r.get('total_paid') or 0.0)
-        remaining = max(net_balance - total_paid, 0.0)
-        if remaining <= 0 and net_balance <= 0 and total_paid <= 0:
+        remaining = float(remaining_map.get(' '.join(supplier_name.lower().split()), net_balance - total_paid))
+        if abs(remaining) <= 0.0001 and net_balance <= 0 and total_paid <= 0:
             continue
         rows.append({
             'supplier': supplier_name,
@@ -715,7 +750,9 @@ def pay_supplier():
             payments_map.setdefault(key, []).append({
                 'id': payment.id,
                 'date': payment.paid_at.strftime('%Y-%m-%d %H:%M') if getattr(payment, 'paid_at', None) else '',
-                'amount': float(payment.amount_rwf or payment.amount or 0),
+                'currency': (getattr(payment, 'currency', None) or 'RWF').upper(),
+                'amount_input': float(getattr(payment, 'input_amount', None) or getattr(payment, 'amount', 0) or 0),
+                'amount_rwf': float(getattr(payment, 'amount_rwf', None) or getattr(payment, 'amount', 0) or 0),
             })
         # limit to most recent 5 per supplier
         for k in list(payments_map.keys()):

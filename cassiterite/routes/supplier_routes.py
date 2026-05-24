@@ -451,7 +451,9 @@ def pay_supplier():
 			payments_map.setdefault(key, []).append({
 				'id': payment.id,
 				'date': payment.paid_at.strftime('%Y-%m-%d %H:%M') if getattr(payment, 'paid_at', None) else '',
-				'amount': float(payment.amount_rwf or payment.amount or 0),
+				'currency': (getattr(payment, 'currency', None) or 'RWF').upper(),
+				'amount_input': float(getattr(payment, 'input_amount', None) or getattr(payment, 'amount', 0) or 0),
+				'amount_rwf': float(getattr(payment, 'amount_rwf', None) or getattr(payment, 'amount', 0) or 0),
 			})
 		for k in list(payments_map.keys()):
 			payments_map[k] = payments_map[k][:5]

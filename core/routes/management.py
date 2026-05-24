@@ -753,6 +753,13 @@ def consolidated_supplier_ledger(supplier_norm: str):
         )
         for p, s in copper_settlements:
             amt = float(getattr(p, "amount_rwf", None) or getattr(p, "amount", 0.0) or 0.0)
+            original_currency = (getattr(p, "currency", None) or "RWF").upper()
+            original_amount = float(
+                getattr(p, "input_amount", None)
+                or getattr(p, "amount", 0.0)
+                or getattr(p, "amount_rwf", 0.0)
+                or 0.0
+            )
             ledger_events.append({
                 "date": getattr(p, "paid_at", None),
                 "sort_key": 2,
@@ -760,6 +767,8 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 "description": f"Settlement Payment (Stock {getattr(s, 'voucher_no', '-')}) (Ref: {getattr(p, 'reference', None) or '-'})",
                 "debit": 0.0,
                 "credit": amt,
+                "original_currency": original_currency,
+                "original_amount": original_amount,
             })
     except Exception:
         pass
@@ -790,6 +799,13 @@ def consolidated_supplier_ledger(supplier_norm: str):
         )
         for p, s in cass_settlements:
             amt = float(getattr(p, "amount_rwf", None) or getattr(p, "amount", 0.0) or 0.0)
+            original_currency = (getattr(p, "currency", None) or "RWF").upper()
+            original_amount = float(
+                getattr(p, "input_amount", None)
+                or getattr(p, "amount", 0.0)
+                or getattr(p, "amount_rwf", 0.0)
+                or 0.0
+            )
             ledger_events.append({
                 "date": getattr(p, "paid_at", None),
                 "sort_key": 2,
@@ -797,6 +813,8 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 "description": f"Settlement Payment (Stock {getattr(s, 'voucher_no', '-')}) (Ref: {getattr(p, 'reference', None) or '-'})",
                 "debit": 0.0,
                 "credit": amt,
+                "original_currency": original_currency,
+                "original_amount": original_amount,
             })
     except Exception:
         pass
@@ -832,11 +850,19 @@ def consolidated_supplier_ledger(supplier_norm: str):
             "description": f"Advance Applied to Stock {voucher}",
             "debit": 0.0,
             "credit": float(getattr(alloc, "applied_amount", 0.0) or 0.0),
+            "original_currency": None,
+            "original_amount": None,
         })
 
     # Unified advances and refunds (credits for advances, debits for refunds)
     for a in advances:
         amt = float(getattr(a, "amount_rwf", 0.0) or 0.0)
+        original_currency = (getattr(a, "currency", None) or "RWF").upper()
+        original_amount = float(
+            getattr(a, "input_amount", None)
+            or getattr(a, "amount_rwf", 0.0)
+            or 0.0
+        )
         source = (getattr(a, "source_mineral_type", None) or "").strip().lower()
         mineral = "coltan" if source in {"copper", "coltan"} else ("cassiterite" if source == "cassiterite" else ("refund" if source == "refund" else "-"))
         is_refund = bool(source == "refund" or amt < 0)
@@ -852,6 +878,8 @@ def consolidated_supplier_ledger(supplier_norm: str):
             "description": desc,
             "debit": abs(amt) if is_refund else 0.0,
             "credit": 0.0 if is_refund else amt,
+            "original_currency": original_currency,
+            "original_amount": original_amount,
         })
 
     from datetime import date as _date
@@ -1005,6 +1033,8 @@ def consolidated_supplier_ledger(supplier_norm: str):
             'debit': 0.0,
             'credit': 0.0,
             'balance': float(opening_balance or 0.0),
+            'original_currency': None,
+            'original_amount': None,
         })
 
     running_filtered = float(opening_balance or 0.0)
@@ -1019,6 +1049,8 @@ def consolidated_supplier_ledger(supplier_norm: str):
             'debit': debit,
             'credit': credit,
             'balance': running_filtered,
+            'original_currency': ev.get('original_currency'),
+            'original_amount': ev.get('original_amount'),
         })
 
     ledger_running_balance = float(ledger_entries[-1]['balance'] if ledger_entries else supplier_remaining)

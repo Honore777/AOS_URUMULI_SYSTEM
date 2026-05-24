@@ -162,7 +162,7 @@ class CassiteriteSupplierPaymentForm(FlaskForm):
     exchange_rate = FloatField(
         'Exchange Rate (RWF per currency unit)',
         validators=[Optional(), NumberRange(min=0.0001)],
-        default=1.0
+        default=None
     )
     paid_at = DateTimeLocalField(
         'Payment Date / Time',
