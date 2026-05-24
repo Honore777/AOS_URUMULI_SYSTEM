@@ -88,6 +88,8 @@
                         <th>Mineral</th>
                         <th>Voucher / Lot</th>
                         <th style="text-align:right;">Input (kg)</th>
+                        <th style="text-align:right;">Percentage (%)</th>
+                        <th style="text-align:right;">NB</th>
                         <th style="text-align:right;">Gross Balance</th>
                         <th style="text-align:right;">Transport</th>
                         <th style="text-align:right;">RMA</th>
@@ -102,6 +104,8 @@
                         <td>{{ r.mineral or '-' }}</td>
                         <td>{{ r.voucher_no or '-' }}</td>
                         <td style="text-align:right;">{{ '{:,.2f}'.format(r.input_kg or 0) }}</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.percentage or 0) }}%</td>
+                        <td style="text-align:right;">{{ '{:,.2f}'.format(r.nb or 0) }}</td>
                         <td style="text-align:right; font-weight: 700;">{{ '{:,.2f}'.format(r.gross or 0) }}</td>
                         <td style="text-align:right;">{{ '{:,.2f}'.format(r.transport or 0) }}</td>
                         <td style="text-align:right;">{{ '{:,.2f}'.format(r.rma or 0) }}</td>

@@ -820,7 +820,11 @@ def pay_supplier_advance_historical():
 @cassiterite_bp.route('/supplier/settlement/search.json')
 @role_required('accountant')
 def supplier_settlement_search():
-	"""AJAX endpoint: get all suppliers with their total balance_to_pay from stocks."""
+	"""AJAX endpoint: get all suppliers with their total balance_to_pay from stocks.
+	
+	Groups suppliers by normalized name to consolidate variations like:
+	- "HAKIZIMANA" and "HAKIZIMANA J. PIERRE" → grouped as "HAKIZIMANA"
+	"""
 	from copper.models import CopperStock
 	
 	q = (request.args.get('q') or '').strip()
@@ -832,7 +836,7 @@ def supplier_settlement_search():
 	).filter(
 		CopperStock.is_deleted.is_(False),
 		CopperStock.net_balance > 0,
-	).group_by(CopperStock.supplier).all()
+	).all()
 	
 	# Query cassiterite stocks with balance_to_pay > 0
 	cass_suppliers = db.session.query(
@@ -841,25 +845,34 @@ def supplier_settlement_search():
 	).filter(
 		CassiteriteStock.is_deleted.is_(False),
 		CassiteriteStock.balance_to_pay > 0,
-	).group_by(CassiteriteStock.supplier).all()
+	).all()
 	
-	# Merge suppliers and sum their balances
-	supplier_map = {}
+	# Merge suppliers and group by NORMALIZED name to consolidate variations
+	supplier_map = {}  # normalized_name -> (canonical_name, total_balance)
+	
 	for r in copper_suppliers:
 		supplier_name = (r.supplier or '').strip()
-		if supplier_name not in supplier_map:
-			supplier_map[supplier_name] = 0.0
-		supplier_map[supplier_name] += float(r.total_net_balance or 0.0)
+		normalized = normalize_counterparty_name(supplier_name)
+		
+		if normalized not in supplier_map:
+			supplier_map[normalized] = (supplier_name, 0.0)
+		
+		current_name, balance = supplier_map[normalized]
+		supplier_map[normalized] = (current_name, balance + float(r.total_net_balance or 0.0))
 	
 	for r in cass_suppliers:
 		supplier_name = (r.supplier or '').strip()
-		if supplier_name not in supplier_map:
-			supplier_map[supplier_name] = 0.0
-		supplier_map[supplier_name] += float(r.total_net_balance or 0.0)
+		normalized = normalize_counterparty_name(supplier_name)
+		
+		if normalized not in supplier_map:
+			supplier_map[normalized] = (supplier_name, 0.0)
+		
+		current_name, balance = supplier_map[normalized]
+		supplier_map[normalized] = (current_name, balance + float(r.total_net_balance or 0.0))
 	
 	# Filter by query if provided
 	results = []
-	for supplier_name, total_balance in sorted(supplier_map.items()):
+	for normalized_name, (supplier_name, total_balance) in sorted(supplier_map.items()):
 		if q and q.lower() not in supplier_name.lower():
 			continue
 		if total_balance <= 0:
@@ -889,25 +902,11 @@ def record_supplier_settlement():
 			flash('Please select a supplier.', 'danger')
 			return redirect(url_for('cassiterite.record_supplier_settlement'))
 		
-		# Get total stock balance for this supplier
-		total_stock_balance = float(
-			db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0))
-			.filter(
-				CassiteriteStock.is_deleted.is_(False),
-				CassiteriteStock.supplier == supplier_name,
-				CassiteriteStock.balance_to_pay > 0,
-			).scalar() or 0.0
-		)
-		
-		if total_stock_balance <= 0:
-			flash(f'No unpaid stocks found for supplier "{supplier_name}".', 'warning')
-			return redirect(url_for('cassiterite.record_supplier_settlement'))
-		
-		# Get payment amount (default to full balance, but allow override)
+		# Get payment amount (user can specify any amount for settlement)
 		try:
-			payment_amount = float(request.form.get('payment_amount') or total_stock_balance)
+			payment_amount = float(request.form.get('payment_amount') or 0)
 		except (TypeError, ValueError):
-			payment_amount = total_stock_balance
+			payment_amount = 0
 		
 		if payment_amount <= 0:
 			flash('Payment amount must be greater than 0.', 'danger')
@@ -1048,6 +1047,8 @@ def supplier_receipt(payment_id):
 				'mineral': mineral_name,
 				'voucher_no': getattr(s, 'voucher_no', None) or str(getattr(s, 'id', '')),
 				'input_kg': float(getattr(s, 'input_kg', 0.0) or 0.0),
+				'percentage': float(getattr(s, 'percentage', 0.0) or 0.0),
+				'nb': float(getattr(s, 'nb', 0.0) or 0.0),
 				'gross': gross,
 				'transport': transport,
 				'rma': rma,
@@ -1120,6 +1121,8 @@ def supplier_receipt(payment_id):
 				'mineral': mineral_name,
 				'voucher_no': getattr(s, 'voucher_no', None) or str(getattr(s, 'id', '')),
 				'input_kg': float(getattr(s, 'input_kg', 0.0) or 0.0),
+				'percentage': float(getattr(s, 'percentage', 0.0) or 0.0),
+				'nb': float(getattr(s, 'nb', 0.0) or 0.0),
 				'gross': gross,
 				'transport': transport,
 				'rma': rma,
