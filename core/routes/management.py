@@ -593,6 +593,10 @@ def consolidated_supplier_ledger(supplier_norm: str):
     if not supplier_name:
         supplier_name = (supplier_norm or '').strip() or norm
 
+    # If legacy data stored supplier_name as slug, display canonical spaced form.
+    if supplier_name and ('-' in supplier_name) and (' ' not in supplier_name) and ('/' not in supplier_name):
+        supplier_name = ' '.join((norm or supplier_name).split())
+
     supplier_remaining = calculate_consolidated_supplier_remaining_balance(supplier_name)
 
     wallet_remaining = float(sum([float(a.advance_remaining or 0.0) for a in (advances or [])]) or 0.0)
