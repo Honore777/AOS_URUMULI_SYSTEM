@@ -39,6 +39,9 @@
                     </span>
                 </a>
                 {% if current_user.is_authenticated and current_user.role in ['accountant', 'admin'] %}
+                <a href="{{ url_for('cassiterite.record_supplier_settlement') }}" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg shadow-sm mr-2">
+                    Record Settlement
+                </a>
                 <a href="{{ url_for('cassiterite.pay_supplier_advance_historical') }}" class="bg-amber-600 hover:bg-amber-700 text-white font-semibold py-2 px-4 rounded-lg shadow-sm">
                     Record Historical Advance
                 </a>

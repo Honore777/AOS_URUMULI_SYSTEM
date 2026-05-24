@@ -732,11 +732,12 @@ def consolidated_supplier_ledger(supplier_norm: str):
             "credit": 0.0,
         })
 
-    # Settlement payments (credits)
+    # Settlement payments (credits) - include both linked and unlinked settlements
     try:
         from copper.models import SupplierPayment as CopperSupplierPayment, CopperStock
 
-        copper_settlements_q = (
+        # Query for linked settlements (old style - linked to specific stock)
+        copper_linked_q = (
             db.session.query(CopperSupplierPayment, CopperStock)
             .join(CopperStock, CopperStock.id == CopperSupplierPayment.stock_id)
             .filter(
@@ -747,17 +748,41 @@ def consolidated_supplier_ledger(supplier_norm: str):
             )
         )
         if filter_from:
-            copper_settlements_q = copper_settlements_q.filter(CopperSupplierPayment.paid_at >= datetime.combine(filter_from, time.min))
+            copper_linked_q = copper_linked_q.filter(CopperSupplierPayment.paid_at >= datetime.combine(filter_from, time.min))
         if filter_to:
-            copper_settlements_q = copper_settlements_q.filter(CopperSupplierPayment.paid_at <= datetime.combine(filter_to, time.max))
+            copper_linked_q = copper_linked_q.filter(CopperSupplierPayment.paid_at <= datetime.combine(filter_to, time.max))
 
-        copper_settlements = (
-            copper_settlements_q
+        copper_linked = (
+            copper_linked_q
             .order_by(CopperSupplierPayment.paid_at.desc(), CopperSupplierPayment.id.desc())
             .limit(row_limit)
             .all()
         )
-        for p, s in copper_settlements:
+        
+        # Query for unlinked settlements (new style - not tied to specific stock)
+        copper_unlinked_q = (
+            db.session.query(CopperSupplierPayment)
+            .filter(
+                CopperSupplierPayment.is_deleted.is_(False),
+                CopperSupplierPayment.stock_id.is_(None),
+                CopperSupplierPayment.is_advance.is_(False),  # Only settlements, not advances
+                func.lower(func.coalesce(CopperSupplierPayment.supplier_name, '')).ilike(supplier_like),
+            )
+        )
+        if filter_from:
+            copper_unlinked_q = copper_unlinked_q.filter(CopperSupplierPayment.paid_at >= datetime.combine(filter_from, time.min))
+        if filter_to:
+            copper_unlinked_q = copper_unlinked_q.filter(CopperSupplierPayment.paid_at <= datetime.combine(filter_to, time.max))
+
+        copper_unlinked = (
+            copper_unlinked_q
+            .order_by(CopperSupplierPayment.paid_at.desc(), CopperSupplierPayment.id.desc())
+            .limit(row_limit)
+            .all()
+        )
+        
+        # Process linked settlements
+        for p, s in copper_linked:
             amt = float(getattr(p, "amount_rwf", None) or getattr(p, "amount", 0.0) or 0.0)
             original_currency = (getattr(p, "currency", None) or "RWF").upper()
             original_amount = float(
@@ -776,13 +801,35 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 "original_currency": original_currency,
                 "original_amount": original_amount,
             })
+        
+        # Process unlinked settlements
+        for p in copper_unlinked:
+            amt = float(getattr(p, "amount_rwf", None) or getattr(p, "amount", 0.0) or 0.0)
+            original_currency = (getattr(p, "currency", None) or "RWF").upper()
+            original_amount = float(
+                getattr(p, "input_amount", None)
+                or getattr(p, "amount", 0.0)
+                or getattr(p, "amount_rwf", 0.0)
+                or 0.0
+            )
+            ledger_events.append({
+                "date": getattr(p, "paid_at", None),
+                "sort_key": 2,
+                "mineral": "coltan",
+                "description": f"Settlement Payment (All stocks) (Ref: {getattr(p, 'reference', None) or '-'})",
+                "debit": 0.0,
+                "credit": amt,
+                "original_currency": original_currency,
+                "original_amount": original_amount,
+            })
     except Exception:
         pass
 
     try:
         from cassiterite.models import CassiteriteSupplierPayment, CassiteriteStock
 
-        cass_settlements_q = (
+        # Query for linked settlements (old style - linked to specific stock)
+        cass_linked_q = (
             db.session.query(CassiteriteSupplierPayment, CassiteriteStock)
             .join(CassiteriteStock, CassiteriteStock.id == CassiteriteSupplierPayment.stock_id)
             .filter(
@@ -793,17 +840,41 @@ def consolidated_supplier_ledger(supplier_norm: str):
             )
         )
         if filter_from:
-            cass_settlements_q = cass_settlements_q.filter(CassiteriteSupplierPayment.paid_at >= datetime.combine(filter_from, time.min))
+            cass_linked_q = cass_linked_q.filter(CassiteriteSupplierPayment.paid_at >= datetime.combine(filter_from, time.min))
         if filter_to:
-            cass_settlements_q = cass_settlements_q.filter(CassiteriteSupplierPayment.paid_at <= datetime.combine(filter_to, time.max))
+            cass_linked_q = cass_linked_q.filter(CassiteriteSupplierPayment.paid_at <= datetime.combine(filter_to, time.max))
 
-        cass_settlements = (
-            cass_settlements_q
+        cass_linked = (
+            cass_linked_q
             .order_by(CassiteriteSupplierPayment.paid_at.desc(), CassiteriteSupplierPayment.id.desc())
             .limit(row_limit)
             .all()
         )
-        for p, s in cass_settlements:
+        
+        # Query for unlinked settlements (new style - not tied to specific stock)
+        cass_unlinked_q = (
+            db.session.query(CassiteriteSupplierPayment)
+            .filter(
+                CassiteriteSupplierPayment.is_deleted.is_(False),
+                CassiteriteSupplierPayment.stock_id.is_(None),
+                CassiteriteSupplierPayment.is_advance.is_(False),  # Only settlements, not advances
+                func.lower(func.coalesce(CassiteriteSupplierPayment.supplier_name, '')).ilike(supplier_like),
+            )
+        )
+        if filter_from:
+            cass_unlinked_q = cass_unlinked_q.filter(CassiteriteSupplierPayment.paid_at >= datetime.combine(filter_from, time.min))
+        if filter_to:
+            cass_unlinked_q = cass_unlinked_q.filter(CassiteriteSupplierPayment.paid_at <= datetime.combine(filter_to, time.max))
+
+        cass_unlinked = (
+            cass_unlinked_q
+            .order_by(CassiteriteSupplierPayment.paid_at.desc(), CassiteriteSupplierPayment.id.desc())
+            .limit(row_limit)
+            .all()
+        )
+        
+        # Process linked settlements
+        for p, s in cass_linked:
             amt = float(getattr(p, "amount_rwf", None) or getattr(p, "amount", 0.0) or 0.0)
             original_currency = (getattr(p, "currency", None) or "RWF").upper()
             original_amount = float(
@@ -817,6 +888,27 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 "sort_key": 2,
                 "mineral": "cassiterite",
                 "description": f"Settlement Payment (Stock {getattr(s, 'voucher_no', '-')}) (Ref: {getattr(p, 'reference', None) or '-'})",
+                "debit": 0.0,
+                "credit": amt,
+                "original_currency": original_currency,
+                "original_amount": original_amount,
+            })
+        
+        # Process unlinked settlements
+        for p in cass_unlinked:
+            amt = float(getattr(p, "amount_rwf", None) or getattr(p, "amount", 0.0) or 0.0)
+            original_currency = (getattr(p, "currency", None) or "RWF").upper()
+            original_amount = float(
+                getattr(p, "input_amount", None)
+                or getattr(p, "amount", 0.0)
+                or getattr(p, "amount_rwf", 0.0)
+                or 0.0
+            )
+            ledger_events.append({
+                "date": getattr(p, "paid_at", None),
+                "sort_key": 2,
+                "mineral": "cassiterite",
+                "description": f"Settlement Payment (All stocks) (Ref: {getattr(p, 'reference', None) or '-'})",
                 "debit": 0.0,
                 "credit": amt,
                 "original_currency": original_currency,
@@ -1269,6 +1361,148 @@ def supplier_settlement_statement(supplier_norm: str):
         rows=rows,
         summary=summary,
     )
+
+
+@core_bp.route('/accountant/suppliers/<path:supplier_norm>/settle-open-balances', methods=['POST'])
+@role_required('accountant', 'boss', 'admin')
+def settle_supplier_open_balances(supplier_norm: str):
+    from utils import normalize_counterparty_name, generate_supplier_slug
+    from copper.models import CopperStock, SupplierPayment as CopperSupplierPayment
+    from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment
+    from core.models import User
+
+    input_norm = (supplier_norm or '').strip().lower()
+    if not input_norm:
+        abort(404)
+
+    norm = None
+    was_slug_input = False
+    if '-' in input_norm and ' ' not in input_norm and '/' not in input_norm:
+        was_slug_input = True
+        slug_matches = (
+            db.session.query(func.max(func.trim(CopperStock.supplier)))
+            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(f"%{'%'.join(input_norm.split('-'))}%"))
+            .scalar()
+        )
+        if slug_matches:
+            norm = normalize_counterparty_name(slug_matches)
+
+    if not norm:
+        candidate = ' '.join(input_norm.split('-')) if was_slug_input else input_norm
+        norm = normalize_counterparty_name(candidate)
+
+    if not norm:
+        abort(404)
+
+    supplier_like = f"%{'%'.join(norm.split())}%"
+    supplier_name = None
+    try:
+        supplier_name = (
+            db.session.query(func.max(func.trim(CopperStock.supplier)))
+            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+            .scalar()
+        )
+    except Exception:
+        supplier_name = None
+    if not supplier_name:
+        try:
+            supplier_name = (
+                db.session.query(func.max(func.trim(CassiteriteStock.supplier)))
+                .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+                .scalar()
+            )
+        except Exception:
+            supplier_name = None
+    supplier_name = supplier_name or norm
+
+    reference_base = (request.form.get('reference') or '').strip()
+    audit_note = (request.form.get('note') or '').strip()
+    if not reference_base:
+        reference_base = f"AUTO-SETTLE-{generate_supplier_slug(supplier_name or norm) or norm}"
+    now = datetime.utcnow()
+
+    created_rows = 0
+    total_rwf = 0.0
+
+    # Copper stocks
+    copper_stocks = (
+        CopperStock.query
+        .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+        .order_by(CopperStock.date.asc(), CopperStock.id.asc())
+        .all()
+    )
+    for stock in copper_stocks:
+        try:
+            outstanding = float(stock.remaining_to_pay() or 0.0)
+        except Exception:
+            outstanding = 0.0
+        if outstanding <= 0:
+            continue
+        payment = CopperSupplierPayment(
+            supplier_name=(stock.supplier or supplier_name or norm),
+            stock_id=stock.id,
+            amount=outstanding,
+            input_amount=outstanding,
+            currency='RWF',
+            exchange_rate=1.0,
+            amount_rwf=outstanding,
+            paid_at=now,
+            method='system_settlement',
+            reference=f"{reference_base}-{getattr(stock, 'voucher_no', stock.id)}",
+            note=audit_note or 'Direct supplier settlement of open balance',
+            payment_type='SETTLEMENT',
+            approval_status='APPROVED',
+            disbursement_status='DISBURSED',
+            created_by_id=getattr(current_user, 'id', None),
+            is_advance=False,
+        )
+        db.session.add(payment)
+        created_rows += 1
+        total_rwf += outstanding
+
+    # Cassiterite stocks
+    cass_stocks = (
+        CassiteriteStock.query
+        .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+        .order_by(CassiteriteStock.date.asc(), CassiteriteStock.id.asc())
+        .all()
+    )
+    for stock in cass_stocks:
+        try:
+            outstanding = float(stock.remaining_to_pay() or 0.0)
+        except Exception:
+            outstanding = 0.0
+        if outstanding <= 0:
+            continue
+        payment = CassiteriteSupplierPayment(
+            supplier_name=(stock.supplier or supplier_name or norm),
+            stock_id=stock.id,
+            amount=outstanding,
+            input_amount=outstanding,
+            currency='RWF',
+            exchange_rate=1.0,
+            amount_rwf=outstanding,
+            paid_at=now,
+            method='system_settlement',
+            reference=f"{reference_base}-{getattr(stock, 'voucher_no', stock.id)}",
+            note=audit_note or 'Direct supplier settlement of open balance',
+            payment_type='SETTLEMENT',
+            approval_status='APPROVED',
+            disbursement_status='DISBURSED',
+            created_by_id=getattr(current_user, 'id', None),
+            is_advance=False,
+        )
+        db.session.add(payment)
+        created_rows += 1
+        total_rwf += outstanding
+
+    if created_rows <= 0:
+        flash('No open balances found for this supplier.', 'info')
+        return redirect(url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm))
+
+    db.session.commit()
+    flash(f'Settled {created_rows} stock balance(s) for {supplier_name} totaling {total_rwf:,.2f} RWF.', 'success')
+    return redirect(url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm))
 
 
 

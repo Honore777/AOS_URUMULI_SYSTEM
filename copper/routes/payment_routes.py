@@ -1106,6 +1106,166 @@ def pay_supplier_advance_historical():
     return render_template('copper/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
 
 
+@copper_bp.route('/supplier/settlement/search.json')
+@role_required('accountant')
+def supplier_settlement_search():
+    """AJAX endpoint: get all suppliers with their total net_balance from stocks (both copper & cassiterite)."""
+    from cassiterite.models import CassiteriteStock
+    
+    q = (request.args.get('q') or '').strip()
+    
+    # Query copper stocks with net_balance > 0
+    copper_suppliers = db.session.query(
+        CopperStock.supplier.label('supplier'),
+        func.coalesce(func.sum(CopperStock.net_balance), 0).label('total_net_balance')
+    ).filter(
+        CopperStock.is_deleted.is_(False),
+        CopperStock.net_balance > 0,
+    ).group_by(CopperStock.supplier).all()
+    
+    # Query cassiterite stocks with balance_to_pay > 0
+    cass_suppliers = db.session.query(
+        CassiteriteStock.supplier.label('supplier'),
+        func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0).label('total_net_balance')
+    ).filter(
+        CassiteriteStock.is_deleted.is_(False),
+        CassiteriteStock.balance_to_pay > 0,
+    ).group_by(CassiteriteStock.supplier).all()
+    
+    # Merge suppliers and sum their balances
+    supplier_map = {}
+    for r in copper_suppliers:
+        supplier_name = (r.supplier or '').strip()
+        if supplier_name not in supplier_map:
+            supplier_map[supplier_name] = 0.0
+        supplier_map[supplier_name] += float(r.total_net_balance or 0.0)
+    
+    for r in cass_suppliers:
+        supplier_name = (r.supplier or '').strip()
+        if supplier_name not in supplier_map:
+            supplier_map[supplier_name] = 0.0
+        supplier_map[supplier_name] += float(r.total_net_balance or 0.0)
+    
+    # Filter by query if provided
+    results = []
+    for supplier_name, total_balance in sorted(supplier_map.items()):
+        if q and q.lower() not in supplier_name.lower():
+            continue
+        if total_balance <= 0:
+            continue
+        results.append({
+            'supplier': supplier_name,
+            'total_balance': f"{total_balance:,.2f}",
+            'total_balance_raw': float(total_balance),
+        })
+    
+    return safe_jsonify(results)
+
+
+@copper_bp.route('/record_supplier_settlement', methods=['GET', 'POST'])
+@role_required('accountant', 'admin')
+def record_supplier_settlement():
+    """Record a supplier settlement payment for all their unpaid stocks (bypasses approvals).
+    
+    The user selects a supplier, sees their total stock balance, optionally overrides
+    the amount, chooses currency, and creates a settlement that is immediately disbursed.
+    """
+    from flask_login import current_user
+    from cassiterite.models import CassiteriteStock
+    
+    if request.method == 'POST':
+        supplier_name = (request.form.get('supplier_name') or '').strip()
+        if not supplier_name:
+            flash('Please select a supplier.', 'danger')
+            return redirect(url_for('copper.record_supplier_settlement'))
+        
+        # Get total stock balance for this supplier (across both minerals)
+        copper_total = float(
+            db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0))
+            .filter(
+                CopperStock.is_deleted.is_(False),
+                CopperStock.supplier == supplier_name,
+                CopperStock.net_balance > 0,
+            ).scalar() or 0.0
+        )
+        
+        cass_total = float(
+            db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0))
+            .filter(
+                CassiteriteStock.is_deleted.is_(False),
+                CassiteriteStock.supplier == supplier_name,
+                CassiteriteStock.balance_to_pay > 0,
+            ).scalar() or 0.0
+        )
+        
+        total_stock_balance = copper_total + cass_total
+        
+        if total_stock_balance <= 0:
+            flash(f'No unpaid stocks found for supplier "{supplier_name}".', 'warning')
+            return redirect(url_for('copper.record_supplier_settlement'))
+        
+        # Get payment amount (default to full balance, but allow override)
+        try:
+            payment_amount = float(request.form.get('payment_amount') or total_stock_balance)
+        except (TypeError, ValueError):
+            payment_amount = total_stock_balance
+        
+        if payment_amount <= 0:
+            flash('Payment amount must be greater than 0.', 'danger')
+            return redirect(url_for('copper.record_supplier_settlement'))
+        
+        # Get currency and exchange rate
+        currency = (request.form.get('currency') or 'RWF').upper()
+        exchange_rate_input = request.form.get('exchange_rate') or None
+        note = (request.form.get('note') or '').strip()
+        
+        try:
+            amount_rwf, exchange_rate = _normalize_amount_to_rwf(payment_amount, currency, exchange_rate_input)
+        except ValueError as exc:
+            flash(str(exc), 'danger')
+            return redirect(url_for('copper.record_supplier_settlement'))
+        
+        # Create supplier if doesn't exist
+        supplier_id = _get_or_create_supplier_id(supplier_name)
+        
+        # Create settlement payment (unlinked to specific stock, approved/disbursed immediately)
+        try:
+            payment = SupplierPayment(
+                stock_id=None,  # Unlinked settlement
+                supplier_id=supplier_id,
+                supplier_name=supplier_name,
+                amount=amount_rwf,
+                input_amount=payment_amount,
+                currency=currency,
+                exchange_rate=exchange_rate,
+                amount_rwf=amount_rwf,
+                method=request.form.get('method') or 'cash',
+                reference=request.form.get('reference') or '',
+                note=note + (f" [Settlement for {total_stock_balance:,.2f} RWF in stocks]" if payment_amount != total_stock_balance else " [Settlement for all stocks]"),
+                payment_type='SETTLEMENT',
+                is_advance=False,
+                approval_status='APPROVED',  # Bypass boss approval
+                disbursement_status='DISBURSED',  # Immediate disbursement
+                approved_by_id=getattr(current_user, 'id', None),
+                approved_at=datetime.utcnow(),
+                disbursed_by_id=getattr(current_user, 'id', None),
+                disbursed_at=datetime.utcnow(),
+                created_by_id=getattr(current_user, 'id', None),
+            )
+            db.session.add(payment)
+            db.session.commit()
+            
+            flash(f'Settlement of {amount_rwf:,.2f} RWF ({payment_amount:,.2f} {currency}) recorded for {supplier_name}. Payment appears in ledger immediately.', 'success')
+            return redirect(url_for('copper.record_supplier_settlement'))
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error creating settlement: {str(e)}', 'danger')
+            return redirect(url_for('copper.record_supplier_settlement'))
+    
+    # GET request - show the form
+    return render_template('copper/record_supplier_settlement.html')
+
+
 @copper_bp.route('/pay_worker', methods=['GET', 'POST'])
 @role_required('accountant')
 def pay_worker():

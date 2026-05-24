@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Record Supplier Settlement - Cassiterite</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-gray-100 min-h-screen">
+<div class="container mx-auto p-6">
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">Record Supplier Settlement</h1>
+            <p class="text-sm text-gray-600">Create a settlement payment for supplier stocks. Bypasses approvals and appears in ledger immediately.</p>
+        </div>
+        <a href="{{ url_for('cassiterite.dashboard') }}" class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition">Back to Dashboard</a>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="mb-4 p-4 rounded {{ 'bg-green-100 text-green-800' if category=='success' else 'bg-red-100 text-red-800' }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="bg-white p-6 rounded shadow mb-8">
+        <h2 class="text-xl font-semibold mb-6">📋 Create Settlement Payment</h2>
+        <form method="POST" action="{{ url_for('cassiterite.record_supplier_settlement') }}" class="space-y-4">
+            
+            <!-- Supplier Selection -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-semibold mb-2">Supplier Name</label>
+                    <div class="relative">
+                        <input 
+                            type="text" 
+                            id="supplier-search" 
+                            name="supplier_name_display"
+                            class="w-full border rounded p-3 bg-white text-gray-900" 
+                            placeholder="Search or select supplier..."
+                            autocomplete="off"
+                            required>
+                        <input 
+                            type="hidden" 
+                            id="supplier-name" 
+                            name="supplier_name"
+                            required>
+                        <div id="supplier-suggestions" class="absolute z-10 w-full bg-white border border-t-0 rounded-b shadow-lg max-h-80 overflow-y-auto">
+                            <!-- Populated by JS on page load and as user types -->
+                        </div>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">Select from dropdown or type to search</p>
+                </div>
+                
+                <div>
+                    <label class="block text-gray-700 font-semibold mb-2">Total Stock Balance</label>
+                    <div class="w-full border rounded p-3 bg-gray-50 text-gray-900 font-bold text-lg">
+                        <span id="total-balance">0.00</span> RWF
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">Sum of all their unpaid stocks</p>
+                </div>
+            </div>
+
+            <!-- Payment Amount -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-semibold mb-2">Payment Amount</label>
+                    <input 
+                        type="number" 
+                        id="payment-amount"
+                        name="payment_amount" 
+                        class="w-full border rounded p-3" 
+                        placeholder="Leave blank to pay full balance"
+                        step="0.01"
+                        min="0">
+                    <p class="mt-1 text-xs text-gray-500">Leave blank to pay the full stock balance, or enter a custom amount</p>
+                </div>
+                
+                <div>
+                    <label class="block text-gray-700 font-semibold mb-2">Currency</label>
+                    <select 
+                        id="currency" 
+                        name="currency" 
+                        class="w-full border rounded p-3 bg-white">
+                        <option value="RWF" selected>RWF (Rwandan Franc)</option>
+                        <option value="USD">USD (US Dollar)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Exchange Rate (only for USD) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-semibold mb-2">Exchange Rate</label>
+                    <input 
+                        type="number" 
+                        id="exchange-rate"
+                        name="exchange_rate" 
+                        class="w-full border rounded p-3" 
+                        placeholder="RWF per USD (required for USD)"
+                        step="0.01"
+                        min="0">
+                    <p class="mt-1 text-xs text-gray-500">Required only if currency is USD (RWF per 1 USD)</p>
+                </div>
+                
+                <div>
+                    <label class="block text-gray-700 font-semibold mb-2">Payment Method</label>
+                    <select name="method" class="w-full border rounded p-3 bg-white">
+                        <option value="cash">Cash</option>
+                        <option value="bank">Bank Transfer</option>
+                        <option value="momo">Mobile Money</option>
+                        <option value="check">Check</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Reference and Note -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 font-semibold mb-2">Reference</label>
+                    <input 
+                        type="text" 
+                        name="reference" 
+                        class="w-full border rounded p-3" 
+                        placeholder="e.g., Receipt #, Transaction ID">
+                    <p class="mt-1 text-xs text-gray-500">Optional transaction reference or receipt number</p>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-gray-700 font-semibold mb-2">Note / Description</label>
+                <textarea 
+                    name="note" 
+                    class="w-full border rounded p-3" 
+                    rows="4"
+                    placeholder="Add any notes about this settlement..."></textarea>
+                <p class="mt-1 text-xs text-gray-500">Optional: Explain why this settlement is being recorded</p>
+            </div>
+
+            <!-- Submit Button -->
+            <div class="flex gap-2 pt-4">
+                <button 
+                    type="submit" 
+                    class="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-3 rounded transition">
+                    ✓ Record Settlement
+                </button>
+                <a 
+                    href="{{ url_for('cassiterite.dashboard') }}" 
+                    class="bg-gray-400 hover:bg-gray-500 text-white font-semibold px-6 py-3 rounded transition">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+
+</div>
+
+<script>
+let allSuppliers = [];
+let currentSuppliers = [];
+
+// Load all suppliers on page load
+async function loadAllSuppliers() {
+    try {
+        const response = await fetch(`{{ url_for('cassiterite.supplier_settlement_search') }}?q=`);
+        const data = await response.json();
+        allSuppliers = data;
+        displaySuppliers(data);
+        console.log('Loaded', data.length, 'suppliers');
+    } catch (error) {
+        console.error('Error loading suppliers:', error);
+    }
+}
+
+// Display suppliers in dropdown
+function displaySuppliers(suppliers) {
+    const suggestDiv = document.getElementById('supplier-suggestions');
+    suggestDiv.innerHTML = '';
+    
+    if (suppliers.length === 0) {
+        suggestDiv.innerHTML = '<div class="p-3 text-gray-500">No suppliers with unpaid stocks</div>';
+        return;
+    }
+    
+    suppliers.forEach(supplier => {
+        const div = document.createElement('div');
+        div.className = 'p-3 hover:bg-teal-50 cursor-pointer border-b transition';
+        div.innerHTML = `
+            <div class="font-semibold text-gray-900">${supplier.supplier}</div>
+            <div class="text-sm text-gray-600">Balance: <span class="font-mono">${supplier.total_balance}</span> RWF</div>
+        `;
+        div.addEventListener('click', () => {
+            selectSupplier(supplier);
+        });
+        suggestDiv.appendChild(div);
+    });
+}
+
+// Select supplier
+function selectSupplier(supplier) {
+    document.getElementById('supplier-search').value = supplier.supplier;
+    document.getElementById('supplier-name').value = supplier.supplier;
+    document.getElementById('total-balance').textContent = supplier.total_balance;
+    document.getElementById('payment-amount').value = '';
+    document.getElementById('payment-amount').placeholder = `Leave blank to pay full ${supplier.total_balance} RWF`;
+    document.getElementById('supplier-suggestions').classList.add('hidden');
+}
+
+// Fetch suppliers as user types
+document.getElementById('supplier-search').addEventListener('input', async (e) => {
+    const query = e.target.value.trim();
+    const suggestDiv = document.getElementById('supplier-suggestions');
+    
+    if (query.length === 0) {
+        // Show all suppliers if input is empty
+        displaySuppliers(allSuppliers);
+        suggestDiv.classList.remove('hidden');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`{{ url_for('cassiterite.supplier_settlement_search') }}?q=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        currentSuppliers = data;
+        displaySuppliers(data);
+        suggestDiv.classList.remove('hidden');
+    } catch (error) {
+        console.error('Error fetching suppliers:', error);
+    }
+});
+
+// Show all suppliers when input is focused
+document.getElementById('supplier-search').addEventListener('focus', (e) => {
+    const suggestDiv = document.getElementById('supplier-suggestions');
+    const query = e.target.value.trim();
+    
+    if (query.length === 0) {
+        displaySuppliers(allSuppliers);
+    }
+    suggestDiv.classList.remove('hidden');
+});
+
+// Hide suggestions when clicking outside
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('#supplier-search') && !e.target.closest('#supplier-suggestions')) {
+        document.getElementById('supplier-suggestions').classList.add('hidden');
+    }
+});
+
+// Update exchange rate visibility based on currency
+document.getElementById('currency').addEventListener('change', (e) => {
+    const exchangeRateInput = document.getElementById('exchange-rate');
+    if (e.target.value === 'USD') {
+        exchangeRateInput.required = true;
+        exchangeRateInput.parentElement.style.opacity = '1';
+    } else {
+        exchangeRateInput.required = false;
+        exchangeRateInput.value = '';
+        exchangeRateInput.parentElement.style.opacity = '0.6';
+    }
+});
+
+// Form validation
+document.querySelector('form').addEventListener('submit', (e) => {
+    const supplierName = document.getElementById('supplier-name').value.trim();
+    const paymentAmount = parseFloat(document.getElementById('payment-amount').value) || 0;
+    const currency = document.getElementById('currency').value;
+    const exchangeRate = parseFloat(document.getElementById('exchange-rate').value) || 0;
+    
+    if (!supplierName) {
+        e.preventDefault();
+        alert('Please select a supplier');
+        return;
+    }
+    
+    if (currency === 'USD' && exchangeRate <= 0) {
+        e.preventDefault();
+        alert('Exchange rate is required for USD payments and must be greater than 0');
+        return;
+    }
+});
+
+// Load all suppliers when page loads
+document.addEventListener('DOMContentLoaded', () => {
+    loadAllSuppliers();
+});
+</script>
+</body>
+</html>
