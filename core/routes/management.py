@@ -460,7 +460,7 @@ def supplier_name_suggest():
 @role_required("accountant", "boss", "admin")
 def consolidated_supplier_ledger(supplier_norm: str):
     from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
-    from utils import calculate_consolidated_supplier_remaining_balance
+    from utils import calculate_consolidated_supplier_remaining_balance, normalize_counterparty_name
 
     # Resolve supplier name from parameter (could be slug, normalized name, or direct name)
     input_norm = (supplier_norm or '').strip().lower()
@@ -486,15 +486,11 @@ def consolidated_supplier_ledger(supplier_norm: str):
         if slug_matches:
             norm = slug_matches[0]
     
-    # Strategy 2: If no match yet, try treating input as a normalized name
-    # OR if it was a slug, convert it to a spaced name for stock-only suppliers
+    # Strategy 2: If no match yet, canonicalize input safely for names that may
+    # contain slashes/punctuation (e.g. "uwimana/alphonse").
     if not norm:
-        if was_slug_input:
-            # Convert slug "name-with-hyphens" to "name with hyphens" for stock lookups
-            norm = ' '.join(input_norm.split('-'))
-        else:
-            # Already a normalized name
-            norm = ' '.join(input_norm.split())
+        candidate = ' '.join(input_norm.split('-')) if was_slug_input else input_norm
+        norm = normalize_counterparty_name(candidate)
     
     if not norm:
         abort(404)
