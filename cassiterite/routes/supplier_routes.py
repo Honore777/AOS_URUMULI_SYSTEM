@@ -11,7 +11,7 @@ from core.auth import role_required
 from flask import url_for, flash
 from config import db
 from sqlalchemy import func, or_
-from utils import normalize_counterparty_name, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances, build_consolidated_supplier_choices
+from utils import normalize_counterparty_name, generate_supplier_slug, close_name_matches, safe_jsonify, calculate_consolidated_supplier_remaining_balance, calculate_consolidated_supplier_remaining_balances, build_consolidated_supplier_choices
 
 
 def _normalize_amount_to_rwf(amount, currency, exchange_rate):
@@ -789,12 +789,10 @@ def pay_supplier_advance_historical():
 		db.session.add(payment)
 		db.session.flush()
 
-		def _norm_supplier(nm):
-			return ' '.join((nm or '').strip().lower().split())
-
 		unified = UnifiedSupplierAdvance(
 			supplier_name=supplier,
-			supplier_name_norm=_norm_supplier(supplier),
+			supplier_name_norm=normalize_counterparty_name(supplier),
+			supplier_slug=generate_supplier_slug(supplier),
 			source_mineral_type='historical',
 			source_payment_id=None,
 			input_amount=float(input_amount) if input_amount is not None else None,

@@ -496,6 +496,12 @@ def consolidated_supplier_ledger(supplier_norm: str):
         abort(404)
 
     supplier_like = f"%{'%'.join(norm.split())}%"
+    norm_slug = '-'.join(norm.split())
+    advance_supplier_filter = or_(
+        UnifiedSupplierAdvance.supplier_name_norm == norm,
+        UnifiedSupplierAdvance.supplier_slug == norm_slug,
+        func.lower(func.trim(UnifiedSupplierAdvance.supplier_name)).ilike(supplier_like),
+    )
 
     # Ledger filters (default to recent activity for better UX/performance)
     preset = (request.args.get('preset') or '30d').strip().lower()
@@ -547,7 +553,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
         UnifiedSupplierAdvance.query
         .filter(
             UnifiedSupplierAdvance.is_deleted.is_(False),
-            UnifiedSupplierAdvance.supplier_name_norm == norm,
+            advance_supplier_filter,
         )
         .order_by(UnifiedSupplierAdvance.paid_at.desc(), UnifiedSupplierAdvance.id.desc())
         .all()
@@ -618,7 +624,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
         .join(UnifiedSupplierAdvance, UnifiedSupplierAdvance.id == UnifiedSupplierAdvanceAllocation.advance_id)
         .filter(
             UnifiedSupplierAdvance.is_deleted.is_(False),
-            UnifiedSupplierAdvance.supplier_name_norm == norm,
+            advance_supplier_filter,
         )
         .group_by(UnifiedSupplierAdvanceAllocation.stock_mineral_type)
         .order_by(UnifiedSupplierAdvanceAllocation.stock_mineral_type.asc())
@@ -825,7 +831,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
         .join(UnifiedSupplierAdvance, UnifiedSupplierAdvance.id == UnifiedSupplierAdvanceAllocation.advance_id)
         .filter(
             UnifiedSupplierAdvance.is_deleted.is_(False),
-            UnifiedSupplierAdvance.supplier_name_norm == norm,
+            advance_supplier_filter,
         )
         .order_by(UnifiedSupplierAdvanceAllocation.created_at.desc(), UnifiedSupplierAdvanceAllocation.id.desc())
         .limit(1000)
@@ -978,7 +984,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 .join(UnifiedSupplierAdvance, UnifiedSupplierAdvance.id == UnifiedSupplierAdvanceAllocation.advance_id)
                 .filter(
                     UnifiedSupplierAdvance.is_deleted.is_(False),
-                    UnifiedSupplierAdvance.supplier_name_norm == norm,
+                    advance_supplier_filter,
                     UnifiedSupplierAdvanceAllocation.created_at < start_dt,
                 )
                 .scalar()
@@ -989,7 +995,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 db.session.query(func.coalesce(func.sum(UnifiedSupplierAdvance.amount_rwf), 0))
                 .filter(
                     UnifiedSupplierAdvance.is_deleted.is_(False),
-                    UnifiedSupplierAdvance.supplier_name_norm == norm,
+                    advance_supplier_filter,
                     UnifiedSupplierAdvance.paid_at < start_dt,
                     UnifiedSupplierAdvance.amount_rwf > 0,
                 )
@@ -1000,7 +1006,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 db.session.query(func.coalesce(func.sum(func.abs(UnifiedSupplierAdvance.amount_rwf)), 0))
                 .filter(
                     UnifiedSupplierAdvance.is_deleted.is_(False),
-                    UnifiedSupplierAdvance.supplier_name_norm == norm,
+                    advance_supplier_filter,
                     UnifiedSupplierAdvance.paid_at < start_dt,
                     UnifiedSupplierAdvance.amount_rwf < 0,
                 )

@@ -5,7 +5,7 @@ For recording supplier payments
 from flask_wtf import FlaskForm
 from wtforms import SelectField, FloatField, StringField, TextAreaField, SubmitField
 from wtforms.fields import DateTimeLocalField
-from wtforms.validators import DataRequired, InputRequired, NumberRange, Optional
+from wtforms.validators import DataRequired, InputRequired, NumberRange, Optional, ValidationError
 
 
 class SupplierPaymentForm(FlaskForm):
@@ -79,3 +79,16 @@ class SupplierPaymentForm(FlaskForm):
         validators=[Optional()]
     )
     submit = SubmitField('Record Payment')
+
+    def validate_exchange_rate(self, field):
+        """Require a positive exchange rate for USD payments."""
+        currency = (self.currency.data or 'RWF').upper()
+        if currency != 'USD':
+            return
+        if field.data is None:
+            raise ValidationError('Exchange rate is required for USD payments.')
+        try:
+            if float(field.data) <= 0:
+                raise ValidationError('Exchange rate must be greater than 0 for USD payments.')
+        except (TypeError, ValueError):
+            raise ValidationError('Exchange rate is required for USD payments.')

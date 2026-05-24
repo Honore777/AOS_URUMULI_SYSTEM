@@ -176,3 +176,16 @@ class CassiteriteSupplierPaymentForm(FlaskForm):
     note = TextAreaField('Notes', validators=[Optional(), Length(max=500)])
     change_reason = TextAreaField('Change / Delete Reason', validators=[Optional(), Length(max=1000)])
     submit = SubmitField('Record Supplier Payment')
+
+    def validate_exchange_rate(self, field):
+        """Require a positive exchange rate for USD payments."""
+        currency = (self.currency.data or 'RWF').upper()
+        if currency != 'USD':
+            return
+        if field.data is None:
+            raise ValidationError('Exchange rate is required for USD payments.')
+        try:
+            if float(field.data) <= 0:
+                raise ValidationError('Exchange rate must be greater than 0 for USD payments.')
+        except (TypeError, ValueError):
+            raise ValidationError('Exchange rate is required for USD payments.')
