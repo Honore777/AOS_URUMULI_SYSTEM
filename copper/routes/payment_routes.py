@@ -1111,8 +1111,9 @@ def pay_supplier_advance_historical():
 @copper_bp.route('/supplier/settlement/search.json')
 @role_required('accountant')
 def supplier_settlement_search():
-    """AJAX endpoint: get all suppliers with their total net_balance from stocks (both copper & cassiterite).
+    """AJAX endpoint: get all suppliers (both active and with zero/negative balance).
     
+    Returns all suppliers from stock history so settlements can be recorded for any supplier.
     Groups suppliers by normalized name to consolidate variations like:
     - "HAKIZIMANA" and "HAKIZIMANA J. PIERRE" → grouped as "HAKIZIMANA"
     """
@@ -1120,29 +1121,29 @@ def supplier_settlement_search():
     
     q = (request.args.get('q') or '').strip()
     
-    # Query copper stocks with net_balance > 0
+    # Query ALL copper stocks (no balance filter - settlement can be for any supplier)
     copper_suppliers = db.session.query(
         CopperStock.supplier.label('supplier'),
         func.coalesce(func.sum(CopperStock.net_balance), 0).label('total_net_balance')
     ).filter(
         CopperStock.is_deleted.is_(False),
-        CopperStock.net_balance > 0,
-    ).all()
+    ).group_by(CopperStock.supplier).all()
     
-    # Query cassiterite stocks with balance_to_pay > 0
+    # Query ALL cassiterite stocks (no balance filter - settlement can be for any supplier)
     cass_suppliers = db.session.query(
         CassiteriteStock.supplier.label('supplier'),
         func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0).label('total_net_balance')
     ).filter(
         CassiteriteStock.is_deleted.is_(False),
-        CassiteriteStock.balance_to_pay > 0,
-    ).all()
+    ).group_by(CassiteriteStock.supplier).all()
     
     # Merge suppliers and group by NORMALIZED name to consolidate variations
     supplier_map = {}  # normalized_name -> (canonical_name, total_balance)
     
     for r in copper_suppliers:
         supplier_name = (r.supplier or '').strip()
+        if not supplier_name:
+            continue
         normalized = normalize_counterparty_name(supplier_name)
         
         if normalized not in supplier_map:
@@ -1153,6 +1154,8 @@ def supplier_settlement_search():
     
     for r in cass_suppliers:
         supplier_name = (r.supplier or '').strip()
+        if not supplier_name:
+            continue
         normalized = normalize_counterparty_name(supplier_name)
         
         if normalized not in supplier_map:
@@ -1161,12 +1164,10 @@ def supplier_settlement_search():
         current_name, balance = supplier_map[normalized]
         supplier_map[normalized] = (current_name, balance + float(r.total_net_balance or 0.0))
     
-    # Filter by query if provided
+    # Filter by query if provided (no balance filter - settlement can be for any supplier)
     results = []
     for normalized_name, (supplier_name, total_balance) in sorted(supplier_map.items()):
         if q and q.lower() not in supplier_name.lower():
-            continue
-        if total_balance <= 0:
             continue
         results.append({
             'supplier': supplier_name,
@@ -1175,6 +1176,7 @@ def supplier_settlement_search():
         })
     
     return safe_jsonify(results)
+
 
 
 @copper_bp.route('/record_supplier_settlement', methods=['GET', 'POST'])
