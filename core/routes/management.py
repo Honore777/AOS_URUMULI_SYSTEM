@@ -459,7 +459,8 @@ def supplier_name_suggest():
 @core_bp.route("/accountant/vouchers/suggest", methods=["GET"])
 @role_required("accountant", "store_keeper", "boss", "admin")
 def voucher_suggest():
-    """AJAX endpoint: search vouchers and return supplier name + voucher details."""
+    """AJAX endpoint: search vouchers and return supplier name + voucher details.
+    Also shows deleted records so user knows why a voucher is blocked."""
     q = (request.args.get("q") or "").strip()
     if len(q) < 1:
         return safe_jsonify({"results": []})
@@ -470,33 +471,33 @@ def voucher_suggest():
 
         pattern = f"%{q}%"
         
-        # Search copper stocks by voucher
+        # Search copper stocks by voucher (include deleted to show blocked vouchers)
         copper_rows = (
             db.session.query(
                 CopperStock.voucher_no.label("voucher"),
                 CopperStock.supplier.label("supplier"),
                 CopperStock.input_kg.label("qty"),
                 CopperStock.percentage.label("percentage"),
+                CopperStock.is_deleted.label("is_deleted"),
             )
-            .filter(CopperStock.is_deleted.is_(False))
             .filter(CopperStock.voucher_no.ilike(pattern))
-            .order_by(CopperStock.voucher_no.desc())
-            .limit(15)
+            .order_by(CopperStock.is_deleted.asc(), CopperStock.voucher_no.desc())
+            .limit(20)
             .all()
         )
         
-        # Search cassiterite stocks by voucher
+        # Search cassiterite stocks by voucher (include deleted to show blocked vouchers)
         cass_rows = (
             db.session.query(
                 CassiteriteStock.voucher_no.label("voucher"),
                 CassiteriteStock.supplier.label("supplier"),
                 CassiteriteStock.input_kg.label("qty"),
                 CassiteriteStock.percentage.label("percentage"),
+                CassiteriteStock.is_deleted.label("is_deleted"),
             )
-            .filter(CassiteriteStock.is_deleted.is_(False))
             .filter(CassiteriteStock.voucher_no.ilike(pattern))
-            .order_by(CassiteriteStock.voucher_no.desc())
-            .limit(15)
+            .order_by(CassiteriteStock.is_deleted.asc(), CassiteriteStock.voucher_no.desc())
+            .limit(20)
             .all()
         )
 
@@ -510,12 +511,14 @@ def voucher_suggest():
             if key in seen:
                 continue
             seen.add(key)
+            status = "DELETED" if row.is_deleted else ""
             results.append({
                 "voucher": row.voucher,
-                "supplier": row.supplier,
+                "supplier": f"{row.supplier}{' [DELETED]' if row.is_deleted else ''}",
                 "qty": float(row.qty or 0),
                 "percentage": float(row.percentage or 0),
-                "type": "Copper"
+                "type": "Copper",
+                "is_deleted": row.is_deleted,
             })
         
         for row in (cass_rows or []):
@@ -527,10 +530,11 @@ def voucher_suggest():
             seen.add(key)
             results.append({
                 "voucher": row.voucher,
-                "supplier": row.supplier,
+                "supplier": f"{row.supplier}{' [DELETED]' if row.is_deleted else ''}",
                 "qty": float(row.qty or 0),
                 "percentage": float(row.percentage or 0),
-                "type": "Cassiterite"
+                "type": "Cassiterite",
+                "is_deleted": row.is_deleted,
             })
         
         results = results[:15]
