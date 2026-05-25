@@ -456,6 +456,89 @@ def supplier_name_suggest():
         return safe_jsonify({"results": []})
 
 
+@core_bp.route("/accountant/vouchers/suggest", methods=["GET"])
+@role_required("accountant", "store_keeper", "boss", "admin")
+def voucher_suggest():
+    """AJAX endpoint: search vouchers and return supplier name + voucher details."""
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 1:
+        return safe_jsonify({"results": []})
+
+    try:
+        from copper.models import CopperStock
+        from cassiterite.models import CassiteriteStock
+
+        pattern = f"%{q}%"
+        
+        # Search copper stocks by voucher
+        copper_rows = (
+            db.session.query(
+                CopperStock.voucher_no.label("voucher"),
+                CopperStock.supplier.label("supplier"),
+                CopperStock.input_kg.label("qty"),
+                CopperStock.percentage.label("percentage"),
+            )
+            .filter(CopperStock.is_deleted.is_(False))
+            .filter(CopperStock.voucher_no.ilike(pattern))
+            .order_by(CopperStock.voucher_no.desc())
+            .limit(15)
+            .all()
+        )
+        
+        # Search cassiterite stocks by voucher
+        cass_rows = (
+            db.session.query(
+                CassiteriteStock.voucher_no.label("voucher"),
+                CassiteriteStock.supplier.label("supplier"),
+                CassiteriteStock.input_kg.label("qty"),
+                CassiteriteStock.percentage.label("percentage"),
+            )
+            .filter(CassiteriteStock.is_deleted.is_(False))
+            .filter(CassiteriteStock.voucher_no.ilike(pattern))
+            .order_by(CassiteriteStock.voucher_no.desc())
+            .limit(15)
+            .all()
+        )
+
+        results = []
+        seen = set()
+        
+        for row in (copper_rows or []):
+            if not row.voucher:
+                continue
+            key = (row.voucher or "").strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({
+                "voucher": row.voucher,
+                "supplier": row.supplier,
+                "qty": float(row.qty or 0),
+                "percentage": float(row.percentage or 0),
+                "type": "Copper"
+            })
+        
+        for row in (cass_rows or []):
+            if not row.voucher:
+                continue
+            key = (row.voucher or "").strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({
+                "voucher": row.voucher,
+                "supplier": row.supplier,
+                "qty": float(row.qty or 0),
+                "percentage": float(row.percentage or 0),
+                "type": "Cassiterite"
+            })
+        
+        results = results[:15]
+        return safe_jsonify({"results": results})
+    except Exception:
+        return safe_jsonify({"results": []})
+
+
 @core_bp.route("/accountant/suppliers/<path:supplier_norm>", methods=["GET"])
 @role_required("accountant", "boss", "admin")
 def consolidated_supplier_ledger(supplier_norm: str):

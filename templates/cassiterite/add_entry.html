@@ -51,6 +51,18 @@
             </div>
         </div>
         
+        <div>
+            <label class="block text-gray-700 font-medium mb-2">Search by Voucher</label>
+            <input 
+                id="voucher_search" 
+                type="text" 
+                placeholder="Search existing vouchers (e.g., SSM/TA/2596)" 
+                class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div id="voucher_suggestions" class="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded shadow-sm hidden"></div>
+            <p class="mt-1 text-xs text-gray-500">Type a voucher number to auto-fill supplier name and details</p>
+        </div>
+        
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
                 {{ form.supplier.label(class="block text-gray-700 font-medium mb-2") }}
@@ -340,6 +352,85 @@
 
     input.addEventListener('blur', () => {
       setTimeout(hide, 150);
+    });
+  })();
+
+  // Voucher search functionality
+  (function() {
+    const voucherSearch = document.getElementById('voucher_search');
+    const voucherSuggestions = document.getElementById('voucher_suggestions');
+    const supplierInput = document.querySelector('input[name="supplier"]');
+    const voucherInput = document.querySelector('input[name="voucher_no"]');
+    
+    if (!voucherSearch) return;
+
+    function hideVouchers() {
+      voucherSuggestions.classList.add('hidden');
+      voucherSuggestions.innerHTML = '';
+    }
+
+    function showVouchers(items) {
+      voucherSuggestions.innerHTML = '';
+      if (!items || !items.length) {
+        hideVouchers();
+        return;
+      }
+      items.forEach(it => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'block w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b last:border-b-0';
+        btn.innerHTML = `
+          <div class="font-semibold">${it.voucher || '-'}</div>
+          <div class="text-xs text-gray-600">Supplier: ${it.supplier || '-'} | Qty: ${(it.qty || 0).toFixed(2)}kg | %: ${(it.percentage || 0).toFixed(2)}% | ${it.type || '-'}</div>
+        `;
+        btn.addEventListener('mousedown', (e) => {
+          try { e.preventDefault(); } catch (err) {}
+          if (supplierInput) supplierInput.value = it.supplier || '';
+          voucherSearch.value = '';
+          hideVouchers();
+        });
+        voucherSuggestions.appendChild(btn);
+      });
+      voucherSuggestions.classList.remove('hidden');
+    }
+
+    let voucherInflight = null;
+    let voucherLastQ = '';
+    let voucherTimeout = null;
+
+    async function fetchVouchers(q) {
+      if (voucherInflight) {
+        try { voucherInflight.abort(); } catch (e) {}
+      }
+      voucherInflight = new AbortController();
+
+      const resp = await fetch(`{{ url_for('core.voucher_suggest') }}?q=${encodeURIComponent(q)}`, {
+        signal: voucherInflight.signal,
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return (data && data.results) ? data.results : [];
+    }
+
+    voucherSearch.addEventListener('input', () => {
+      const q = (voucherSearch.value || '').trim();
+      if (q === voucherLastQ) return;
+      voucherLastQ = q;
+
+      if (voucherTimeout) clearTimeout(voucherTimeout);
+      if (!q) {
+        hideVouchers();
+        return;
+      }
+      voucherTimeout = setTimeout(async () => {
+        const items = await fetchVouchers(q);
+        showVouchers(items);
+      }, 180);
+    });
+
+    voucherSearch.addEventListener('blur', () => {
+      setTimeout(hideVouchers, 150);
     });
   })();
 </script>
