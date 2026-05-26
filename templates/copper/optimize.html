@@ -111,6 +111,7 @@
                         <thead class="bg-indigo-600 text-white">
                             <tr>
                                 <th class="px-4 py-2 text-left">Stock ID</th>
+                                <th class="px-4 py-2 text-left">Voucher</th>
                                 <th class="px-4 py-2 text-left">Supplier</th>
                                 <th class="px-4 py-2 text-left">Unit %</th>
                                 <th class="px-4 py-2 text-left">T_Unity</th>
@@ -126,6 +127,7 @@
                             {% set rec = (quantities.get(stock.id, 0) or 0) %}
                             <tr class="hover:bg-gray-50">
                                 <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
+                                <td class="px-4 py-2">{{ stock.voucher_no }}</td>
                                 <td class="px-4 py-2">{{ stock.supplier }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.unit_percent) }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.t_unity) }}</td>
@@ -339,6 +341,7 @@
                             <thead class="bg-amber-600 text-white">
                                 <tr>
                                     <th class="px-4 py-2 text-left">Stock ID</th>
+                                    <th class="px-4 py-2 text-left">Voucher</th>
                                     <th class="px-4 py-2 text-left">Supplier</th>
                                     <th class="px-4 py-2 text-left">Unit %</th>
                                     <th class="px-4 py-2 text-left">T_Unity</th>
@@ -350,6 +353,7 @@
                                 {% for stock in all_stocks %}
                                 <tr class="hover:bg-gray-50">
                                     <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
+                                    <td class="px-4 py-2">{{ stock.voucher_no }}</td>
                                     <td class="px-4 py-2">{{ stock.supplier }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.unit_percent) }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.t_unity) }}</td>
@@ -447,6 +451,7 @@
                         <thead class="bg-green-600 text-white">
                             <tr>
                                 <th class="px-4 py-2 text-left">Stock ID</th>
+                                <th class="px-4 py-2 text-left">Voucher</th>
                                 <th class="px-4 py-2 text-left">Supplier</th>
                                 <th class="px-4 py-2 text-left">Unit %</th>
                                 <th class="px-4 py-2 text-left">T_Unity</th>
@@ -460,6 +465,7 @@
                                 {% if stock and quantity > 0 %}
                                 <tr class="hover:bg-gray-50">
                                     <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
+                                    <td class="px-4 py-2">{{ stock.voucher_no }}</td>
                                     <td class="px-4 py-2">{{ stock.supplier }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.unit_percent) }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.t_unity) }}</td>

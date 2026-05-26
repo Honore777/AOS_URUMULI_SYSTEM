@@ -125,6 +125,7 @@
                         <thead class="bg-indigo-600 text-white">
                             <tr>
                                 <th class="px-4 py-2 text-left">Stock ID</th>
+                                <th class="px-4 py-2 text-left">Voucher</th>
                                 <th class="px-4 py-2 text-left">Supplier</th>
                                 <th class="px-4 py-2 text-left">Percentage (%)</th>
                                 <th class="px-4 py-2 text-left">Available (kg)</th>
@@ -135,6 +136,7 @@
                             {% for stock in selected_stocks %}
                             <tr class="hover:bg-gray-50">
                                 <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
+                                <td class="px-4 py-2">{{ stock.voucher_no }}</td>
                                 <td class="px-4 py-2">{{ stock.supplier }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.percentage) }}%</td>
                                     <td class="px-4 py-2 text-right">{{ '{:,.2f}'.format(stock.local_balance) }}</td>
@@ -329,6 +331,7 @@
                             <thead class="bg-amber-600 text-white">
                                 <tr>
                                     <th class="px-4 py-2 text-left">Stock ID</th>
+                                    <th class="px-4 py-2 text-left">Voucher</th>
                                     <th class="px-4 py-2 text-left">Supplier</th>
                                     <th class="px-4 py-2 text-left">Percentage (%)</th>
                                     <th class="px-4 py-2 text-left">Available (kg)</th>
@@ -339,6 +342,7 @@
                                 {% for stock in all_stocks %}
                                 <tr class="hover:bg-gray-50">
                                     <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
+                                    <td class="px-4 py-2">{{ stock.voucher_no }}</td>
                                     <td class="px-4 py-2">{{ stock.supplier }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.percentage) }}%</td>
                                     <td class="px-4 py-2 text-right">{{ "%.2f"|format(stock.local_balance) }}</td>
@@ -428,6 +432,7 @@
                         <thead class="bg-green-600 text-white">
                             <tr>
                                 <th class="px-4 py-2 text-left">Stock ID</th>
+                                <th class="px-4 py-2 text-left">Voucher</th>
                                 <th class="px-4 py-2 text-left">Supplier</th>
                                 <th class="px-4 py-2 text-left">Percentage (%)</th>
                                 <th class="px-4 py-2 text-left">Available (kg)</th>
@@ -442,6 +447,7 @@
                             {% if stock_obj %}
                             <tr class="hover:bg-gray-50">
                                 <td class="px-4 py-2 font-semibold">{{ stock_obj.id }}</td>
+                                <td class="px-4 py-2">{{ stock_obj.voucher_no }}</td>
                                 <td class="px-4 py-2">{{ stock_obj.supplier }}</td>
                                 <td class="px-4 py-2">{{ "%.2f"|format(stock_obj.percentage) }}%</td>
                                 <td class="px-4 py-2 text-right">{{ "%.2f"|format(stock_obj.local_balance) }}</td>
