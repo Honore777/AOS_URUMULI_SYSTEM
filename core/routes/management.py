@@ -1004,40 +1004,12 @@ def consolidated_supplier_ledger(supplier_norm: str):
     except Exception:
         pass
 
-    # Advance allocations applied to stocks (credits)
-    allocation_events = (
-        UnifiedSupplierAdvanceAllocation.query
-        .join(UnifiedSupplierAdvance, UnifiedSupplierAdvance.id == UnifiedSupplierAdvanceAllocation.advance_id)
-        .filter(
-            UnifiedSupplierAdvance.is_deleted.is_(False),
-            advance_supplier_filter,
-        )
-        .order_by(UnifiedSupplierAdvanceAllocation.created_at.desc(), UnifiedSupplierAdvanceAllocation.id.desc())
-        .limit(1000)
-        .all()
-    )
-    for alloc in allocation_events:
-        mineral = (getattr(alloc, "stock_mineral_type", None) or "").strip().lower()
-        stock_id = int(getattr(alloc, "stock_id", 0) or 0)
-        voucher = "-"
-        if mineral in {"copper", "coltan"}:
-            stock = copper_stock_map.get(stock_id)
-            voucher = getattr(stock, "voucher_no", "-") if stock else "-"
-            mineral = "coltan"
-        elif mineral == "cassiterite":
-            stock = cass_stock_map.get(stock_id)
-            voucher = getattr(stock, "voucher_no", "-") if stock else "-"
-
-        ledger_events.append({
-            "date": getattr(alloc, "created_at", None),
-            "sort_key": 0,
-            "mineral": mineral or "-",
-            "description": f"Advance Applied to Stock {voucher}",
-            "debit": 0.0,
-            "credit": float(getattr(alloc, "applied_amount", 0.0) or 0.0),
-            "original_currency": None,
-            "original_amount": None,
-        })
+    # NOTE: Allocation entries (UnifiedSupplierAdvanceAllocation) are NOT added to ledger_events
+    # because they represent internal tracking/bookkeeping, not actual transactions.
+    # The allocations are preserved in the database for audit trail and wallet tracking,
+    # but the ledger only shows actual financial transactions (advances, stocks, settlements).
+    # This prevents double-counting: an advance is a real transaction (credit once),
+    # and allocating it is just internal tracking of which advance covers which stock.
 
     # Unified advances and refunds (credits for advances, debits for refunds)
     for a in advances:
@@ -1193,9 +1165,12 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 or 0.0
             )
 
+            # NOTE: before_alloc_credit is NOT included in opening_balance calculation anymore
+            # because allocations are internal bookkeeping, not actual ledger transactions.
+            # Opening balance = stocks (debit) + refunds (debit) - settlements (credit) - advances (credit)
             opening_balance = float(
                 (before_stock_debit + before_refund_debit)
-                - (before_settlement_credit + before_alloc_credit + before_adv_credit)
+                - (before_settlement_credit + before_adv_credit)
             )
         except Exception:
             opening_balance = 0.0

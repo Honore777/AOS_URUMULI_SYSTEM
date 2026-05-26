@@ -347,6 +347,12 @@ def edit_stock(stock_id):
             u_price = float(request.form.get("u_price") or stock.u_price or 0)
             exchange = float(request.form.get("exchange") or stock.exchange or 0)
             transport_tag = float(request.form.get("transport_tag") or stock.transport_tag or 0)
+            rma_default_str = request.form.get('rma_default') or str(stock.rma / stock.input_kg if (stock.input_kg and stock.rma) else 150)
+            inkomane_default_str = request.form.get('inkomane_default') or str(stock.inkomane / stock.input_kg if (stock.input_kg and stock.inkomane) else 40)
+            rra_3_percent_default_str = request.form.get('rra_3_percent_default') or '50'
+            rma_default = float(rma_default_str) if rma_default_str else 150
+            inkomane_default = float(inkomane_default_str) if inkomane_default_str else 40
+            rra_3_percent_default = float(rra_3_percent_default_str) if rra_3_percent_default_str else 50
             change_reason = (request.form.get('change_reason') or '').strip() or None
             
             payload = {
@@ -362,6 +368,9 @@ def edit_stock(stock_id):
                 'u_price': u_price,
                 'exchange': exchange,
                 'transport_tag': transport_tag,
+                'rma_default': rma_default,
+                'inkomane_default': inkomane_default,
+                'rra_3_percent_default': rra_3_percent_default,
                 'change_reason': change_reason,
                 'note': change_reason or 'No reason provided',
                 'mineral_type': 'copper'
@@ -408,6 +417,10 @@ def edit_stock(stock_id):
             'u_price': float(getattr(stock, 'u_price', 0.0) or 0.0),
             'exchange': float(getattr(stock, 'exchange', 0.0) or 0.0),
             'transport_tag': float(getattr(stock, 'transport_tag', 0.0) or 0.0),
+            'rma': float(getattr(stock, 'rma', 0.0) or 0.0),
+            'inkomane': float(getattr(stock, 'inkomane', 0.0) or 0.0),
+            'rra_3': float(getattr(stock, 'rra_3', 0.0) or 0.0),
+            'rra_3_percent': float(getattr(stock, 'rra_3_percent', 0.0) or 0.0),
         }
 
         change_reason = (request.form.get('change_reason') or '').strip() or None
@@ -422,12 +435,36 @@ def edit_stock(stock_id):
         u_price = float(request.form.get("u_price") or stock.u_price or 0)
         exchange = float(request.form.get("exchange") or stock.exchange or 0)
         transport_tag = float(request.form.get("transport_tag") or stock.transport_tag or 0)
-        rra_3_percent_default = float(request.form.get("rra_3_percent_default") or 50)
-
-        # Keep same per-kg RMA/Inkomane rates as before (if any)
-        old_input = stock.input_kg or 0
-        per_rma = (stock.rma or 0) / old_input if old_input else 125
-        per_inkomane = (stock.inkomane or 0) / old_input if old_input else 40
+        
+        # Parse editable per-unit defaults
+        rma_default_str = request.form.get("rma_default")
+        inkomane_default_str = request.form.get("inkomane_default")
+        rra_3_percent_default_str = request.form.get("rra_3_percent_default")
+        
+        # If defaults provided in form, use them; otherwise derive from current stock
+        if rma_default_str and rma_default_str.strip():
+            try:
+                rma_default = float(rma_default_str)
+            except ValueError:
+                rma_default = (stock.rma / stock.input_kg) if (stock.input_kg and stock.rma) else 150
+        else:
+            rma_default = (stock.rma / stock.input_kg) if (stock.input_kg and stock.rma) else 150
+        
+        if inkomane_default_str and inkomane_default_str.strip():
+            try:
+                inkomane_default = float(inkomane_default_str)
+            except ValueError:
+                inkomane_default = (stock.inkomane / stock.input_kg) if (stock.input_kg and stock.inkomane) else 40
+        else:
+            inkomane_default = (stock.inkomane / stock.input_kg) if (stock.input_kg and stock.inkomane) else 40
+        
+        if rra_3_percent_default_str and rra_3_percent_default_str.strip():
+            try:
+                rra_3_percent_default = float(rra_3_percent_default_str)
+            except ValueError:
+                rra_3_percent_default = 50
+        else:
+            rra_3_percent_default = 50
 
         # Duplicate voucher check if changed
         if voucher != stock.voucher_no:
@@ -456,8 +493,10 @@ def edit_stock(stock_id):
 
         # Recompute derived values following add_stock logic
         stock.u = nb * input_kg
-        stock.rra = per_rma * input_kg
-        stock.inkomane = per_inkomane * input_kg
+        
+        # Recalculate using per-unit defaults (same formula as add_stock)
+        stock.rma = rma_default * input_kg
+        stock.inkomane = inkomane_default * input_kg
         stock.amount = percentage * input_kg * exchange * u_price
         stock.tot_amount_tag = transport_tag * input_kg
         stock.rra_3_percent = (rra_3_percent_default * exchange * percentage * input_kg) * 3 / 100
@@ -488,6 +527,10 @@ def edit_stock(stock_id):
                     'u_price': float(getattr(stock, 'u_price', 0.0) or 0.0),
                     'exchange': float(getattr(stock, 'exchange', 0.0) or 0.0),
                     'transport_tag': float(getattr(stock, 'transport_tag', 0.0) or 0.0),
+                    'rma': float(getattr(stock, 'rma', 0.0) or 0.0),
+                    'inkomane': float(getattr(stock, 'inkomane', 0.0) or 0.0),
+                    'rra_3': float(getattr(stock, 'rra_3', 0.0) or 0.0),
+                    'rra_3_percent': float(getattr(stock, 'rra_3_percent', 0.0) or 0.0),
                 }
                 log_row = StockChangeLog(
                     mineral_type='copper',

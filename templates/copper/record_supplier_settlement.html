@@ -45,6 +45,11 @@
                             id="supplier-name" 
                             name="supplier_name"
                             required>
+                        <input 
+                            type="hidden" 
+                            id="supplier-total-balance" 
+                            name="supplier_total_balance"
+                            value="0">
                         <div id="supplier-suggestions" class="absolute z-10 w-full bg-white border border-t-0 rounded-b shadow-lg max-h-80 overflow-y-auto">
                             <!-- Populated by JS on page load and as user types -->
                         </div>
@@ -200,6 +205,7 @@ function displaySuppliers(suppliers) {
 function selectSupplier(supplier) {
     document.getElementById('supplier-search').value = supplier.supplier;
     document.getElementById('supplier-name').value = supplier.supplier;
+    document.getElementById('supplier-total-balance').value = supplier.total_balance_raw || 0;
     document.getElementById('total-balance').textContent = supplier.total_balance;
     document.getElementById('payment-amount').value = '';
     document.getElementById('payment-amount').placeholder = `Leave blank to pay full ${supplier.total_balance} RWF`;

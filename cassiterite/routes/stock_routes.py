@@ -518,6 +518,12 @@ def edit_stock(stock_id):
             tc = float(request.form.get('tc') or stock.tc or 0)
             exchange = float(request.form.get('exchange') or stock.exchange or 0)
             transport_tag = float(request.form.get('transport_tag') or stock.transport_tag or 0)
+            rma_default_str = request.form.get('rma_default') or str(stock.rma / stock.input_kg if (stock.input_kg and stock.rma) else 150)
+            inkomane_default_str = request.form.get('inkomane_default') or str(stock.inkomane / stock.input_kg if (stock.input_kg and stock.inkomane) else 40)
+            rra_3_percent_default_str = request.form.get('rra_3_percent_default') or '50'
+            rma_default = float(rma_default_str) if rma_default_str else 150
+            inkomane_default = float(inkomane_default_str) if inkomane_default_str else 40
+            rra_3_percent_default = float(rra_3_percent_default_str) if rra_3_percent_default_str else 50
             change_reason = (request.form.get('change_reason') or '').strip() or None
             
             payload = {
@@ -535,6 +541,9 @@ def edit_stock(stock_id):
                 'tc': tc,
                 'exchange': exchange,
                 'transport_tag': transport_tag,
+                'rma_default': rma_default,
+                'inkomane_default': inkomane_default,
+                'rra_3_percent_default': rra_3_percent_default,
                 'change_reason': change_reason,
                 'note': change_reason or 'No reason provided',
                 'mineral_type': 'cassiterite'
@@ -577,6 +586,9 @@ def edit_stock(stock_id):
             'supplier': stock.supplier,
             'input_kg': float(getattr(stock, 'input_kg', 0.0) or 0.0),
             'percentage': float(getattr(stock, 'percentage', 0.0) or 0.0),
+            'rma': float(getattr(stock, 'rma', 0.0) or 0.0),
+            'inkomane': float(getattr(stock, 'inkomane', 0.0) or 0.0),
+            'rra_3_percent': float(getattr(stock, 'rra_3_percent', 0.0) or 0.0),
             'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
             't_unity': float(getattr(stock, 't_unity', 0.0) or 0.0),
         }
@@ -601,6 +613,36 @@ def edit_stock(stock_id):
         tc = float(request.form.get('tc') or stock.tc or 0)
         exchange = float(request.form.get('exchange') or stock.exchange or 0)
         transport_tag = float(request.form.get('transport_tag') or stock.transport_tag or 0)
+
+        # Parse editable per-unit defaults
+        rma_default_str = request.form.get("rma_default")
+        inkomane_default_str = request.form.get("inkomane_default")
+        rra_3_percent_default_str = request.form.get("rra_3_percent_default")
+        
+        # If defaults provided in form, use them; otherwise derive from current stock
+        if rma_default_str and rma_default_str.strip():
+            try:
+                rma_default = float(rma_default_str)
+            except ValueError:
+                rma_default = (stock.rma / stock.input_kg) if (stock.input_kg and stock.rma) else 150
+        else:
+            rma_default = (stock.rma / stock.input_kg) if (stock.input_kg and stock.rma) else 150
+        
+        if inkomane_default_str and inkomane_default_str.strip():
+            try:
+                inkomane_default = float(inkomane_default_str)
+            except ValueError:
+                inkomane_default = (stock.inkomane / stock.input_kg) if (stock.input_kg and stock.inkomane) else 40
+        else:
+            inkomane_default = (stock.inkomane / stock.input_kg) if (stock.input_kg and stock.inkomane) else 40
+        
+        if rra_3_percent_default_str and rra_3_percent_default_str.strip():
+            try:
+                rra_3_percent_default = float(rra_3_percent_default_str)
+            except ValueError:
+                rra_3_percent_default = 50
+        else:
+            rra_3_percent_default = 50
 
         # Handle duplicate voucher if changed
         if voucher != stock.voucher_no:
@@ -628,6 +670,12 @@ def edit_stock(stock_id):
         stock.tc = tc
         stock.exchange = exchange
         stock.transport_tag = transport_tag
+
+        # Recompute derived values using DB-side aggregates with new defaults
+        # Recalculate using per-unit defaults (same formula as add_stock)
+        stock.rma = rma_default * input_kg
+        stock.inkomane = inkomane_default * input_kg
+        stock.rra_3_percent = (rra_3_percent_default * exchange * percentage * input_kg) * 3 / 100
 
         # Recompute derived values using DB-side aggregates
         try:
@@ -664,6 +712,9 @@ def edit_stock(stock_id):
                     'supplier': stock.supplier,
                     'input_kg': float(getattr(stock, 'input_kg', 0.0) or 0.0),
                     'percentage': float(getattr(stock, 'percentage', 0.0) or 0.0),
+                    'rma': float(getattr(stock, 'rma', 0.0) or 0.0),
+                    'inkomane': float(getattr(stock, 'inkomane', 0.0) or 0.0),
+                    'rra_3_percent': float(getattr(stock, 'rra_3_percent', 0.0) or 0.0),
                     'local_balance': float(getattr(stock, 'local_balance', 0.0) or 0.0),
                     't_unity': float(getattr(stock, 't_unity', 0.0) or 0.0),
                 }

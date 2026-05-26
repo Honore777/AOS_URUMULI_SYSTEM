@@ -622,3 +622,126 @@ def confirm_bulk_output():
     # Any monetary/receipt details are recorded later by the negotiator
     flash("Bulk plan submitted. Store keeper must confirm stock before output is posted.", "success")
     return redirect(url_for('copper.optimize_stocks'))
+
+
+@copper_bp.route('/optimize_stocks/direct_output', methods=['POST'])
+def direct_bulk_output():
+    """Directly create copper outputs without going through negotiator workflow.
+    
+    Used for business error corrections where stock was already physically output
+    but not yet recorded in the system. Bypasses approval and creates output records
+    immediately with audit trail.
+    """
+    from flask_login import current_user
+    
+    date = datetime.strptime(request.form.get("date"), "%Y-%m-%d").date() if request.form.get("date") else datetime.utcnow().date()
+    reason = (request.form.get("reason") or "").strip()
+    note = (request.form.get("note") or "").strip()
+    
+    if not reason:
+        flash("Please select a reason for direct output.", "danger")
+        return redirect(url_for('copper.optimize_stocks'))
+    
+    if not note:
+        flash("Please provide an explanation for the direct output.", "danger")
+        return redirect(url_for('copper.optimize_stocks'))
+
+    quantities = session.get('optimization_quantities', {})
+    if not quantities:
+        flash("No selected quantities found. Please optimize again.", "danger")
+        return redirect(url_for('copper.optimize_stocks'))
+
+    total_qty = sum(float(qty) for qty in quantities.values())
+    if total_qty <= 0:
+        flash("Total selected quantity must be greater than zero.", "danger")
+        return redirect(url_for('copper.optimize_stocks'))
+
+    try:
+        requested_ids = [int(sid) for sid in quantities.keys()]
+    except Exception:
+        requested_ids = []
+
+    stocks_map = {}
+    if requested_ids:
+        stocks = CopperStock.query.filter(CopperStock.id.in_(requested_ids)).all()
+        stocks_map = {s.id: s for s in stocks}
+
+    output_count = 0
+    error_count = 0
+    
+    for stock_id_str, qty in quantities.items():
+        try:
+            stock_id = int(stock_id_str)
+            qty_float = float(qty)
+        except (ValueError, TypeError):
+            error_count += 1
+            continue
+
+        stock = stocks_map.get(stock_id)
+        if not stock or qty_float <= 0:
+            error_count += 1
+            continue
+
+        try:
+            # Create output record directly - no customer, no negotiator approval needed
+            # All monetary fields left empty since this is just recording physical output
+            output = CopperOutput(
+                stock_id=stock_id,
+                date=date,
+                output_kg=qty_float,
+                batch_id=None,  # No batch needed for direct outputs
+                customer=None,  # No customer for error correction outputs
+                output_amount=0.0,
+                output_amount_rwf=0.0,
+                amount_paid=0.0,
+                amount_paid_rwf=0.0,
+                currency='RWF',
+                exchange_rate=1.0,
+                payment_stage='PENDING_RECEIPT',  # Mark as pending customer/payment details
+                debt_remaining=0.0,
+                note=f"[DIRECT OUTPUT - {reason.upper()}] {note}\nRecorded by: {getattr(current_user, 'name', 'Unknown')} on {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}",
+                voucher_no=stock.voucher_no,
+            )
+            db.session.add(output)
+            output_count += 1
+        except Exception as e:
+            import logging
+            logging.exception(f"Error creating direct output for stock {stock_id}: {e}")
+            error_count += 1
+            continue
+
+    if output_count == 0:
+        flash("No valid outputs were created. Please check your selections.", "danger")
+        return redirect(url_for('copper.optimize_stocks'))
+
+    try:
+        db.session.commit()
+        
+        # Create audit notification for managers
+        from core.models import create_notification
+        managers = User.query.filter_by(role='boss', is_active=True).all()
+        for manager in managers:
+            create_notification(
+                user_id=manager.id,
+                type_="DIRECT_OUTPUT_RECORDED",
+                message=f"Direct output recorded: {output_count} stocks ({total_qty:.2f} kg) - Reason: {reason}",
+                related_type="copper_output",
+                related_id=None,
+            )
+        
+        success_msg = f"Successfully recorded {output_count} output(s) for {total_qty:.2f} kg directly."
+        if error_count > 0:
+            success_msg += f" ({error_count} failed)"
+        flash(success_msg, "success")
+        
+        session.pop('optimization_quantities', None)
+        session.pop('optimization_mode', None)
+        
+        return redirect(url_for('copper.optimize_stocks'))
+        
+    except Exception as e:
+        db.session.rollback()
+        import logging
+        logging.exception(f"Error committing direct outputs: {e}")
+        flash(f"Error recording outputs: {str(e)}", "danger")
+        return redirect(url_for('copper.optimize_stocks'))

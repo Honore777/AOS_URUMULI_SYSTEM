@@ -904,14 +904,25 @@ def record_supplier_settlement():
 			flash('Please select a supplier.', 'danger')
 			return redirect(url_for('cassiterite.record_supplier_settlement'))
 		
-		# Get payment amount (user can specify any amount for settlement)
+		# Get total balance for this supplier (passed from frontend)
 		try:
-			payment_amount = float(request.form.get('payment_amount') or 0)
+			total_stock_balance = float(request.form.get('supplier_total_balance') or 0)
 		except (TypeError, ValueError):
-			payment_amount = 0
+			total_stock_balance = 0
+		
+		# Get payment amount (user can specify any amount, or leave blank to use total)
+		payment_amount_str = (request.form.get('payment_amount') or '').strip()
+		if not payment_amount_str:
+			# If blank, use the supplier's total balance
+			payment_amount = total_stock_balance
+		else:
+			try:
+				payment_amount = float(payment_amount_str)
+			except (TypeError, ValueError):
+				payment_amount = total_stock_balance
 		
 		if payment_amount <= 0:
-			flash('Payment amount must be greater than 0.', 'danger')
+			flash('Payment amount must be greater than 0. Please select a supplier or enter a payment amount.', 'danger')
 			return redirect(url_for('cassiterite.record_supplier_settlement'))
 		
 		# Get currency and exchange rate
@@ -930,6 +941,13 @@ def record_supplier_settlement():
 		
 		# Create settlement payment (unlinked to specific stock, approved/disbursed immediately)
 		try:
+			# Build note with context about the settlement
+			settlement_note = note
+			if payment_amount == total_stock_balance and total_stock_balance > 0:
+				settlement_note = note + (f" [Settlement for all {total_stock_balance:,.2f} RWF in stocks]" if note else f"Settlement for all {total_stock_balance:,.2f} RWF in stocks")
+			elif total_stock_balance > 0:
+				settlement_note = note + (f" [Partial settlement of {total_stock_balance:,.2f} RWF total]" if note else f"Partial settlement of {total_stock_balance:,.2f} RWF total")
+			
 			payment = CassiteriteSupplierPayment(
 				stock_id=None,  # Unlinked settlement
 				supplier_id=supplier_id,
@@ -941,7 +959,7 @@ def record_supplier_settlement():
 				amount_rwf=amount_rwf,
 				method=request.form.get('method') or 'cash',
 				reference=request.form.get('reference') or '',
-				note=note + (f" [Settlement for {total_stock_balance:,.2f} RWF in stocks]" if payment_amount != total_stock_balance else " [Settlement for all stocks]"),
+				note=settlement_note,
 				payment_type='SETTLEMENT',
 				is_advance=False,
 				approval_status='APPROVED',  # Bypass boss approval
