@@ -89,7 +89,7 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
         CopperStock.unit_percent,
         CopperStock.local_balance,
         CopperStock.t_unity,
-    ).filter(CopperStock.local_balance > 0).all()
+    ).filter(CopperStock.local_balance > 0, CopperStock.is_deleted.is_(False)).all()
 
     if not rows:
         return [], 0, 0, 0.0
@@ -108,7 +108,10 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
             try:
                 ids = cached.get('ids', [])
                 if ids:
-                    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all()
+                    selected_stocks = CopperStock.query.filter(
+                        CopperStock.id.in_(ids),
+                        CopperStock.is_deleted.is_(False),
+                    ).all()
                 else:
                     selected_stocks = []
                 return selected_stocks, float(cached.get('achieved_moyenne', 0)), float(cached.get('achieved_moyenne_nb', 0)), float(cached.get('total_balance', 0))
@@ -264,7 +267,10 @@ def select_stocks_for_moyenne(target_moyenne=None, target_moyenne_nb=None, targe
         return [], 0, 0, 0.0
 
     # Rehydrate selected stocks ORM objects (for display) but compute aggregates using DB
-    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(selected_ids)).all()
+    selected_stocks = CopperStock.query.filter(
+        CopperStock.id.in_(selected_ids),
+        CopperStock.is_deleted.is_(False),
+    ).all()
 
     # Use DB aggregates for totals to avoid Python-side full-table sums
     total_unit = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(CopperStock.id.in_(selected_ids)).scalar() or 0
@@ -325,7 +331,7 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
         CopperStock.local_balance,
         CopperStock.unit_percent,
         CopperStock.t_unity,
-    ).filter(CopperStock.local_balance > 0).all()
+    ).filter(CopperStock.local_balance > 0, CopperStock.is_deleted.is_(False)).all()
 
     if not rows:
         return [], 0, 0, {}
@@ -341,7 +347,14 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
         try:
             ids = cached.get('ids', [])
             quantities_cached = cached.get('quantities', {}) or {}
-            selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all() if ids else []
+            selected_stocks = (
+                CopperStock.query.filter(
+                    CopperStock.id.in_(ids),
+                    CopperStock.is_deleted.is_(False),
+                ).all()
+                if ids
+                else []
+            )
             return selected_stocks, float(cached.get('achieved_moyenne', 0)), float(cached.get('achieved_moyenne_nb', 0)), quantities_cached
         except Exception:
             pass
@@ -507,7 +520,15 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
 
     selected_ids = list(quantities.keys())
     # Rehydrate only needed columns to compute achieved metrics
-    rows = db.session.query(CopperStock.id, CopperStock.unit_percent, CopperStock.t_unity, CopperStock.local_balance).filter(CopperStock.id.in_(selected_ids)).all()
+    rows = db.session.query(
+        CopperStock.id,
+        CopperStock.unit_percent,
+        CopperStock.t_unity,
+        CopperStock.local_balance,
+    ).filter(
+        CopperStock.id.in_(selected_ids),
+        CopperStock.is_deleted.is_(False),
+    ).all()
     # Map by id for quick lookup
     row_map = {r[0]: {'unit_percent': float(r[1] or 0), 't_unity': float(r[2] or 0), 'local_balance': float(r[3] or 0)} for r in rows}
 
@@ -528,7 +549,10 @@ def select_stocks_with_minimum_quantities(target_moyenne=None, target_moyenne_nb
     achieved_moyenne_nb = (total_tunity / total_qty) if total_qty else 0
 
     # Rehydrate ORM objects for display
-    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(selected_ids)).all()
+    selected_stocks = CopperStock.query.filter(
+        CopperStock.id.in_(selected_ids),
+        CopperStock.is_deleted.is_(False),
+    ).all()
     try:
         cache_data = {
             'ids': selected_ids,

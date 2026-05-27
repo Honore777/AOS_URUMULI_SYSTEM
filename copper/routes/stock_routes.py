@@ -468,7 +468,11 @@ def edit_stock(stock_id):
 
         # Duplicate voucher check if changed
         if voucher != stock.voucher_no:
-            existing = CopperStock.query.filter_by(voucher_no=voucher).first()
+            existing = (
+                CopperStock.query
+                .filter(CopperStock.voucher_no == voucher, CopperStock.is_deleted.is_(False))
+                .first()
+            )
             if existing:
                 flash(f"Voucher number {voucher} already exists.", "error")
                 logger.warning("edit_stock: duplicate voucher %s attempted by %s", voucher, getattr(current_user, "username", None))
@@ -643,7 +647,11 @@ def add_stock():
             total_balance = net_balance
 
             # Check for duplicate voucher
-            existing = CopperStock.query.filter_by(voucher_no=voucher).first()
+            existing = (
+                CopperStock.query
+                .filter(CopperStock.voucher_no == voucher, CopperStock.is_deleted.is_(False))
+                .first()
+            )
             if existing:
                 return safe_jsonify({"error": f"Voucher number {voucher} already exists."}), 400
 
@@ -948,15 +956,33 @@ def dashboard():
                     moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
                     moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
                 else:
-                    total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
-                    total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
-                    total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+                    total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(
+                        CopperStock.local_balance > 0,
+                        CopperStock.is_deleted.is_(False),
+                    ).scalar() or 0
+                    total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(
+                        CopperStock.local_balance > 0,
+                        CopperStock.is_deleted.is_(False),
+                    ).scalar() or 0
+                    total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(
+                        CopperStock.local_balance > 0,
+                        CopperStock.is_deleted.is_(False),
+                    ).scalar() or 0
                     moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
                     moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
             except Exception:
-                total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
-                total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
-                total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(CopperStock.local_balance > 0).scalar() or 0
+                total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(
+                    CopperStock.local_balance > 0,
+                    CopperStock.is_deleted.is_(False),
+                ).scalar() or 0
+                total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(
+                    CopperStock.local_balance > 0,
+                    CopperStock.is_deleted.is_(False),
+                ).scalar() or 0
+                total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(
+                    CopperStock.local_balance > 0,
+                    CopperStock.is_deleted.is_(False),
+                ).scalar() or 0
                 moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
                 moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
 
@@ -1116,7 +1142,7 @@ def export_filtered_stocks():
 
     # Build SQL and parameters for filtered export and let pandas run it
     from sqlalchemy import text
-    sql = "SELECT date, voucher_no, supplier, input_kg, u_price, rma, inkomane, amount, percentage, nb, local_balance FROM copper_stock WHERE local_balance > 0 ORDER BY date DESC"
+    sql = "SELECT date, voucher_no, supplier, input_kg, u_price, rma, inkomane, amount, percentage, nb, local_balance FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE ORDER BY date DESC"
     params = {}
 
     # Use pandas/sqlalchemy to read directly into a DataFrame (avoids Python loops)
@@ -1309,7 +1335,10 @@ FROM (
                 db.session.rollback()
             except Exception:
                 pass
-            stocks_local_q = stocks_query.filter(CopperStock.local_balance > 0)
+            stocks_local_q = stocks_query.filter(
+                CopperStock.local_balance > 0,
+                CopperStock.is_deleted.is_(False),
+            )
             stocks_pagination = stocks_local_q.paginate(page=page, per_page=per_page, error_out=False)
             filtered_stocks = stocks_pagination.items
             page_stock_ids = [s.id for s in filtered_stocks]
@@ -1496,7 +1525,10 @@ SELECT
                 timings['payments_aggregate'] = time.perf_counter() - t4
 
             # Remaining stocks aggregates (only local_balance > 0)
-            remaining_filters = list(stock_filters) + [CopperStock.local_balance > 0]
+            remaining_filters = list(stock_filters) + [
+                CopperStock.local_balance > 0,
+                CopperStock.is_deleted.is_(False),
+            ]
 
             remaining_value_filters = list(remaining_filters) + [CopperStock.input_kg > 0]
             try:
@@ -1614,6 +1646,7 @@ SELECT
             # computed even when heavy aggregates are skipped.
             try:
                 remaining_filters = []
+                remaining_filters.append(CopperStock.is_deleted.is_(False))
                 if start_date:
                     remaining_filters.append(CopperStock.date >= start)
                 if end_date:
@@ -1622,7 +1655,10 @@ SELECT
                     remaining_filters.append(CopperStock.voucher_no == voucher_no)
                 remaining_filters = list(remaining_filters) + [CopperStock.local_balance > 0]
             except Exception:
-                remaining_filters = [CopperStock.local_balance > 0]
+                remaining_filters = [
+                    CopperStock.local_balance > 0,
+                    CopperStock.is_deleted.is_(False),
+                ]
             total_input = 0
             total_stocks = stocks_pagination.total
             total_output = 0
@@ -1689,13 +1725,13 @@ SELECT
                             from sqlalchemy import text
                             combined_sql = """
 SELECT
-  (SELECT COALESCE(SUM(input_kg),0) FROM copper_stock WHERE local_balance > 0) AS total_input,
-  (SELECT COALESCE(COUNT(id),0) FROM copper_stock WHERE local_balance > 0) AS total_stocks,
+    (SELECT COALESCE(SUM(input_kg),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_input,
+    (SELECT COALESCE(COUNT(id),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_stocks,
   (SELECT COALESCE(SUM(output_kg),0) FROM copper_output) AS total_output,
   (SELECT COALESCE(SUM(debt_remaining),0) FROM copper_output) AS total_debt,
   (SELECT COALESCE(SUM(output_amount),0) FROM copper_output) AS total_sales,
-  (SELECT COALESCE(SUM(net_balance),0) FROM copper_stock WHERE local_balance > 0) AS total_supplier_obligation,
-    (SELECT COALESCE(SUM(COALESCE(sp.amount_rwf, sp.amount)),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE s.local_balance > 0) AS total_payments
+    (SELECT COALESCE(SUM(net_balance),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_supplier_obligation,
+        (SELECT COALESCE(SUM(COALESCE(sp.amount_rwf, sp.amount)),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE s.local_balance > 0 AND s.is_deleted IS FALSE) AS total_payments
 """
                             row = db.session.execute(text(combined_sql)).fetchone()
                             if row:
@@ -1707,10 +1743,15 @@ SELECT
                                 total_supplier_obligation = float(row.total_supplier_obligation or 0)
                                 total_payments = float(row.total_payments or 0)
 
-                            inv_row = db.session.execute(text("SELECT COALESCE(SUM(net_balance * local_balance / NULLIF(input_kg,0)),0) FROM copper_stock WHERE local_balance > 0 AND input_kg > 0")).scalar()
+                            inv_row = db.session.execute(text("SELECT COALESCE(SUM(net_balance * local_balance / NULLIF(input_kg,0)),0) FROM copper_stock WHERE local_balance > 0 AND input_kg > 0 AND is_deleted IS FALSE")).scalar()
                             inventory_value = float(inv_row or 0)
 
-                            cogs_q = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))), 0.0)).join(CopperStock, CopperOutput.stock_id == CopperStock.id)
+                            cogs_q = db.session.query(
+                                func.coalesce(
+                                    func.sum(CopperOutput.output_kg * (CopperStock.net_balance / func.nullif(CopperStock.input_kg, 0))),
+                                    0.0,
+                                )
+                            ).join(CopperStock, CopperOutput.stock_id == CopperStock.id).filter(CopperStock.is_deleted.is_(False))
                             cost_of_stock_sold = float(cogs_q.scalar() or 0.0)
                             gross_profit = (total_sales or 0) - (cost_of_stock_sold or 0)
                         except Exception:

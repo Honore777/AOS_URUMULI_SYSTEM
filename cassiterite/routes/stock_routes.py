@@ -190,7 +190,14 @@ def add_stock():
                     pass
 
             # Check if voucher already exists
-            existing = CassiteriteStock.query.filter_by(voucher_no=form.voucher_no.data).first()
+            existing = (
+                CassiteriteStock.query
+                .filter(
+                    CassiteriteStock.voucher_no == form.voucher_no.data,
+                    CassiteriteStock.is_deleted.is_(False),
+                )
+                .first()
+            )
             if existing:
                 logger.warning("cassiterite.add_stock: duplicate voucher %s by %s", form.voucher_no.data, getattr(current_user, "username", None))
                 flash(f"Voucher {form.voucher_no.data} already exists!", "error")
@@ -646,7 +653,11 @@ def edit_stock(stock_id):
 
         # Handle duplicate voucher if changed
         if voucher != stock.voucher_no:
-            existing = CassiteriteStock.query.filter_by(voucher_no=voucher).first()
+            existing = (
+                CassiteriteStock.query
+                .filter(CassiteriteStock.voucher_no == voucher, CassiteriteStock.is_deleted.is_(False))
+                .first()
+            )
             if existing:
                 logger.warning("cassiterite.edit_stock: duplicate voucher %s attempted by %s", voucher, getattr(current_user, "username", None))
                 flash(f"Lot/voucher number {voucher} already exists.", "error")
@@ -879,8 +890,14 @@ def dashboard():
         # Cassiterite moyenne is stored on each stock; compute global moyenne like copper
         # Avoid materializing all remaining stocks in memory — just compute the count.
         remaining_stocks_count = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False), CassiteriteStock.local_balance > 0).count()
-        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
-        total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(
+            CassiteriteStock.local_balance > 0,
+            CassiteriteStock.is_deleted.is_(False),
+        ).scalar() or 0
+        total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(
+            CassiteriteStock.local_balance > 0,
+            CassiteriteStock.is_deleted.is_(False),
+        ).scalar() or 0
         moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
 
         logger.info("cassiterite.dashboard: completed page=%s stocks_shown=%d", page, len(stocks))

@@ -38,7 +38,7 @@ def record_output():
         # Query only needed columns for the choices to avoid loading full ORM objects
         stock_rows = (
             db.session.query(CopperStock.id, CopperStock.voucher_no, CopperStock.local_balance, CopperStock.supplier)
-            .filter(CopperStock.local_balance > 0)
+            .filter(CopperStock.local_balance > 0, CopperStock.is_deleted.is_(False))
             .order_by(CopperStock.date.desc())
             .all()
         )
@@ -49,6 +49,9 @@ def record_output():
         if request.method == "POST":
             stock_id = int(request.form.get("stock_id"))
             stock = CopperStock.query.get_or_404(stock_id)
+            if getattr(stock, "is_deleted", False):
+                flash("Selected stock is deleted. Choose another voucher.", "danger")
+                return redirect(url_for("copper.record_output"))
             date = datetime.strptime(request.form.get("date"), "%Y-%m-%d").date() if request.form.get("date") else datetime.utcnow().date()
             output_kg = float(request.form.get("output_kg") or 0)
             customer = request.form.get("customer")

@@ -124,7 +124,10 @@ def optimize_stocks():
                     continue
 
             # Fetch all candidate stocks once
-            all_stocks_list = CopperStock.query.filter(CopperStock.local_balance > 0).all()
+            all_stocks_list = CopperStock.query.filter(
+                CopperStock.local_balance > 0,
+                CopperStock.is_deleted.is_(False),
+            ).all()
             changes = {}
 
             # Seed minimum_quantities from previously computed recommended quantities
@@ -219,7 +222,10 @@ def optimize_stocks():
                 # Rehydrate ORM objects for selected stocks from session keys
                 try:
                     ids = [int(k) for k in sess_qty.keys()]
-                    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all()
+                    selected_stocks = CopperStock.query.filter(
+                        CopperStock.id.in_(ids),
+                        CopperStock.is_deleted.is_(False),
+                    ).all()
                     quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
                     mode = 'edit'
                 except Exception:
@@ -262,7 +268,10 @@ def optimize_stocks():
                 sess_qty = session.get('optimization_quantities') or {}
                 if sess_qty:
                     ids = [int(k) for k in sess_qty.keys()]
-                    selected_stocks = CopperStock.query.filter(CopperStock.id.in_(ids)).all()
+                    selected_stocks = CopperStock.query.filter(
+                        CopperStock.id.in_(ids),
+                        CopperStock.is_deleted.is_(False),
+                    ).all()
                     quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
                     mode = 'edit'
             # If the last session mode was 'initial' (user previously filtered)
@@ -304,7 +313,7 @@ def optimize_stocks():
 
     q = (request.args.get('q') or '').strip()
 
-    base_query = CopperStock.query.filter(CopperStock.local_balance > 0)
+    base_query = CopperStock.query.filter(CopperStock.local_balance > 0, CopperStock.is_deleted.is_(False))
     if q:
         # simple supplier search (case-insensitive)
         base_query = base_query.filter(CopperStock.supplier.ilike(f"%{q}%"))
@@ -497,7 +506,10 @@ def confirm_bulk_output():
 
     stocks_map = {}
     if requested_ids:
-        stocks = CopperStock.query.filter(CopperStock.id.in_(requested_ids)).all()
+        stocks = CopperStock.query.filter(
+            CopperStock.id.in_(requested_ids),
+            CopperStock.is_deleted.is_(False),
+        ).all()
         stocks_map = {s.id: s for s in stocks}
 
     plan_items = []
@@ -663,7 +675,10 @@ def direct_bulk_output():
 
     stocks_map = {}
     if requested_ids:
-        stocks = CopperStock.query.filter(CopperStock.id.in_(requested_ids)).all()
+        stocks = CopperStock.query.filter(
+            CopperStock.id.in_(requested_ids),
+            CopperStock.is_deleted.is_(False),
+        ).all()
         stocks_map = {s.id: s for s in stocks}
 
     output_count = 0

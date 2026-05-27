@@ -33,7 +33,7 @@ def select_stocks_for_average_quality(target_moyenne=None, minimize_quantity=Fal
         CassiteriteStock.id,
         CassiteriteStock.unit_percent,
         CassiteriteStock.local_balance,
-    ).filter(CassiteriteStock.local_balance > 0).all()
+    ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).all()
 
     if not rows:
         return [], 0
@@ -146,7 +146,10 @@ def select_stocks_for_average_quality(target_moyenne=None, minimize_quantity=Fal
         logger.warning("select_stocks_for_average_quality: solver status=%s; no selection produced", solver_status)
         return [], 0
 
-    selected_stocks = CassiteriteStock.query.filter(CassiteriteStock.id.in_(selected_ids)).all()
+    selected_stocks = CassiteriteStock.query.filter(
+        CassiteriteStock.id.in_(selected_ids),
+        CassiteriteStock.is_deleted.is_(False),
+    ).all()
     total_unit_val = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.id.in_(selected_ids)).scalar() or 0
     total_qty_val = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.id.in_(selected_ids)).scalar() or 0
     achieved_moyenne = (total_unit_val / total_qty_val) if total_qty_val > 0 else 0
@@ -175,7 +178,7 @@ def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minim
         CassiteriteStock.id,
         CassiteriteStock.local_balance,
         CassiteriteStock.unit_percent,
-    ).filter(CassiteriteStock.local_balance > 0).all()
+    ).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).all()
 
     if not rows:
         return [], 0, {}
@@ -300,7 +303,14 @@ def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minim
 
     selected_ids = list(quantities.keys())
     # Rehydrate only needed columns and compute totals using quantities dict
-    rows = db.session.query(CassiteriteStock.id, CassiteriteStock.unit_percent, CassiteriteStock.local_balance).filter(CassiteriteStock.id.in_(selected_ids)).all()
+    rows = db.session.query(
+        CassiteriteStock.id,
+        CassiteriteStock.unit_percent,
+        CassiteriteStock.local_balance,
+    ).filter(
+        CassiteriteStock.id.in_(selected_ids),
+        CassiteriteStock.is_deleted.is_(False),
+    ).all()
     row_map = {r[0]: {'unit_percent': float(r[1] or 0), 'local_balance': float(r[2] or 0)} for r in rows}
 
     total_unit_val = 0.0
@@ -315,5 +325,8 @@ def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minim
             total_qty_val += qty
 
     achieved_moyenne = (total_unit_val / total_qty_val) if total_qty_val > 0 else 0
-    selected_stocks = CassiteriteStock.query.filter(CassiteriteStock.id.in_(selected_ids)).all()
+    selected_stocks = CassiteriteStock.query.filter(
+        CassiteriteStock.id.in_(selected_ids),
+        CassiteriteStock.is_deleted.is_(False),
+    ).all()
     return selected_stocks, achieved_moyenne, quantities

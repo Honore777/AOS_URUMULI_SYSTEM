@@ -44,7 +44,7 @@ def record_output():
     # Populate choices by selecting only required columns to avoid loading full ORM objects
     stock_rows = (
         db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance)
-        .filter(CassiteriteStock.local_balance > 0)
+        .filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False))
         .order_by(CassiteriteStock.date.desc())
         .all()
     )
@@ -53,7 +53,7 @@ def record_output():
     if form.validate_on_submit():
         stock = CassiteriteStock.query.get(form.stock_id.data)
         
-        if not stock:
+        if not stock or getattr(stock, "is_deleted", False):
             flash("Stock not found!", "error")
             return redirect(url_for('cassiterite.record_output'))
 
@@ -229,7 +229,15 @@ def optimize():
             quantities = {s.id: s.local_balance for s in selected_stocks}
             mode = 'edit'
             # For edit mode display, fetch only required columns
-            all_stocks = db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance).filter(CassiteriteStock.local_balance > 0).order_by(CassiteriteStock.date.desc()).all()
+            all_stocks = db.session.query(
+                CassiteriteStock.id,
+                CassiteriteStock.voucher_no,
+                CassiteriteStock.supplier,
+                CassiteriteStock.local_balance,
+            ).filter(
+                CassiteriteStock.local_balance > 0,
+                CassiteriteStock.is_deleted.is_(False),
+            ).order_by(CassiteriteStock.date.desc()).all()
         
         # ═══════════════════════════════════════════════════
         # STEP 3: User clicks "Recalculate" with adjustments
@@ -247,7 +255,15 @@ def optimize():
                     continue
 
             # Fetch all candidate stocks once to validate and clamp
-            all_stocks_list = db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance).filter(CassiteriteStock.local_balance > 0).order_by(CassiteriteStock.date.desc()).all()
+            all_stocks_list = db.session.query(
+                CassiteriteStock.id,
+                CassiteriteStock.voucher_no,
+                CassiteriteStock.supplier,
+                CassiteriteStock.local_balance,
+            ).filter(
+                CassiteriteStock.local_balance > 0,
+                CassiteriteStock.is_deleted.is_(False),
+            ).order_by(CassiteriteStock.date.desc()).all()
 
             # Seed minimum_quantities from previously computed recommended quantities
             # so Recalculate starts from the recommended baseline and then applies edits.
@@ -319,7 +335,10 @@ def optimize():
                 sess_qty = session.get('optimization_quantities') or {}
                 if sess_qty:
                     ids = [int(k) for k in sess_qty.keys()]
-                    selected_stocks = CassiteriteStock.query.filter(CassiteriteStock.id.in_(ids)).all()
+                    selected_stocks = CassiteriteStock.query.filter(
+                        CassiteriteStock.id.in_(ids),
+                        CassiteriteStock.is_deleted.is_(False),
+                    ).all()
                     quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
                     mode = 'edit'
                 else:
@@ -356,7 +375,15 @@ def optimize():
         per_page = 40
 
     q = (request.args.get('q') or '').strip()
-    base_q = db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance).filter(CassiteriteStock.local_balance > 0)
+    base_q = db.session.query(
+        CassiteriteStock.id,
+        CassiteriteStock.voucher_no,
+        CassiteriteStock.supplier,
+        CassiteriteStock.local_balance,
+    ).filter(
+        CassiteriteStock.local_balance > 0,
+        CassiteriteStock.is_deleted.is_(False),
+    )
     if q:
         base_q = base_q.filter(CassiteriteStock.supplier.ilike(f"%{q}%"))
 
@@ -497,7 +524,13 @@ def confirm_bulk_output():
         batch_id = f"batch_{date_str}_{hex_code}"
 
         stock_ids = [int(k) for k in quantities.keys() if str(k).isdigit()]
-        all_stocks = {s.id: s for s in CassiteriteStock.query.filter(CassiteriteStock.id.in_(stock_ids)).all()} if stock_ids else {}
+        all_stocks = {
+            s.id: s
+            for s in CassiteriteStock.query.filter(
+                CassiteriteStock.id.in_(stock_ids),
+                CassiteriteStock.is_deleted.is_(False),
+            ).all()
+        } if stock_ids else {}
 
         plan_items = []
         for stock_id_str, qty in quantities.items():
@@ -740,7 +773,10 @@ def direct_bulk_output():
 
     stocks_map = {}
     if requested_ids:
-        stocks = CassiteriteStock.query.filter(CassiteriteStock.id.in_(requested_ids)).all()
+        stocks = CassiteriteStock.query.filter(
+            CassiteriteStock.id.in_(requested_ids),
+            CassiteriteStock.is_deleted.is_(False),
+        ).all()
         stocks_map = {s.id: s for s in stocks}
 
     output_count = 0
