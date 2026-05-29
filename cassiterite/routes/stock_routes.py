@@ -24,6 +24,7 @@ import logging
 logger= logging.getLogger(__name__)
 
 
+
 def _stock_has_payment_history(stock_id: int) -> bool:
     """Return True if this supplier has any payment activity in the consolidated ledger."""
     from cassiterite.models import CassiteriteSupplierPayment, CassiteriteSupplier

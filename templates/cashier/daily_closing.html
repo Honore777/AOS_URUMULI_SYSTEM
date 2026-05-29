@@ -14,7 +14,7 @@
         <div class="mb-5">
             <h2 class="text-xl font-extrabold text-slate-900">Save Closing</h2>
         </div>
-        <form method="post" action="{{ url_for('core.cashier_daily_closing') }}" class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <form method="post" action="{{ url_for('core.cashier_daily_closing') }}" class="grid grid-cols-1 gap-4">
             <div>
                 <label class="mb-1 block text-sm font-semibold text-slate-700">Account</label>
                 <select name="reconcile_account_id" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" required>
@@ -35,9 +35,7 @@
                 <label class="mb-1 block text-sm font-semibold text-slate-700">Note</label>
                 <input name="reconcile_note" type="text" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="Optional note">
             </div>
-            <div class="md:col-span-2">
-                <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-lg transition hover:bg-indigo-700">Save Closing</button>
-            </div>
+            <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-lg transition hover:bg-indigo-700">Save Closing</button>
         </form>
     </section>
 

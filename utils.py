@@ -148,7 +148,7 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
         from config import db
         from copper.models import CopperStock, SupplierPayment as CopperSupplierPayment, CopperAdvanceAllocation
         from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
-        from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+        from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation, SupplierDeduction
 
         supplier_like = f"%{'%'.join(normalized.split())}%"
 
@@ -224,7 +224,13 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
         stock_total = copper_stock_debt + cass_stock_debt
         paid_total = copper_paid + cass_paid
 
-        remaining = stock_total + refund_debit - allocation_total - advance_credit - paid_total
+        supplier_deduction_credit = float(
+            db.session.query(func.coalesce(func.sum(SupplierDeduction.amount_rwf), 0))
+            .filter(SupplierDeduction.supplier_name.ilike(supplier_like))
+            .scalar()
+            or 0.0
+        )
+        remaining = stock_total + refund_debit - allocation_total - advance_credit - paid_total - supplier_deduction_credit
         return float(remaining or 0.0)
     except Exception:
         return 0.0
@@ -251,7 +257,7 @@ def calculate_consolidated_supplier_remaining_balances(supplier_names):
         from config import db
         from copper.models import CopperStock, SupplierPayment as CopperSupplierPayment, CopperAdvanceAllocation
         from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment, CassiteriteAdvanceAllocation
-        from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
+        from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation, SupplierDeduction
         from sqlalchemy import func, or_
 
         copper_supplier_expr = func.lower(func.trim(CopperStock.supplier))
@@ -263,6 +269,7 @@ def calculate_consolidated_supplier_remaining_balances(supplier_names):
         allocation_totals = {}
         paid_totals = {}
         refund_totals = {}
+        deduction_totals = {}
 
         for supplier_norm, stock_debt in (
             db.session.query(
@@ -354,6 +361,16 @@ def calculate_consolidated_supplier_remaining_balances(supplier_names):
         ):
             paid_totals[supplier_norm] = float(paid_totals.get(supplier_norm, 0.0) + float(paid_total or 0.0))
 
+        for supplier_norm, deduction_total in (
+            db.session.query(
+                func.lower(func.trim(SupplierDeduction.supplier_name)).label('supplier_norm'),
+                func.coalesce(func.sum(SupplierDeduction.amount_rwf), 0).label('deduction_total'),
+            )
+            .group_by(func.lower(func.trim(SupplierDeduction.supplier_name)))
+            .all()
+        ):
+            deduction_totals[supplier_norm] = float(deduction_totals.get(supplier_norm, 0.0) + float(deduction_total or 0.0))
+
         unified_rows = (
             db.session.query(
                 UnifiedSupplierAdvance.supplier_name_norm,
@@ -378,7 +395,8 @@ def calculate_consolidated_supplier_remaining_balances(supplier_names):
             allocation_total = float(allocation_totals.get(supplier_norm, 0.0))
             paid_total = float(paid_totals.get(supplier_norm, 0.0))
             refund_debit = float(refund_totals.get(supplier_norm, 0.0))
-            remaining_map[supplier_norm] = float(stock_total + refund_debit - allocation_total - paid_total)
+            deduction_total = float(deduction_totals.get(supplier_norm, 0.0))
+            remaining_map[supplier_norm] = float(stock_total + refund_debit - allocation_total - paid_total - deduction_total)
 
         missing = [name for name in unique_names if name not in remaining_map]
         for name in missing:

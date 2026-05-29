@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transporter Ledger</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 text-slate-100">
+<div class="mx-auto max-w-7xl px-4 py-6 lg:px-8">
+    <div class="rounded-3xl border border-white/10 bg-white/95 p-6 shadow-2xl backdrop-blur-sm text-slate-900">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="mb-4 space-y-2">
+            {% for category, message in messages %}
+            <div class="rounded-lg border px-4 py-3 text-sm {{ 'border-emerald-300 bg-emerald-50 text-emerald-800' if category in ['success', 'info'] else 'border-red-300 bg-red-50 text-red-800' if category in ['danger', 'error'] else 'border-amber-300 bg-amber-50 text-amber-800' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-emerald-600">Transporter Settlement Desk</p>
+                <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Transporter Ledger{% if selected_transporter %}: {{ selected_transporter }}{% endif %}</h1>
+                <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-600">Advance, transport fee, and cash payout events grouped by transporter. Positive balance means we owe the transporter.</p>
+            </div>
+                <div class="flex gap-2 justify-end">
+                <a href="{{ url_for('copper.dashboard') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-200 text-slate-800 font-semibold hover:bg-slate-300 shadow-sm">Back</a>
+                <a href="{{ url_for('core.transporter_pay_fee') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shadow-sm">Pay transport fees to transporter</a>
+                <a href="{{ url_for('core.transporter_charge_fee') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-rose-700 text-white font-semibold hover:bg-rose-800 shadow-sm">Charge transport fees to transporter</a>
+                <a href="{{ url_for('entry_point') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-900 text-white font-semibold hover:bg-slate-800 shadow-sm">Menu</a>
+            </div>
+        </div>
+
+        <div class="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-lg">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 border-b">
+                        <tr>
+                            <th class="px-4 py-3 text-left font-bold">Transporter</th>
+                            <th class="px-4 py-3 text-right font-bold">Balance (RWF)</th>
+                            <th class="px-4 py-3 text-center font-bold">Entries</th>
+                            <th class="px-4 py-3 text-left font-bold">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-slate-100">
+                        {% for row in rows %}
+                        <tr class="hover:bg-emerald-50">
+                            <td class="px-4 py-3 font-semibold text-slate-900">{{ row.transporter_name }}</td>
+                            <td class="px-4 py-3 text-right font-bold {% if (row.balance_rwf or 0) >= 0 %}text-emerald-600{% else %}text-rose-600{% endif %}">{{ '{:,.0f}'.format(row.balance_rwf or 0) }}</td>
+                            <td class="px-4 py-3 text-center text-slate-700">{{ row.row_count }}</td>
+                            <td class="px-4 py-3">
+                                <a href="{{ url_for('core.transporter_ledger_detail', transporter_name=row.transporter_name) }}" class="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">View ledger</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% if rows|length == 0 %}
+                        <tr>
+                            <td colspan="4" class="px-4 py-6 text-center text-sm text-slate-500">No transporters yet.</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {% if rows_pagination is defined and rows_pagination %}
+        <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-sm text-slate-600">Showing page {{ rows_pagination.page }} of {{ rows_pagination.pages }} ({{ rows_pagination.total }} transporters)</p>
+            <div class="flex flex-wrap gap-2">
+                {% if rows_pagination.has_prev %}
+                <a href="{{ url_for('core.transporter_ledger_index', page=rows_pagination.prev_num, per_page=page_size, preset=filter_preset) }}" class="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">Previous</a>
+                {% endif %}
+                {% if rows_pagination.has_next %}
+                <a href="{{ url_for('core.transporter_ledger_index', page=rows_pagination.next_num, per_page=page_size, preset=filter_preset) }}" class="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">Next</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-900">Transporter Payment History</h2>
+                    <p class="mt-1 text-sm text-slate-600">Recent cash payments and advances, listed newest first.</p>
+                </div>
+            </div>
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-100 text-slate-700">
+                        <tr>
+                            <th class="px-4 py-3 text-left font-semibold">Date</th>
+                            <th class="px-4 py-3 text-left font-semibold">Transporter</th>
+                            <th class="px-4 py-3 text-left font-semibold">Type</th>
+                            <th class="px-4 py-3 text-right font-semibold">Amount (RWF)</th>
+                            <th class="px-4 py-3 text-left font-semibold">Receipt</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 bg-white">
+                        {% for entry in payment_history_rows %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-4 py-3 text-slate-600">{{ entry.created_at.strftime('%Y-%m-%d %H:%M') if entry.created_at else '-' }}</td>
+                            <td class="px-4 py-3 font-semibold text-slate-900">{{ entry.transporter_name or '-' }}</td>
+                            <td class="px-4 py-3 text-slate-700">
+                                <span class="inline-flex rounded-full px-2 py-1 text-xs font-semibold {% if (entry.entry_type or '')|upper == 'TRANSPORTER_FEE_CHARGE' %}bg-rose-100 text-rose-700{% elif (entry.entry_type or '')|upper == 'ADVANCE' %}bg-emerald-100 text-emerald-700{% else %}bg-slate-100 text-slate-700{% endif %}">{{ entry.entry_type or '-' }}</span>
+                            </td>
+                            <td class="px-4 py-3 text-right font-bold {% if (entry.amount_rwf or 0) >= 0 %}text-emerald-700{% else %}text-rose-700{% endif %}">{{ '{:,.2f}'.format(entry.amount_rwf or 0) }}</td>
+                            <td class="px-4 py-3">
+                                {% if entry.receipt_url %}
+                                <a href="{{ entry.receipt_url }}" class="inline-flex rounded-lg border {% if (entry.entry_type or '')|upper == 'TRANSPORTER_FEE_CHARGE' %}border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100{% else %}border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %} px-3 py-2 text-sm font-semibold">View receipt</a>
+                                {% else %}
+                                <span class="text-sm text-slate-400">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% if payment_history_rows|length == 0 %}
+                        <tr>
+                            <td colspan="5" class="px-4 py-6 text-center text-sm text-slate-500">No transporter payment history yet.</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="mt-8 rounded-2xl border border-slate-200 bg-white p-8 shadow-xl">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-900">Transporter Workflow</h2>
+                    <p class="mt-2 text-sm text-slate-600">Pay transporter fee creates a boss review for an advance in USD or RWF. Charge transport fees creates a boss review with a reason and reduces the transporter ledger when approved.</p>
+                </div>
+                <div class="flex gap-2">
+                    <a href="{{ url_for('core.transporter_pay_fee') }}" class="rounded-lg bg-emerald-600 px-5 py-3 font-semibold text-white hover:bg-emerald-700">Pay transporter fee</a>
+                    <a href="{{ url_for('core.transporter_charge_fee') }}" class="rounded-lg bg-rose-700 px-5 py-3 font-semibold text-white hover:bg-rose-800">Charge transport fee</a>
+                </div>
+            </div>
+        </div>
+
+        {% if selected_transporter %}
+        <div class="mt-8 rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+            <div class="border-b border-slate-200 bg-slate-50 px-6 py-4">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-900">Ledger Entries for {{ selected_transporter }}</h2>
+                        <p class="mt-1 text-sm text-slate-600">{% if filter_preset == 'all' %}All time{% else %}Last 30 days{% endif %} entries ordered from oldest to newest.</p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <a href="{{ ledger_url_base }}?preset=30d" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '30d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 30 days</a>
+                        <a href="{{ ledger_url_base }}?preset=all" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'all' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">All time</a>
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-100 text-slate-700">
+                        <tr>
+                            <th class="px-4 py-3 text-left font-semibold">Date</th>
+                            <th class="px-4 py-3 text-left font-semibold">Description</th>
+                            <th class="px-4 py-3 text-right font-semibold">Debit (RWF)</th>
+                            <th class="px-4 py-3 text-right font-semibold">Credit (RWF)</th>
+                            <th class="px-4 py-3 text-right font-semibold">Original Amount</th>
+                            <th class="px-4 py-3 text-right font-semibold">Running Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 bg-white">
+                        {% for entry in recent_rows %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-4 py-3 text-slate-600">{{ entry.created_at.strftime('%Y-%m-%d %H:%M') if entry.created_at else '-' }}</td>
+                            <td class="px-4 py-3 text-slate-700">{{ entry.entry_type or '-' }}{% if entry.supplier_name %} • {{ entry.supplier_name }}{% endif %}{% if entry.note %} — {{ entry.note }}{% endif %}</td>
+                            <td class="px-4 py-3 text-right font-extrabold text-red-700">{% if (entry.amount_rwf or 0) < 0 %}{{ '{:,.2f}'.format((entry.amount_rwf or 0) * -1) }}{% endif %}</td>
+                            <td class="px-4 py-3 text-right font-extrabold text-emerald-700">{% if (entry.amount_rwf or 0) >= 0 %}{{ '{:,.2f}'.format(entry.amount_rwf or 0) }}{% endif %}</td>
+                            <td class="px-4 py-3 text-right font-semibold text-slate-700">
+                                {% if (entry.currency or '') == 'USD' and entry.amount_input %}
+                                    {{ '{:,.2f}'.format(entry.amount_input) }} USD
+                                    <div class="text-xs text-slate-500 mt-1">@ {{ '{:.2f}'.format(entry.exchange_rate or 1.0) }}</div>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right font-bold text-slate-900">{{ '{:,.2f}'.format(entry.running_balance_rwf or 0) }} RWF</td>
+                        </tr>
+                        {% endfor %}
+                        {% if recent_rows|length == 0 %}
+                        <tr>
+                            <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">No transporter ledger entries yet.</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+</div>
+</body>
+</html>

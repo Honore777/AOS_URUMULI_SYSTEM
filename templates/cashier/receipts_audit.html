@@ -12,12 +12,12 @@
     <a href="{{ url_for('core.cashier_approved_requests') }}" class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700">Back to Approved Requests</a>
 </div>
 
-<form method="get" class="mt-6 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-6">
-    <div>
+<form method="get" class="mt-6 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-2 xl:grid-cols-8">
+    <div class="min-w-0">
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Search</label>
         <input type="text" name="q" value="{{ q or '' }}" placeholder="Receipt #, name, payment id" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
     </div>
-    <div>
+    <div class="min-w-0 xl:col-span-1">
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Kind</label>
         <select name="kind" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
             <option value="all" {% if kind == 'all' %}selected{% endif %}>All</option>
@@ -25,7 +25,7 @@
             <option value="supplier" {% if kind == 'supplier' %}selected{% endif %}>Supplier</option>
         </select>
     </div>
-    <div>
+    <div class="min-w-0 xl:col-span-1">
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Mineral</label>
         <select name="mineral" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
             <option value="all" {% if mineral == 'all' %}selected{% endif %}>All</option>
@@ -33,7 +33,7 @@
             <option value="cassiterite" {% if mineral == 'cassiterite' %}selected{% endif %}>Cassiterite</option>
         </select>
     </div>
-    <div>
+    <div class="min-w-0 xl:col-span-1">
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Printed</label>
         <select name="printed" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
             <option value="all" {% if printed == 'all' %}selected{% endif %}>All</option>
@@ -41,19 +41,19 @@
             <option value="no" {% if printed == 'no' %}selected{% endif %}>Not Printed</option>
         </select>
     </div>
-    <div>
+    <div class="min-w-0 xl:col-span-1">
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Limit</label>
         <input type="number" min="20" max="200" name="per_page" value="{{ per_page or limit or 50 }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
     </div>
-    <div>
+    <div class="min-w-0 xl:col-span-1">
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">From</label>
         <input type="date" name="from" value="{{ from_date.strftime('%Y-%m-%d') if from_date else '' }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
     </div>
-    <div>
+    <div class="xl:col-span-1">
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">To</label>
         <input type="date" name="to" value="{{ to_date.strftime('%Y-%m-%d') if to_date else '' }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200">
     </div>
-    <div class="flex items-end gap-2">
+    <div class="flex items-end gap-2 xl:col-span-2 min-w-0">
         <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">Apply</button>
         <a href="{{ url_for('core.cashier_receipts_audit') }}" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Reset</a>
     </div>
@@ -72,7 +72,7 @@
         <div class="px-4 py-8 text-sm text-slate-600">No receipts match the selected filters.</div>
     {% else %}
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <table class="min-w-[1200px] divide-y divide-slate-200 text-sm">
                 <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
                     <tr>
                         <th class="px-3 py-2 text-left">Receipt #</th>
@@ -91,9 +91,9 @@
                         <tr class="hover:bg-slate-50">
                             <td class="px-3 py-2 font-semibold text-slate-900">{{ row.receipt_number }}</td>
                             <td class="px-3 py-2">
-                                <span class="rounded-full px-2 py-1 text-xs font-bold {{ 'bg-indigo-100 text-indigo-700' if row.kind == 'worker' else 'bg-amber-100 text-amber-700' }}">{{ row.kind|capitalize }}</span>
+                                <span class="rounded-full px-2 py-1 text-xs font-bold {{ 'bg-indigo-100 text-indigo-700' if row.kind == 'worker' else 'bg-rose-100 text-rose-700' if row.kind == 'transporter' else 'bg-amber-100 text-amber-700' }}">{{ row.kind|capitalize }}</span>
                                 {% if row.payment_type %}
-                                    <span class="ml-1 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{{ row.payment_type }}</span>
+                                    <span class="ml-1 rounded-full px-2 py-1 text-xs font-semibold {% if row.kind == 'transporter' and (row.payment_type or '')|upper == 'TRANSPORTER_FEE_CHARGE' %}bg-rose-100 text-rose-700{% elif row.kind == 'transporter' %}bg-rose-50 text-rose-700{% else %}bg-slate-100 text-slate-700{% endif %}">{{ row.payment_type }}</span>
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2">{{ row.counterparty }}</td>
@@ -116,7 +116,7 @@
                             </td>
                             <td class="px-3 py-2">
                                 {% if row.view_url %}
-                                    <a href="{{ row.view_url }}" class="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700">View / Print</a>
+                                    <a href="{{ row.view_url }}" class="inline-flex items-center rounded-lg {% if row.kind == 'transporter' %}bg-rose-700 hover:bg-rose-800{% else %}bg-indigo-600 hover:bg-indigo-700{% endif %} px-3 py-1.5 text-xs font-bold text-white">View / Print</a>
                                 {% else %}
                                     <span class="text-xs text-slate-400">Unavailable</span>
                                 {% endif %}

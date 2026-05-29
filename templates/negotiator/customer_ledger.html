@@ -137,13 +137,21 @@
                                     <td class="px-2 py-2 text-right font-bold text-red-700">
                                         {% if e.get('debit') %}
                                         <div>{{ '{:,.2f}'.format(e.get('debit', 0)) }} {{ base_currency }}</div>
-                                        {% if e.get('debit_rwf') and base_currency != 'RWF' %}<div class="text-xs text-slate-500">{{ '{:,.0f}'.format(e.get('debit_rwf')) }} RWF</div>{% endif %}
+                                        {% if e.get('original_currency') and e.get('original_currency') != base_currency and e.get('original_amount') %}
+                                        <div class="text-xs text-slate-500">{{ '{:,.2f}'.format(e.get('original_amount')) }} {{ e.get('original_currency') }}</div>
+                                        {% elif e.get('debit_rwf') and base_currency != 'RWF' %}
+                                        <div class="text-xs text-slate-500">{{ '{:,.0f}'.format(e.get('debit_rwf')) }} RWF</div>
+                                        {% endif %}
                                         {% else %}-{% endif %}
                                     </td>
                                     <td class="px-2 py-2 text-right font-bold text-emerald-700">
                                         {% if e.get('credit') %}
                                         <div>{{ '{:,.2f}'.format(e.get('credit', 0)) }} {{ base_currency }}</div>
-                                        {% if e.get('credit_rwf') and base_currency != 'RWF' %}<div class="text-xs text-slate-500">{{ '{:,.0f}'.format(e.get('credit_rwf')) }} RWF</div>{% endif %}
+                                        {% if e.get('original_currency') and e.get('original_currency') != base_currency and e.get('original_amount') %}
+                                        <div class="text-xs text-slate-500">{{ '{:,.2f}'.format(e.get('original_amount')) }} {{ e.get('original_currency') }}</div>
+                                        {% elif e.get('credit_rwf') and base_currency != 'RWF' %}
+                                        <div class="text-xs text-slate-500">{{ '{:,.0f}'.format(e.get('credit_rwf')) }} RWF</div>
+                                        {% endif %}
                                         {% else %}-{% endif %}
                                     </td>
                                     <td class="px-2 py-2 text-right font-bold text-slate-900">

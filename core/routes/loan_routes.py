@@ -18,6 +18,17 @@ def _norm_name(nm: str) -> str:
     return ' '.join((nm or '').strip().lower().split())
 
 
+def _normalize_money(amount_input: float, currency: str, exchange_rate: float) -> tuple[float, float, str, float]:
+    currency = (currency or 'RWF').strip().upper()
+    exchange_rate = float(exchange_rate or 1.0)
+    amount_input = float(amount_input or 0.0)
+    if currency == 'USD':
+        if exchange_rate <= 0:
+            raise ValueError('Exchange rate must be > 0 for USD.')
+        return amount_input, float(amount_input * exchange_rate), currency, exchange_rate
+    return amount_input, float(amount_input), currency, exchange_rate
+
+
 @core_bp.route('/accountant/lenders', methods=['GET'])
 @role_required('accountant', 'boss', 'admin')
 def accountant_lenders():
@@ -56,11 +67,22 @@ def accountant_request_lender_payment():
         return redirect(url_for('core.accountant_lenders'))
 
     try:
-        amount = float(request.form.get('amount') or 0.0)
+        amount_input = float(request.form.get('amount') or 0.0)
     except Exception:
-        amount = 0.0
-    if amount <= 0:
+        amount_input = 0.0
+    if amount_input <= 0:
         flash('Amount must be > 0.', 'danger')
+        return redirect(url_for('core.accountant_lenders'))
+
+    currency = (request.form.get('currency') or 'RWF').strip().upper()
+    try:
+        exchange_rate = float(request.form.get('exchange_rate') or 1.0)
+    except Exception:
+        exchange_rate = 1.0
+    try:
+        amount_input, amount_rwf, currency, exchange_rate = _normalize_money(amount_input, currency, exchange_rate)
+    except Exception as exc:
+        flash(str(exc), 'danger')
         return redirect(url_for('core.accountant_lenders'))
 
     method = (request.form.get('method') or 'CASH').strip().upper()
@@ -88,7 +110,7 @@ def accountant_request_lender_payment():
         .scalar()
         or 0.0
     )
-    if amount > float(outstanding_total or 0.0):
+    if amount_rwf > float(outstanding_total or 0.0):
         flash('Amount exceeds outstanding balance for this lender.', 'danger')
         return redirect(url_for('core.accountant_lenders'))
 
@@ -96,11 +118,11 @@ def accountant_request_lender_payment():
         'action': 'loan_repayment',
         'lender_name': lender_name,
         'lender_name_norm': lender_norm,
-        'amount': float(amount),
-        'currency': 'RWF',
-        'exchange_rate': 1.0,
-        'amount_input': float(amount),
-        'amount_rwf': float(amount),
+        'amount': float(amount_rwf),
+        'currency': currency,
+        'exchange_rate': float(exchange_rate or 1.0),
+        'amount_input': float(amount_input),
+        'amount_rwf': float(amount_rwf),
         'method': method,
         'note': note or f'Lender payment - {lender_name}',
         'reference': reference,
@@ -110,8 +132,8 @@ def accountant_request_lender_payment():
         mineral_type=None,
         type='loan_repayment',
         customer=lender_name,
-        amount=float(amount),
-        currency='RWF',
+        amount=float(amount_rwf),
+        currency=currency,
         created_by_id=getattr(current_user, 'id', None),
         status=PaymentReviewStatus.PENDING_REVIEW.value,
         request_payload=__import__('json').dumps(payload),
@@ -124,7 +146,7 @@ def accountant_request_lender_payment():
         create_notification(
             user_id=int(boss_id),
             type_='LENDER_PAYMENT_REQUESTED',
-            message=f"Hariho ubusabe bwo kwishyura uwatanze inguzanyo: {lender_name} ({amount:,.2f} RWF).",
+            message=f"Hariho ubusabe bwo kwishyura uwatanze inguzanyo: {lender_name} ({amount_input:,.2f} {currency} = {amount_rwf:,.2f} RWF).",
             related_type='payment_review',
             related_id=int(review.id),
         )
@@ -161,8 +183,85 @@ def lender_loans(lender_norm: str):
         abort(404)
     lender_name = loans[0].lender_name
     loan_ids = [int(l.id) for l in loans]
-    entries = LoanLedgerEntry.query.filter(LoanLedgerEntry.loan_id.in_(loan_ids)).order_by(LoanLedgerEntry.created_at.asc(), LoanLedgerEntry.id.asc()).all()
-    return render_template('accountant/lender_ledger.html', lender_name=lender_name, entries=entries)
+    raw_entries = LoanLedgerEntry.query.filter(LoanLedgerEntry.loan_id.in_(loan_ids)).order_by(LoanLedgerEntry.created_at.asc(), LoanLedgerEntry.id.asc()).all()
+
+    entries = []
+    running_rwf = 0.0
+    total_disbursed = 0.0
+    total_repaid = 0.0
+    for entry in raw_entries:
+        amount_rwf = float(entry.amount_rwf or 0.0)
+        amount_input = float(entry.amount_input or 0.0)
+        currency = (entry.currency or 'RWF').upper()
+        if entry.entry_type == 'DISBURSEMENT':
+            running_rwf += amount_rwf
+            total_disbursed += amount_rwf
+            display_type = 'Loan Disbursement'
+        else:
+            running_rwf -= amount_rwf
+            total_repaid += amount_rwf
+            display_type = 'Loan Repayment'
+        entries.append({
+            'created_at': entry.created_at,
+            'entry_type': display_type,
+            'amount_input': amount_input,
+            'currency': currency,
+            'exchange_rate': float(entry.exchange_rate or 1.0),
+            'amount_rwf': amount_rwf,
+            'balance_rwf': float(running_rwf),
+            'note': entry.note,
+            'cash_transaction_id': entry.cash_transaction_id,
+            'loan_id': entry.loan_id,
+        })
+
+    return render_template(
+        'accountant/lender_ledger.html',
+        lender_name=lender_name,
+        entries=entries,
+        total_disbursed=total_disbursed,
+        total_repaid=total_repaid,
+        outstanding_balance=max(running_rwf, 0.0),
+    )
+
+
+@core_bp.route('/receipts/loan/<int:loan_id>', methods=['GET'])
+@role_required('accountant', 'boss', 'cashier', 'negotiator', 'admin')
+def loan_receipt_detail(loan_id: int):
+    loan = Loan.query.get_or_404(loan_id)
+    disbursement_entry = (
+        LoanLedgerEntry.query
+        .filter(LoanLedgerEntry.loan_id == int(loan.id), LoanLedgerEntry.entry_type == 'DISBURSEMENT')
+        .order_by(LoanLedgerEntry.created_at.desc(), LoanLedgerEntry.id.desc())
+        .first()
+    )
+    total_disbursed = float(loan.disbursed_rwf or 0.0)
+    total_repaid = float(loan.repaid_rwf or 0.0)
+    remaining_balance = float(loan.outstanding_rwf or 0.0)
+    return render_template(
+        'receipts/professional_payment_receipt.html',
+        document_title='LOAN RECEIPT FORM',
+        document_subtitle='Loan disbursement receipt with approval signatures',
+        party_role='Lender',
+        party_name=loan.lender_name,
+        receipt_reference=f'LOAN-{loan.id:04d}',
+        document_date=disbursement_entry.created_at if disbursement_entry else loan.created_at,
+        original_amount=loan.principal_input,
+        original_currency=loan.currency,
+        exchange_rate=loan.exchange_rate,
+        paid_amount=disbursement_entry.amount_input if disbursement_entry else loan.principal_input,
+        paid_currency=(disbursement_entry.currency if disbursement_entry else loan.currency),
+        paid_amount_rwf=disbursement_entry.amount_rwf if disbursement_entry else loan.principal_rwf,
+        remaining_amount=remaining_balance,
+        remaining_currency='RWF',
+        note=loan.note,
+        status_label='DISBURSED' if (loan.status or '').upper() == 'DISBURSED' else (loan.status or '-'),
+        signers=['Lender', 'Cashier', 'Boss'],
+        summary_values={
+            'principal_rwf': float(loan.principal_rwf or 0.0),
+            'disbursed_rwf': total_disbursed,
+            'repaid_rwf': total_repaid,
+        },
+    )
 
 
 @core_bp.route('/negotiator/loans', methods=['GET', 'POST'])

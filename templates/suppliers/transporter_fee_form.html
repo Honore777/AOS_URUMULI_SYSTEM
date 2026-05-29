@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ 'Pay Transporter Fee' if mode == 'pay' else 'Charge Transport Fee' }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 text-slate-100">
+<div class="mx-auto max-w-4xl px-4 py-8">
+    <div class="rounded-3xl border border-white/10 bg-white/95 p-8 text-slate-900 shadow-2xl backdrop-blur-sm">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-600">Transporter workflow</p>
+                <h1 class="mt-2 text-3xl font-black tracking-tight">
+                    {{ 'Pay Transporter Fee' if mode == 'pay' else 'Charge Transport Fee' }}
+                </h1>
+                <p class="mt-2 max-w-2xl text-sm text-slate-600">
+                    {% if mode == 'pay' %}
+                    Enter the transporter advance amount, currency, and exchange rate. This creates a boss review and, once approved, the cash payment is linked to the transporter ledger.
+                    {% else %}
+                    Enter the transporter, the amount to charge, and a reason. This creates a boss review and, once approved, the amount reduces the transporter ledger balance.
+                    {% endif %}
+                </p>
+            </div>
+            <a href="{{ url_for('core.transporter_ledger_index') }}" class="inline-flex items-center rounded-lg bg-slate-200 px-4 py-2 font-semibold text-slate-800 hover:bg-slate-300">Back to ledger</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="mt-6 space-y-2">
+            {% for category, message in messages %}
+            <div class="rounded-lg border px-4 py-3 text-sm {{ 'border-emerald-300 bg-emerald-50 text-emerald-800' if category in ['success', 'info'] else 'border-red-300 bg-red-50 text-red-800' if category in ['danger', 'error'] else 'border-amber-300 bg-amber-50 text-amber-800' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <form method="post" class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+                <label class="block text-sm font-bold text-slate-800 mb-2">Transporter Name</label>
+                <input id="transporter-name-input" name="transporter_name" list="transporter-name-options" type="text" value="{{ transporter_name or '' }}" placeholder="Start typing transporter name" required autocomplete="off" class="w-full rounded-lg border-2 border-slate-300 bg-white px-4 py-3 text-base text-slate-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                <datalist id="transporter-name-options"></datalist>
+            </div>
+            <div>
+                <label class="block text-sm font-bold text-slate-800 mb-2">Amount</label>
+                <input name="amount_input" type="number" min="0" step="0.01" value="{{ '%.2f'|format(amount_input or 0) if amount_input else '' }}" placeholder="0.00" required class="w-full rounded-lg border-2 border-slate-300 bg-white px-4 py-3 text-base text-slate-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+            </div>
+            <div>
+                <label class="block text-sm font-bold text-slate-800 mb-2">Currency</label>
+                <select name="currency" class="w-full rounded-lg border-2 border-slate-300 bg-white px-4 py-3 text-base text-slate-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+                    <option value="RWF" {% if (currency or 'RWF') == 'RWF' %}selected{% endif %}>RWF (Rwandan Franc)</option>
+                    <option value="USD" {% if currency == 'USD' %}selected{% endif %}>USD (US Dollar)</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-bold text-slate-800 mb-2">Exchange Rate</label>
+                <input name="exchange_rate" type="number" min="1" step="0.01" value="{{ exchange_rate or 1 }}" placeholder="1.00" class="w-full rounded-lg border-2 border-slate-300 bg-white px-4 py-3 text-base text-slate-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-sm font-bold text-slate-800 mb-2">{{ 'Note' if mode == 'pay' else 'Reason' }}</label>
+                <textarea name="note" rows="4" placeholder="{{ 'Add notes about this transporter payment...' if mode == 'pay' else 'Explain why this transporter is being charged...' }}" class="w-full rounded-lg border-2 border-slate-300 bg-white px-4 py-3 text-base text-slate-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200">{{ note or '' }}</textarea>
+            </div>
+            <div class="md:col-span-2 flex justify-end gap-3 pt-2">
+                <a href="{{ url_for('core.transporter_ledger_index') }}" class="rounded-lg border-2 border-slate-300 bg-white px-6 py-3 font-semibold text-slate-800 hover:bg-slate-50">Cancel</a>
+                <button type="submit" class="rounded-lg px-8 py-3 font-bold text-white shadow-lg {{ 'bg-emerald-600 hover:bg-emerald-700' if mode == 'pay' else 'bg-rose-700 hover:bg-rose-800' }}">
+                    {{ 'Submit Pay Transporter Request' if mode == 'pay' else 'Submit Charge Transport Fee Review' }}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+    async function fetchSuggestions(url, q) {
+        if (!q) return [];
+        try {
+            const res = await fetch(url + '?q=' + encodeURIComponent(q));
+            const j = await res.json();
+            return j.results || [];
+        } catch (e) {
+            return [];
+        }
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+        const input = document.getElementById('transporter-name-input');
+        const list = document.getElementById('transporter-name-options');
+        let timer;
+        input.addEventListener('input', function () {
+            clearTimeout(timer);
+            timer = setTimeout(async () => {
+                const q = input.value.trim();
+                const results = await fetchSuggestions('/api/transporters/autocomplete', q);
+                list.innerHTML = results.map(r => `<option value="${r}"></option>`).join('');
+            }, 200);
+        });
+    });
+</script>
+</body>
+</html>

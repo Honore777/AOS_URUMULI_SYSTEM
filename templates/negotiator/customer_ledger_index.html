@@ -18,23 +18,60 @@
                 <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
                 <nav class="space-y-2">
                     <a href="{{ url_for('core.customer_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Receipts</a>
+                    <a href="{{ url_for('core.customer_unearned_receipts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Record Customer Unearned Revenue</a>
                     <a href="{{ url_for('core.update_debts') }}" class="block rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Update Debts</a>
                     <a href="{{ url_for('core.customer_ledger_index') }}" class="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Customer Ledgers</a>
                 </nav>
             </aside>
 
             <section class="lg:col-span-9 rounded-xl bg-white p-6 shadow-lg border border-slate-200">
-                {% if customers %}
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {% for c in customers %}
-                    <a href="{{ url_for('core.consolidated_customer_ledger', customer=c) if mineral_type == 'all' else (url_for('core.copper_customer_ledger', customer=c) if mineral_type == 'copper' else url_for('core.cassiterite_customer_ledger', customer=c)) }}" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100">
-                        <p class="font-semibold text-slate-900">{{ c }}</p>
-                        <p class="text-xs text-slate-500">Open {{ mineral_type|mineral_display if mineral_type != 'all' else 'All Minerals' }} ledger</p>
-                    </a>
-                    {% endfor %}
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-900">Customer Ledger List</h2>
+                        <p class="mt-1 text-sm text-slate-600">Paginated customer index for ledger lookup.</p>
+                    </div>
+                    {% if customers_pagination is defined and customers_pagination %}
+                    <p class="text-sm text-slate-500">Page {{ customers_pagination.page }} of {{ customers_pagination.pages }} ({{ customers_pagination.total }} customers)</p>
+                    {% endif %}
                 </div>
+
+                {% if customers %}
+                <div class="mt-5 overflow-x-auto rounded-xl border border-slate-200">
+                    <table class="min-w-full text-sm">
+                        <thead class="bg-slate-100 text-slate-700">
+                            <tr>
+                                <th class="px-4 py-3 text-left font-semibold">Customer</th>
+                                <th class="px-4 py-3 text-left font-semibold">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 bg-white">
+                            {% for c in customers %}
+                            <tr class="hover:bg-slate-50">
+                                <td class="px-4 py-3 font-semibold text-slate-900">{{ c }}</td>
+                                <td class="px-4 py-3">
+                                    <a href="{{ url_for('core.consolidated_customer_ledger', customer=c) }}" class="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">View customer ledger</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                {% if customers_pagination is defined and customers_pagination %}
+                <div class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p class="text-sm text-slate-500">Showing a server-side page of customers so the list stays fast.</p>
+                    <div class="flex flex-wrap gap-2">
+                        {% if customers_pagination.has_prev %}
+                        <a href="{{ url_for('core.consolidated_customer_ledger_index', page=customers_pagination.prev_num, per_page=page_size) }}" class="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">Previous</a>
+                        {% endif %}
+                        {% if customers_pagination.has_next %}
+                        <a href="{{ url_for('core.consolidated_customer_ledger_index', page=customers_pagination.next_num, per_page=page_size) }}" class="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">Next</a>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
                 {% else %}
-                <p class="text-sm text-slate-500">No customers found yet.</p>
+                <p class="mt-4 text-sm text-slate-500">No customers found yet.</p>
                 {% endif %}
             </section>
         </div>

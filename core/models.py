@@ -991,6 +991,55 @@ class BatchDeduction(db.Model):
         created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
 
 
+class SupplierDeduction(db.Model):
+        __tablename__ = 'supplier_deduction'
+
+        id = db.Column(db.Integer, primary_key=True)
+        supplier_name = db.Column(db.String(120), nullable=False, index=True)
+        deduction_type = db.Column(db.String(50), nullable=False)
+
+        amount_input = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+        currency = db.Column(db.String(10), nullable=False, default='RWF')
+        exchange_rate = db.Column(db.Float(), nullable=False, default=1.0)
+        amount_rwf = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        note = db.Column(db.Text, nullable=True)
+
+        created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
+
+
+class TransporterLedger(db.Model):
+        __tablename__ = 'transporter_ledger'
+
+        id = db.Column(db.Integer, primary_key=True)
+        transporter_name = db.Column(db.String(140), nullable=False, index=True)
+        supplier_name = db.Column(db.String(140), nullable=True, index=True)
+        entry_type = db.Column(db.String(40), nullable=False, default='TRANSPORT_FEE', index=True)
+
+        amount_input = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+        currency = db.Column(db.String(10), nullable=False, default='RWF')
+        exchange_rate = db.Column(db.Float(), nullable=False, default=1.0)
+        amount_rwf = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+
+        source_supplier_deduction_id = db.Column(db.Integer, db.ForeignKey('supplier_deduction.id'), nullable=True, index=True)
+        payment_review_id = db.Column(db.Integer, db.ForeignKey('payment_review.id'), nullable=True, index=True)
+        cash_transaction_id = db.Column(db.Integer, db.ForeignKey('cash_transaction.id'), nullable=True, index=True)
+
+        is_paid = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        paid_at = db.Column(db.DateTime, nullable=True)
+
+        created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+        created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+        note = db.Column(db.Text, nullable=True)
+
+        created_by = db.relationship('User', foreign_keys=[created_by_id], lazy=True)
+        source_supplier_deduction = db.relationship('SupplierDeduction', foreign_keys=[source_supplier_deduction_id], lazy=True)
+        payment_review = db.relationship('PaymentReview', foreign_keys=[payment_review_id], lazy=True)
+        cash_transaction = db.relationship('CashTransaction', foreign_keys=[cash_transaction_id], lazy=True)
+
+
 class WorkerPaymentReceiptSequence(db.Model):
         """Stores the next receipt number to assign for worker payments.
         

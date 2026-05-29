@@ -83,49 +83,49 @@
         <section class="mb-10">
             <h2 class="text-2xl font-bold text-gray-800 mb-4">Incamake y’Imari Rusange</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6">
-                <div class="bg-gradient-to-br from-emerald-600 to-emerald-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-emerald-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-emerald-600 to-emerald-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-emerald-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Inyungu Rusange</h3>
-                    <div id="kpi-total-gross-profit" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_gross_profit or 0) }}</div>
+                    <div id="kpi-total-gross-profit" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_gross_profit or 0) }}</div>
                     <div class="text-sm opacity-80">Coltan + Gasegereti</div>
                 </div>
-                <div class="bg-gradient-to-br from-violet-600 to-violet-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-violet-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-violet-600 to-violet-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-violet-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Inyungu Nyakuri</h3>
-                    <div id="kpi-total-net-profit" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_net_profit or 0) }}</div>
+                    <div id="kpi-total-net-profit" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_net_profit or 0) }}</div>
                     <div class="text-sm opacity-80">Inyungu rusange - amafaranga y’imbere</div>
                 </div>
-                <div class="bg-gradient-to-br from-slate-700 to-slate-900 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-slate-700 to-slate-900 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Agaciro ka stock isigaye (RWF)</h3>
-                        <div id="kpi-total-inventory-value" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_inventory_value or 0) }}</div>
+                        <div id="kpi-total-inventory-value" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_inventory_value or 0) }}</div>
                         <div class="text-sm opacity-80">Igiteranyo cy'agaciro ka stock isigaye (Coltan + Gasegereti) mu mafaranga</div>
                 </div>
-                <div class="bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-amber-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-amber-600 to-amber-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-amber-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Agaciro ka stock twagurishije</h3>
-                    <div id="kpi-total-cogs" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_cost_of_stock_sold or 0) }}</div>
+                    <div id="kpi-total-cogs" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_cost_of_stock_sold or 0) }}</div>
                     <div class="text-sm opacity-80">Cost of goods sold across minerals</div>
                 </div>
-                <div class="bg-gradient-to-br from-red-600 to-red-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-red-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-red-600 to-red-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-red-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Umwenda w’Abatanga Ibicuruzwa</h3>
-                    <div id="kpi-total-supplier-debt" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_supplier_debt or 0) }}</div>
+                    <div id="kpi-total-supplier-debt" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_supplier_debt or 0) }}</div>
                     <div class="text-sm opacity-80">Ibyo tubereyemo abaduha  ibicuruzwa</div>
                 </div>
-                <div class="bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-blue-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-blue-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Umwenda w’Abakiriya</h3>
-                    <div id="kpi-total-customer-debt" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_customer_debt or 0) }}</div>
+                    <div id="kpi-total-customer-debt" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_customer_debt or 0) }}</div>
                     <div class="text-sm opacity-80">Ibyo abakiriya batubereyemo</div>
                 </div>
-                <div class="bg-gradient-to-br from-yellow-600 to-yellow-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-yellow-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-yellow-600 to-yellow-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-yellow-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga y'imbere</h3>
-                    <div id="kpi-total-internal-worker-payments" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_internal_expenses or 0) }}</div>
+                    <div id="kpi-total-internal-worker-payments" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_internal_expenses or 0) }}</div>
                     <div class="text-sm opacity-80">Coltan + Gasegereti</div>
                 </div>
-                <div class="bg-gradient-to-br from-slate-600 to-slate-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-slate-600 to-slate-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-slate-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Amafaranga ahari muntoki</h3>
-                    <div id="kpi-total-cash-at-hand" class="text-3xl font-bold mb-1">{{ '{:,.2f}'.format(total_cash_at_hand or 0) }}</div>
+                    <div id="kpi-total-cash-at-hand" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">{{ '{:,.2f}'.format(total_cash_at_hand or 0) }}</div>
                     <div class="text-sm opacity-80">Igiteranyo cy’ibyagurishijwe byose(sales) - imyenda y’abakiriya - amafaranga yishyuwe abakozi (imbere)</div>
                 </div>
-                <div class="bg-gradient-to-br from-indigo-600 to-indigo-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-indigo-400/60">
+                <div class="min-w-0 bg-gradient-to-br from-indigo-600 to-indigo-800 text-white p-6 rounded-xl shadow-lg ring-1 ring-indigo-400/60">
                     <h3 class="text-sm font-semibold uppercase tracking-wide opacity-90 mb-2">Igiciro Gisigaye Gikabiri</h3>
-                    <div id="kpi-total-remaining-kg" class="text-3xl font-bold mb-1">0.00</div>
+                    <div id="kpi-total-remaining-kg" class="text-2xl sm:text-3xl font-bold leading-none tabular-nums break-words mb-1">0.00</div>
                     <div class="text-sm opacity-80">Stock isigaye (Coltan + Gasegereti)</div>
                 </div>
             </div>

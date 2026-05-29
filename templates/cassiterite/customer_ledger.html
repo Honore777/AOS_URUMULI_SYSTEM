@@ -4,127 +4,132 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Customer Ledger</title>
-
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
 </head>
-<body class="bg-gray-50">
-<div class="min-h-screen bg-gray-50 py-12 px-4">
-    <div class="max-w-5xl mx-auto">
-        <!-- Header -->
-        <div class="mb-8">
-            <div class="flex items-center justify-between mb-6">
-                <h1 class="text-3xl font-bold text-gray-900">{% if user_role == 'boss' %}Inyandiko y'imari y'Umukiriya (Cassiterite){% else %}Cassiterite Customer Ledger{% endif %}</h1>
-                {% if user_role in ['accountant','admin'] %}
-                    <a href="{{ url_for('cassiterite.track_debts') }}" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
-                        ← Back to Tracking
-                    </a>
-                {% else %}
-                    <a href="{{ url_for('core.boss_dashboard') }}" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"> ⬅ Back to Boss Dashboard</a>
-                {% endif %}
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex items-center justify-between gap-4">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-800">{% if user_role == 'boss' %}Igitabo mbaruramari cy'Umukiriya{% else %}Cassiterite Customer Ledger{% endif %}</h1>
+                <p class="text-sm text-slate-600 mt-1"><span class="font-semibold">{% if user_role == 'boss' %}Umukiriya{% else %}Customer{% endif %}:</span> {{ customer }}</p>
             </div>
-            <p class="text-lg text-gray-700"><strong>{% if user_role == 'boss' %}Umukiriya:{% else %}Customer:{% endif %}</strong> {{ customer }}</p>
+            {% if user_role in ['accountant', 'admin'] %}
+            <a href="{{ url_for('cassiterite.track_debts') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back to Tracking</a>
+            {% else %}
+            <a href="{{ url_for('core.boss_dashboard') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Back to Boss Dashboard</a>
+            {% endif %}
         </div>
 
-        <!-- Summary Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div class="bg-white shadow rounded-lg p-4">
-                <p class="text-md text-gray-900">{% if user_role == 'boss' %}Igiteranyo Cyose (Ayo Agomba kwishyura){% else %}Total Owed{% endif %}</p>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div class="rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                <p class="text-xs text-slate-500">{% if user_role == 'boss' %}Igiteranyo Cyose (Ayo Agomba kwishyura){% else %}Total Owed{% endif %}</p>
                 <p class="text-2xl font-bold text-red-600">{{ '{:,.2f}'.format(total_owed or 0) }}</p>
             </div>
-            <div class="bg-white shadow rounded-lg p-4">
-                <p class="text-md text-gray-900">{% if user_role == 'boss' %}Igiteranyo Cyose Yishyuye{% else %}Total Paid{% endif %}</p>
-                <p class="text-2xl font-bold text-green-600">{{ '{:,.2f}'.format(total_paid or 0) }}</p>
+            <div class="rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                <p class="text-xs text-slate-500">{% if user_role == 'boss' %}Igiteranyo Cyose Yishyuye{% else %}Total Paid{% endif %}</p>
+                <p class="text-2xl font-bold text-emerald-600">{{ '{:,.2f}'.format(total_paid or 0) }}</p>
             </div>
-            <div class="bg-white shadow rounded-lg p-4">
-                <p class="text-md text-gray-900">{% if user_role == 'boss' %}Umubare Usigaye(Ayo Adusigayemo){% else %}Remaining Balance{% endif %}</p>
-                <p class="text-2xl font-bold text-gray-900">{{ '{:,.2f}'.format(remaining or 0) }}</p>
+            <div class="rounded-xl bg-white p-5 shadow-lg border border-slate-200">
+                <p class="text-xs text-slate-500">{% if user_role == 'boss' %}Umubare Usigaye (Ayo Adusigayemo){% else %}Remaining Balance{% endif %}</p>
+                <p class="text-2xl font-bold text-slate-900">{{ '{:,.2f}'.format(remaining or 0) }}</p>
             </div>
         </div>
 
-        <!-- Ledger Table -->
         {% if ledger %}
-        <div class="bg-white shadow-md rounded-lg overflow-hidden">
-            <table class="w-full">
-                <thead class="bg-blue-600 text-white">
-                    <tr>
-                        <th class="px-4 py-3 text-left">Date</th>
-                        <th class="px-4 py-3 text-left">Description</th>
-                        <th class="px-4 py-3 text-right">Debit (Owed)</th>
-                        <th class="px-4 py-3 text-right">Credit (Paid)</th>
-                        <th class="px-4 py-3 text-right">Running Balance</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-200">
-                    {% for entry in ledger %}
-                    {% set debit_amount = entry.get('debit', 0) %}
-                    {% set credit_amount = entry.get('credit', 0) %}
-                    {% set balance_amount = entry.get('balance', 0) %}
-                    <tr class="{% if debit_amount > 0 %}bg-red-50{% elif credit_amount > 0 %}bg-green-50{% else %}bg-gray-50{% endif %} hover:bg-opacity-75">
-                        <td class="px-4 py-3 font-semibold text-gray-900">
-                            {{ entry.get('date').strftime('%Y-%m-%d') if entry.get('date') else '-' }}
-                        </td>
-                        <td class="px-4 py-3 text-gray-700">
-                            {{ entry.get('description') }}
-                            {% if entry.get('output_kg') %}
-                            <span class="text-sm text-gray-500">({{ entry.get('output_kg') }} kg)</span>
-                            {% endif %}
-                            {% if entry.get('batch_id') %}
-                            <div class="text-xs text-gray-500">Batch: {{ entry.get('batch_id') }}</div>
-                            {% endif %}
-                            {% if entry.get('voucher_no') %}
-                            <div class="text-xs text-gray-500">Voucher: {{ entry.get('voucher_no') }}</div>
-                            {% endif %}
-                        </td>
-                        <td class="px-4 py-3 text-right font-semibold">
-                            {% if debit_amount > 0 %}
-                            <span class="text-red-600">${{ '{:,.2f}'.format(debit_amount or 0) }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                        <td class="px-4 py-3 text-right font-semibold">
-                            {% if credit_amount > 0 %}
-                            <span class="text-green-600">{{ '{:,.2f}'.format(credit_amount or 0) }}</span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                        <td class="px-4 py-3 text-right font-bold text-lg">
-                            {% if balance_amount > 0 %}
-                            <span class="text-red-600">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
-                            {% elif balance_amount < 0 %}
-                            <span class="text-green-600">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
-                            {% else %}
-                            <span class="text-gray-900">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-                <tfoot class="bg-gray-100 border-t-2 border-gray-300">
-                    {% set final_balance = ledger[-1].get('balance', 0) if ledger else 0 %}
-                    <tr>
-                        <td colspan="4" class="px-4 py-3 text-right font-bold text-lg">Total Balance:</td>
-                        <td class="px-4 py-3 text-right font-bold text-lg">
-                            {% if final_balance > 0 %}
-                            <span class="text-red-600">{{ '{:,.2f}'.format(final_balance or 0) }}</span>
-                            {% elif final_balance < 0 %}
-                            <span class="text-green-600">{{ '{:,.2f}'.format(final_balance or 0) }}</span>
-                            {% else %}
-                            <span class="text-gray-900">0.00</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                </tfoot>
-            </table>
+        <div class="rounded-xl bg-white p-6 shadow-lg border border-slate-200 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-800 text-white">
+                        <tr>
+                            <th class="px-4 py-3 text-left">Date</th>
+                            <th class="px-4 py-3 text-left">Description</th>
+                            <th class="px-4 py-3 text-right">Debit (Owed)</th>
+                            <th class="px-4 py-3 text-right">Credit (Paid)</th>
+                            <th class="px-4 py-3 text-right">Running Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200">
+                        {% for entry in ledger %}
+                        {% set debit_amount = entry.get('debit', 0) %}
+                        {% set credit_amount = entry.get('credit', 0) %}
+                        {% set balance_amount = entry.get('balance', 0) %}
+                        <tr class="{% if debit_amount > 0 %}bg-red-50{% elif credit_amount > 0 %}bg-emerald-50{% else %}bg-slate-50{% endif %} hover:bg-slate-100/60">
+                            <td class="px-4 py-3 font-semibold text-slate-900">{{ entry.get('date').strftime('%Y-%m-%d') if entry.get('date') else '-' }}</td>
+                            <td class="px-4 py-3 text-slate-700">
+                                {{ entry.get('description') }}
+                                {% if entry.get('batch_id') %}
+                                <div class="text-xs text-slate-500">Batch: {{ entry.get('batch_id') }}</div>
+                                {% endif %}
+                                {% if entry.get('voucher_no') %}
+                                <div class="text-xs text-slate-500">Voucher: {{ entry.get('voucher_no') }}</div>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right font-semibold">
+                                {% if debit_amount > 0 %}
+                                <span class="text-red-600">{{ '{:,.2f}'.format(debit_amount or 0) }}</span>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right font-semibold">
+                                {% if credit_amount > 0 %}
+                                <span class="text-emerald-600">{{ '{:,.2f}'.format(credit_amount or 0) }}</span>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right font-bold text-lg">
+                                {% if balance_amount > 0 %}
+                                <span class="text-red-600">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
+                                {% elif balance_amount < 0 %}
+                                <span class="text-emerald-600">{{ '{:,.2f}'.format(balance_amount or 0) }}</span>
+                                {% else %}
+                                <span class="text-slate-900">0.00</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot class="bg-slate-100 border-t border-slate-200">
+                        {% set final_balance = ledger[-1].get('balance', 0) if ledger else 0 %}
+                        <tr>
+                            <td colspan="4" class="px-4 py-3 text-right font-bold text-lg">Total Balance:</td>
+                            <td class="px-4 py-3 text-right font-bold text-lg">
+                                {% if final_balance > 0 %}
+                                <span class="text-red-600">{{ '{:,.2f}'.format(final_balance or 0) }}</span>
+                                {% elif final_balance < 0 %}
+                                <span class="text-emerald-600">{{ '{:,.2f}'.format(final_balance or 0) }}</span>
+                                {% else %}
+                                <span class="text-slate-900">0.00</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
         </div>
 
+        <div class="rounded-xl bg-white p-6 shadow-lg border border-slate-200">
+            <h3 class="text-lg font-semibold text-slate-900 mb-4">Ibisobanuro</h3>
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div class="flex items-start">
+                    <div class="mr-3 mt-1 h-4 w-4 rounded bg-red-600"></div>
+                    <p class="text-slate-700"><strong>Debit (Agomba Kwishyurwa):</strong> Amafaranga umukiriya agomba kwishyura</p>
+                </div>
+                <div class="flex items-start">
+                    <div class="mr-3 mt-1 h-4 w-4 rounded bg-emerald-600"></div>
+                    <p class="text-slate-700"><strong>Credit (Yishyuye):</strong> Amafaranga yakiriwe avuye ku mukiriya</p>
+                </div>
+            </div>
+            <p class="mt-4 text-sm text-slate-600">
+                <strong>Umubare usigaye:</strong> Ugaragaza amafaranga umukiriya akibereyemo.
+            </p>
+        </div>
         {% else %}
-        <div class="bg-white shadow-md rounded-lg p-8 text-center">
-            <p class="text-gray-600">No transaction history for {{ customer }}.</p>
+        <div class="rounded-xl bg-white p-8 text-center shadow-lg border border-slate-200">
+            <p class="text-slate-600">Nta mateka y'ibikorwa kuri {{ customer }}.</p>
         </div>
         {% endif %}
     </div>
-</div>
 </body>
 </html>

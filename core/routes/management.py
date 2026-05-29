@@ -37,10 +37,43 @@ from core.models import (
 from . import core_bp
 from sqlalchemy import func, or_, and_, case, cast, Integer, String, Float, select, union_all, literal
 from sqlalchemy.orm import joinedload
-from utils import safe_jsonify
+from utils import safe_jsonify, close_name_matches, normalize_counterparty_name
 
 
 logger = logging.getLogger(__name__)
+
+
+def _build_transporter_ledger_rows(transporter_rows):
+    display_rows = []
+    running_balances = {}
+    for row in sorted(transporter_rows or [], key=lambda r: ((r.created_at or datetime.min), int(getattr(r, 'id', 0) or 0))):
+        transporter_name = row.transporter_name or 'Unknown'
+        transporter_key = ' '.join(transporter_name.strip().lower().split())
+        current_balance = float(running_balances.get(transporter_key, 0.0)) + float(row.amount_rwf or 0.0)
+        running_balances[transporter_key] = current_balance
+        display_rows.append({
+            'id': row.id,
+            'created_at': row.created_at,
+            'transporter_name': row.transporter_name,
+            'supplier_name': row.supplier_name,
+            'entry_type': row.entry_type,
+            'amount_input': float(row.amount_input or 0.0),
+            'currency': (row.currency or 'RWF').upper(),
+            'exchange_rate': float(row.exchange_rate or 1.0),
+            'amount_rwf': float(row.amount_rwf or 0.0),
+            'running_balance_rwf': float(current_balance),
+            'note': row.note,
+            'receipt_url': url_for('core.transporter_payment_receipt_detail', ledger_id=int(row.id)) if (row.entry_type or '').upper() in {'ADVANCE', 'CASH_PAYMENT', 'TRANSPORTER_FEE_CHARGE'} else None,
+        })
+    return display_rows
+
+
+def _transporter_ledger_date_window(preset: str):
+    preset = (preset or '30d').strip().lower()
+    today = datetime.utcnow().date()
+    if preset == 'all':
+        return preset, None, None
+    return '30d', today - timedelta(days=30), today
 
 
 def _safe_payload(raw: str | None) -> dict:
@@ -819,6 +852,31 @@ def consolidated_supplier_ledger(supplier_norm: str):
             "credit": 0.0,
         })
 
+    # Supplier-level deductions (retention / business fees) not tied to a batch
+    try:
+        from core.models import SupplierDeduction
+        supplier_deds = (
+            db.session.query(SupplierDeduction)
+            .filter(SupplierDeduction.supplier_name.ilike(supplier_like))
+            .order_by(SupplierDeduction.created_at.desc())
+            .limit(row_limit)
+            .all()
+        )
+        for d in (supplier_deds or []):
+            amt = float(getattr(d, 'amount_rwf', 0.0) or 0.0)
+            ledger_events.append({
+                'date': getattr(d, 'created_at', None),
+                'sort_key': 2,
+                'mineral': '-',
+                'description': f"{(getattr(d, 'deduction_type') or 'DEDUCTION')} (Supplier-level)",
+                'debit': 0.0,
+                'credit': amt,
+                'original_currency': getattr(d, 'currency', 'RWF'),
+                'original_amount': float(getattr(d, 'amount_input', 0.0) or 0.0),
+            })
+    except Exception:
+        pass
+
     # Settlement payments (credits) - include both linked and unlinked settlements
     try:
         from copper.models import SupplierPayment as CopperSupplierPayment, CopperStock
@@ -1245,6 +1303,555 @@ def consolidated_supplier_ledger(supplier_norm: str):
         period_credit=period_credit,
         period_net=period_net,
     )
+
+
+
+@core_bp.route('/accountant/suppliers/charge_fee', methods=['GET', 'POST'])
+@role_required('accountant', 'boss', 'admin')
+def supplier_charge_fee():
+    if request.method == 'GET':
+        from core.models import TransporterLedger
+        transporters = [
+            name for (name,) in (
+                db.session.query(TransporterLedger.transporter_name)
+                .distinct()
+                .order_by(TransporterLedger.transporter_name.asc())
+                .all()
+            ) if name
+        ]
+        return render_template('suppliers/charge_fee.html', transporters=transporters)
+
+    # POST: create SupplierDeduction and a linked transporter ledger recovery row.
+    supplier_name = (request.form.get('supplier_name') or '').strip()
+    transporter_name = (request.form.get('transporter_name') or '').strip()
+    total_weight = float(request.form.get('total_weight') or 0.0)
+    rate = float(request.form.get('rate') or 0.0)
+    currency = (request.form.get('currency') or 'RWF').strip().upper()
+    exchange_rate = float(request.form.get('exchange_rate') or 1.0)
+    note = (request.form.get('note') or '').strip() or None
+
+    if not supplier_name:
+        flash('Supplier name is required.', 'danger')
+        return redirect(url_for('core.supplier_charge_fee'))
+    if not transporter_name:
+        flash('Transporter is required.', 'danger')
+        return redirect(url_for('core.supplier_charge_fee'))
+    if total_weight <= 0 or rate <= 0:
+        flash('Total weight and rate must be greater than zero.', 'danger')
+        return redirect(url_for('core.supplier_charge_fee'))
+
+    try:
+        amount_input = float(total_weight) * float(rate)
+        amount_rwf = float(amount_input) * (float(exchange_rate) if currency == 'USD' else 1.0)
+
+        from core.models import SupplierDeduction, TransporterLedger
+
+        sd = SupplierDeduction(
+            supplier_name=supplier_name,
+            deduction_type='BUSINESS_RETENTION',
+            amount_input=amount_input,
+            currency=currency,
+            exchange_rate=exchange_rate if currency == 'USD' else 1.0,
+            amount_rwf=amount_rwf,
+            created_by_id=getattr(current_user, 'id', None),
+            note=note or f"Business retention fee for transporter {transporter_name}",
+        )
+        db.session.add(sd)
+        db.session.flush()
+
+        # This is a recovery from the transporter balance, so it reduces what we owe him.
+        t = TransporterLedger(
+            transporter_name=transporter_name,
+            supplier_name=supplier_name,
+            entry_type='BUSINESS_RETENTION_RECOVERY',
+            amount_input=amount_input,
+            currency=currency,
+            exchange_rate=exchange_rate if currency == 'USD' else 1.0,
+            amount_rwf=float(-abs(amount_rwf)),
+            created_by_id=getattr(current_user, 'id', None),
+            note=f"Business retention consumed from supplier {supplier_name}: " + (note or ''),
+            source_supplier_deduction_id=int(sd.id),
+        )
+        db.session.add(t)
+
+        db.session.commit()
+        flash(f'Fee recorded: {amount_input:,.2f} {currency} ({amount_rwf:,.2f} RWF) for {supplier_name}.', 'success')
+        return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier_name))
+    except Exception:
+        db.session.rollback()
+        logger.exception('supplier_charge_fee: failed to record fee')
+        flash('Failed to record fee, see logs.', 'danger')
+        return redirect(url_for('core.supplier_charge_fee'))
+
+
+@core_bp.route('/accountant/transporter-ledger', methods=['GET'])
+@role_required('accountant', 'boss', 'admin')
+def transporter_ledger_index():
+    from sqlalchemy import func
+    from core.models import TransporterLedger
+
+    preset = (request.args.get('preset') or '30d').strip().lower()
+    filter_preset, filter_from, filter_to = _transporter_ledger_date_window(preset)
+    try:
+        page = int(request.args.get('page') or 1)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(page, 1)
+    try:
+        per_page = int(request.args.get('per_page') or 12)
+    except (TypeError, ValueError):
+        per_page = 12
+    per_page = min(max(per_page, 1), 50)
+
+    rows_query = (
+        db.session.query(
+            TransporterLedger.transporter_name,
+            func.coalesce(func.sum(TransporterLedger.amount_rwf), 0).label('balance_rwf'),
+            func.count(TransporterLedger.id).label('row_count'),
+        )
+        .group_by(TransporterLedger.transporter_name)
+        .order_by(TransporterLedger.transporter_name.asc())
+    )
+    rows_pagination = rows_query.paginate(page=page, per_page=per_page, error_out=False)
+    rows = rows_pagination.items
+
+    recent = (
+        TransporterLedger.query
+        .filter(
+            *(
+                [TransporterLedger.created_at >= datetime.combine(filter_from, datetime.min.time())] if filter_from else []
+            ),
+            *(
+                [TransporterLedger.created_at <= datetime.combine(filter_to, datetime.max.time())] if filter_to else []
+            ),
+        )
+        .order_by(TransporterLedger.created_at.desc(), TransporterLedger.id.desc())
+        .limit(100)
+        .all()
+    )
+    recent_rows = _build_transporter_ledger_rows(recent)
+    payment_history_source = (
+        TransporterLedger.query
+        .filter(TransporterLedger.is_paid.is_(True))
+        .filter(TransporterLedger.entry_type.in_(['ADVANCE', 'CASH_PAYMENT', 'TRANSPORTER_FEE_CHARGE']))
+        .order_by(TransporterLedger.created_at.desc(), TransporterLedger.id.desc())
+        .limit(12)
+        .all()
+    )
+    payment_history_rows = _build_transporter_ledger_rows(payment_history_source)
+    transporter_names = [
+        name for (name,) in (
+            db.session.query(TransporterLedger.transporter_name)
+            .distinct()
+            .order_by(TransporterLedger.transporter_name.asc())
+            .all()
+        ) if name
+    ]
+    return render_template(
+        'suppliers/transporter_ledger.html',
+        rows=rows,
+        rows_pagination=rows_pagination,
+        recent_rows=recent_rows,
+        payment_history_rows=payment_history_rows,
+        transporter_names=transporter_names,
+        filter_preset=filter_preset,
+        ledger_url_base=url_for('core.transporter_ledger_index'),
+        page_size=per_page,
+    )
+
+
+def _get_transporter_names():
+    from core.models import TransporterLedger
+
+    return [
+        name for (name,) in (
+            db.session.query(TransporterLedger.transporter_name)
+            .distinct()
+            .order_by(TransporterLedger.transporter_name.asc())
+            .all()
+        ) if name
+    ]
+
+
+def _render_transporter_fee_form(mode: str, transporter_name: str = '', amount_input: float = 0.0, currency: str = 'RWF', exchange_rate: float = 1.0, note: str = ''):
+    return render_template(
+        'suppliers/transporter_fee_form.html',
+        mode=mode,
+        transporter_names=_get_transporter_names(),
+        transporter_name=transporter_name,
+        amount_input=amount_input,
+        currency=currency,
+        exchange_rate=exchange_rate,
+        note=note,
+    )
+
+
+@core_bp.route('/accountant/transporter-ledger/pay-fee', methods=['GET', 'POST'])
+@role_required('accountant', 'boss', 'admin')
+def transporter_pay_fee():
+    from core.models import PaymentReview, PaymentReviewStatus, TransporterLedger
+
+    if request.method == 'GET':
+        return _render_transporter_fee_form('pay')
+
+    transporter_name = (request.form.get('transporter_name') or '').strip()
+    currency = (request.form.get('currency') or 'RWF').strip().upper()
+    note = (request.form.get('note') or '').strip() or None
+    try:
+        amount_input = float(request.form.get('amount_input') or 0.0)
+    except Exception:
+        amount_input = 0.0
+    try:
+        exchange_rate = float(request.form.get('exchange_rate') or 1.0)
+    except Exception:
+        exchange_rate = 1.0
+
+    if not transporter_name:
+        flash('Transporter name is required.', 'danger')
+        return _render_transporter_fee_form('pay', amount_input=amount_input, currency=currency, exchange_rate=exchange_rate, note=note or '')
+    if amount_input <= 0:
+        flash('Amount must be greater than zero.', 'danger')
+        return _render_transporter_fee_form('pay', transporter_name=transporter_name, currency=currency, exchange_rate=exchange_rate, note=note or '')
+
+    existing_names = _get_transporter_names()
+    close_matches = close_name_matches(transporter_name, existing_names, limit=5, cutoff=0.86)
+    if close_matches and transporter_name not in existing_names:
+        flash(f"Did you mean: {', '.join(close_matches)}? Use the exact transporter name to avoid duplicate ledgers.", 'info')
+
+    amount_rwf = float(amount_input) * (exchange_rate if currency == 'USD' else 1.0)
+    payload = {
+        'action': 'pay_transporter',
+        'entry_kind': 'ADVANCE',
+        'transporter_name': transporter_name,
+        'amount_input': amount_input,
+        'currency': currency,
+        'exchange_rate': exchange_rate if currency == 'USD' else 1.0,
+        'amount_rwf': amount_rwf,
+        'note': note or f'Transporter advance for {transporter_name}',
+    }
+
+    review = PaymentReview(
+        mineral_type=None,
+        type='transporter_advance',
+        customer=transporter_name,
+        amount=amount_input,
+        currency=currency,
+        created_by_id=getattr(current_user, 'id', None),
+        status=PaymentReviewStatus.PENDING_REVIEW.value,
+        request_payload=json.dumps(payload),
+    )
+    db.session.add(review)
+    db.session.commit()
+
+    boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+    for (boss_id,) in boss_rows:
+        create_notification(
+            user_id=int(boss_id),
+            type_='TRANSPORTER_ADVANCE_REQUEST',
+            message=f'Advance request created for transporter {transporter_name}: {amount_input:,.2f} {currency}.',
+            related_type='payment_review',
+            related_id=int(review.id),
+        )
+
+    flash(f'Transporter pay-fee request submitted for boss approval: {amount_input:,.2f} {currency} (~{amount_rwf:,.0f} RWF).', 'success')
+    return redirect(url_for('core.transporter_ledger_detail', transporter_name=transporter_name))
+
+
+@core_bp.route('/accountant/transporter-ledger/request-advance', methods=['GET', 'POST'])
+@role_required('accountant', 'boss', 'admin')
+def transporter_request_advance():
+    return transporter_pay_fee()
+
+
+@core_bp.route('/accountant/transporter-ledger/<path:transporter_name>', methods=['GET'])
+@role_required('accountant', 'boss', 'admin')
+def transporter_ledger_detail(transporter_name: str):
+    from sqlalchemy import func
+    from core.models import TransporterLedger
+
+    normalized = ' '.join((transporter_name or '').strip().lower().split())
+    if not normalized:
+        flash('Transporter name is required.', 'danger')
+        return redirect(url_for('core.transporter_ledger_index'))
+
+    preset = (request.args.get('preset') or '30d').strip().lower()
+    filter_preset, filter_from, filter_to = _transporter_ledger_date_window(preset)
+
+    rows = (
+        db.session.query(
+            TransporterLedger.transporter_name,
+            func.coalesce(func.sum(TransporterLedger.amount_rwf), 0).label('balance_rwf'),
+            func.count(TransporterLedger.id).label('row_count'),
+        )
+        .filter(func.lower(func.trim(TransporterLedger.transporter_name)) == normalized)
+        .group_by(TransporterLedger.transporter_name)
+        .order_by(TransporterLedger.transporter_name.asc())
+        .all()
+    )
+
+    recent = (
+        TransporterLedger.query
+        .filter(func.lower(func.trim(TransporterLedger.transporter_name)) == normalized)
+        .filter(
+            *(
+                [TransporterLedger.created_at >= datetime.combine(filter_from, datetime.min.time())] if filter_from else []
+            ),
+            *(
+                [TransporterLedger.created_at <= datetime.combine(filter_to, datetime.max.time())] if filter_to else []
+            ),
+        )
+        .order_by(TransporterLedger.created_at.desc(), TransporterLedger.id.desc())
+        .all()
+    )
+    recent_rows = _build_transporter_ledger_rows(recent)
+    transporter_names = [
+        name for (name,) in (
+            db.session.query(TransporterLedger.transporter_name)
+            .distinct()
+            .order_by(TransporterLedger.transporter_name.asc())
+            .all()
+        ) if name
+    ]
+    display_name = rows[0].transporter_name if rows else transporter_name
+    return render_template(
+        'suppliers/transporter_ledger.html',
+        rows=rows,
+        recent_rows=recent_rows,
+        transporter_names=transporter_names,
+        selected_transporter=display_name,
+        filter_preset=filter_preset,
+        ledger_url_base=url_for('core.transporter_ledger_detail', transporter_name=display_name),
+    )
+
+
+@core_bp.route('/accountant/transporter-ledger/charge-fee', methods=['GET', 'POST'])
+@role_required('accountant', 'boss', 'admin')
+def transporter_charge_fee():
+    from core.models import PaymentReview, PaymentReviewStatus
+
+    if request.method == 'GET':
+        return _render_transporter_fee_form('charge')
+
+    transporter_name = (request.form.get('transporter_name') or '').strip()
+    currency = (request.form.get('currency') or 'RWF').strip().upper()
+    note = (request.form.get('note') or '').strip() or None
+    try:
+        amount_input = float(request.form.get('amount_input') or 0.0)
+    except Exception:
+        amount_input = 0.0
+    try:
+        exchange_rate = float(request.form.get('exchange_rate') or 1.0)
+    except Exception:
+        exchange_rate = 1.0
+
+    if not transporter_name:
+        flash('Transporter name is required.', 'danger')
+        return _render_transporter_fee_form('charge', amount_input=amount_input, currency=currency, exchange_rate=exchange_rate, note=note or '')
+    if amount_input <= 0:
+        flash('Charge amount must be greater than zero.', 'danger')
+        return _render_transporter_fee_form('charge', transporter_name=transporter_name, currency=currency, exchange_rate=exchange_rate, note=note or '')
+    if not note:
+        flash('Please explain why this transporter is being charged.', 'danger')
+        return _render_transporter_fee_form('charge', transporter_name=transporter_name, amount_input=amount_input, currency=currency, exchange_rate=exchange_rate, note='')
+
+    amount_rwf = float(amount_input) * (exchange_rate if currency == 'USD' else 1.0)
+    payload = {
+        'action': 'charge_transporter_fee',
+        'entry_kind': 'TRANSPORTER_FEE_CHARGE',
+        'transporter_name': transporter_name,
+        'amount_input': amount_input,
+        'currency': currency,
+        'exchange_rate': exchange_rate if currency == 'USD' else 1.0,
+        'amount_rwf': amount_rwf,
+        'note': note,
+    }
+
+    review = PaymentReview(
+        mineral_type=None,
+        type='transporter_fee_charge',
+        customer=transporter_name,
+        amount=amount_input,
+        currency=currency,
+        created_by_id=getattr(current_user, 'id', None),
+        status=PaymentReviewStatus.PENDING_REVIEW.value,
+        request_payload=json.dumps(payload),
+    )
+    db.session.add(review)
+    db.session.commit()
+
+    boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+    for (boss_id,) in boss_rows:
+        create_notification(
+            user_id=int(boss_id),
+            type_='TRANSPORTER_FEE_CHARGE_REQUEST',
+            message=f'Transporter fee charge review created for {transporter_name}: {amount_input:,.2f} {currency}.',
+            related_type='payment_review',
+            related_id=int(review.id),
+        )
+
+    flash(f'Transporter fee charge review submitted for boss approval: {amount_input:,.2f} {currency} (~{amount_rwf:,.0f} RWF). This will update the transporter ledger only after approval.', 'success')
+    return redirect(url_for('core.transporter_ledger_detail', transporter_name=transporter_name))
+
+
+@core_bp.route('/api/transporters/autocomplete')
+@role_required('accountant', 'boss', 'admin', 'cashier', 'negotiator')
+def transporters_autocomplete():
+    from core.models import TransporterLedger
+
+    q = (request.args.get('q') or '').strip()
+    if not q:
+        return {'results': []}
+    q_norm = normalize_counterparty_name(q)
+    rows = (
+        db.session.query(TransporterLedger.transporter_name)
+        .filter(func.lower(func.trim(TransporterLedger.transporter_name)).contains(q_norm))
+        .distinct()
+        .order_by(TransporterLedger.transporter_name.asc())
+        .limit(15)
+        .all()
+    )
+    return {'results': [nm for (nm,) in rows if nm]}
+
+
+@core_bp.route('/accountant/transporter-ledger/<path:transporter_name>/request-payment', methods=['POST'])
+@role_required('accountant', 'boss', 'admin')
+def transporter_request_payment(transporter_name: str):
+    from sqlalchemy import func
+    from core.models import TransporterLedger, PaymentReview, PaymentReviewStatus
+
+    normalized = ' '.join((transporter_name or '').strip().lower().split())
+    if not normalized:
+        flash('Transporter name is required.', 'danger')
+        return redirect(url_for('core.transporter_ledger_index'))
+
+    balance_rwf = float(
+        db.session.query(func.coalesce(func.sum(TransporterLedger.amount_rwf), 0))
+        .filter(func.lower(func.trim(TransporterLedger.transporter_name)) == normalized)
+        .scalar()
+        or 0.0
+    )
+    if balance_rwf <= 0:
+        flash('This transporter has no positive balance to pay.', 'info')
+        return redirect(url_for('core.transporter_ledger_index'))
+
+    existing = (
+        PaymentReview.query
+        .filter(
+            PaymentReview.type == 'transporter_payment',
+            PaymentReview.status.in_([PaymentReviewStatus.PENDING_REVIEW.value, PaymentReviewStatus.APPROVED.value]),
+            PaymentReview.request_payload.ilike(f'%"transporter_name": "{normalized}"%'),
+        )
+        .order_by(PaymentReview.id.desc())
+        .first()
+    )
+    if existing:
+        flash('A transporter payment review already exists for this transporter.', 'info')
+        return redirect(url_for('core.transporter_ledger_index'))
+
+    payload = {
+        'action': 'pay_transporter',
+        'transporter_name': normalized,
+        'amount_rwf': balance_rwf,
+        'amount_input': balance_rwf,
+        'currency': 'RWF',
+        'exchange_rate': 1.0,
+        'note': f'Transporter settlement for {transporter_name}',
+    }
+    review = PaymentReview(
+        mineral_type=None,
+        type='transporter_payment',
+        customer=transporter_name,
+        amount=balance_rwf,
+        currency='RWF',
+        created_by_id=getattr(current_user, 'id', None),
+        status=PaymentReviewStatus.PENDING_REVIEW.value,
+        request_payload=json.dumps(payload),
+    )
+    db.session.add(review)
+    db.session.commit()
+
+    boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+    for (boss_id,) in boss_rows:
+        create_notification(
+            user_id=int(boss_id),
+            type_='TRANSPORTER_PAYMENT_REQUEST',
+            message=f'Payment request created for transporter {transporter_name}: {balance_rwf:,.2f} RWF.',
+            related_type='payment_review',
+            related_id=int(review.id),
+        )
+
+    flash('Transporter payment review submitted for boss approval.', 'success')
+    return redirect(url_for('core.transporter_ledger_detail', transporter_name=transporter_name))
+
+
+def _render_transporter_receipt_detail(ledger_id: int):
+    from core.models import TransporterLedger
+
+    row = TransporterLedger.query.get_or_404(ledger_id)
+    transporter_name = row.transporter_name or 'Unknown'
+    entry_type = (row.entry_type or '').strip().upper()
+    current_balance = (
+        db.session.query(func.coalesce(func.sum(TransporterLedger.amount_rwf), 0.0))
+        .filter(func.lower(func.trim(TransporterLedger.transporter_name)) == func.lower(func.trim(transporter_name)))
+        .filter(TransporterLedger.id <= int(row.id))
+        .scalar()
+        or 0.0
+    )
+
+    is_advance = entry_type == 'ADVANCE'
+    is_fee_charge = entry_type == 'TRANSPORTER_FEE_CHARGE'
+    if is_advance:
+        receipt_reference = f'TRP-ADV-{row.id:04d}'
+        document_title = 'TRANSPORTER ADVANCE RECEIPT'
+        document_subtitle = 'Transporter advance receipt with approval signatures'
+        status_label = 'ADVANCE PAID'
+    elif is_fee_charge:
+        receipt_reference = f'TRP-FEE-{row.id:04d}'
+        document_title = 'TRANSPORTER FEE CHARGE RECEIPT'
+        document_subtitle = 'Transporter fee charge receipt with approval signatures'
+        status_label = 'FEE CHARGED'
+    else:
+        receipt_reference = f'TRP-PAY-{row.id:04d}'
+        document_title = 'TRANSPORTER PAYMENT RECEIPT'
+        document_subtitle = 'Transporter disbursement receipt with approval signatures'
+        status_label = 'PAYMENT DISBURSED'
+
+    return render_template(
+        'receipts/professional_payment_receipt.html',
+        document_title=document_title,
+        document_subtitle=document_subtitle,
+        party_role='Transporter',
+        party_name=transporter_name,
+        receipt_reference=receipt_reference,
+        document_date=row.paid_at or row.created_at,
+        original_amount=row.amount_input,
+        original_currency=row.currency,
+        exchange_rate=row.exchange_rate,
+        paid_amount=row.amount_input,
+        paid_currency=row.currency,
+        paid_amount_rwf=row.amount_rwf,
+        remaining_amount=current_balance,
+        remaining_currency='RWF',
+        note=row.note,
+        status_label=status_label,
+        signers=['Transporter', 'Cashier', 'Accountant', 'Boss'],
+        summary_values={
+            'balance_rwf': float(current_balance or 0.0),
+            'amount_rwf': float(row.amount_rwf or 0.0),
+        },
+    )
+
+
+@core_bp.route('/receipts/transporter-payment/<int:ledger_id>', methods=['GET'])
+@role_required('accountant', 'boss', 'cashier', 'admin')
+def transporter_payment_receipt_detail(ledger_id: int):
+    return _render_transporter_receipt_detail(ledger_id)
+
+
+@core_bp.route('/receipts/transporter-advance/<int:ledger_id>', methods=['GET'])
+@role_required('accountant', 'boss', 'cashier', 'admin')
+def transporter_advance_receipt_detail(ledger_id: int):
+    return _render_transporter_receipt_detail(ledger_id)
 
 
 @core_bp.route('/accountant/suppliers/<path:supplier_norm>/settlement-statement', methods=['GET'])
@@ -1709,14 +2316,20 @@ def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
     total_allocated = float(total_allocated or 0)
 
     # Total deducted (expenses, RMA, transport, etc. - all in RWF)
-    total_deducted = (
-        db.session.query(func.coalesce(func.sum(BatchDeduction.amount_rwf), 0))
-        .filter(
-            BatchDeduction.batch_id == batch_id,
+    # Note: BatchDeduction.batch_id is a FK to BulkOutputPlan.id (integer),
+    # not the string batch_id. Get the plan IDs first.
+    plan_ids = [p.id for p in plans]
+    if plan_ids:
+        total_deducted = (
+            db.session.query(func.coalesce(func.sum(BatchDeduction.amount_rwf), 0))
+            .filter(
+                BatchDeduction.batch_id.in_(plan_ids),
+            )
+            .scalar()
+            or 0.0
         )
-        .scalar()
-        or 0.0
-    )
+    else:
+        total_deducted = 0.0
     total_deducted = float(total_deducted or 0)
 
     return float(max(total_expected - total_paid - total_allocated - total_deducted, 0.0))
@@ -2594,6 +3207,55 @@ def boss_approve_payment(review_id: int):
         from datetime import datetime as _dt
         review.reviewed_at = _dt.utcnow()
 
+        # Special-case: ledger-only transporter fee charge should be applied on boss approval
+        try:
+            action = (payload.get('action') or '').strip().lower()
+            if action == 'charge_transporter_fee' or review_type == 'transporter_fee_charge':
+                from core.models import TransporterLedger
+
+                transporter_name = (payload.get('transporter_name') or review.customer or '').strip()
+                if not transporter_name:
+                    raise ValueError('Missing transporter name for charge.')
+
+                entry_kind = (payload.get('entry_kind') or 'TRANSPORTER_FEE_CHARGE').strip().upper()
+                ledger_amount = float(amount_rwf or 0.0)
+
+                # Charge reduces what we owe the transporter: store as negative RWF amount
+                ledger_row = TransporterLedger(
+                    transporter_name=transporter_name,
+                    supplier_name=None,
+                    entry_type=entry_kind,
+                    amount_input=float(amount_input or 0.0),
+                    currency=currency,
+                    exchange_rate=float(payload.get('exchange_rate') or 1.0),
+                    amount_rwf=float(-abs(ledger_amount)),
+                    is_paid=False,
+                    created_by_id=getattr(current_user, 'id', None),
+                    note=payload.get('note') or f'Transporter fee charged by boss - {transporter_name}',
+                    payment_review_id=int(review.id),
+                )
+                db.session.add(ledger_row)
+                db.session.flush()
+
+                review.disbursement_status = 'DISBURSED'
+                review.disbursed_by_id = getattr(current_user, 'id', None)
+                review.disbursed_at = _dt.utcnow()
+                review.boss_comment = (review.boss_comment or '') + f" | transporter_fee_charge_ledger_id={int(ledger_row.id)}"
+                db.session.add(review)
+                # Notify accountants/cashiers that a ledger-only charge was applied
+                boss_rows2 = db.session.query(User.id).filter_by(role='accountant', is_active=True).all()
+                for (acct_id,) in boss_rows2:
+                    create_notification(
+                        user_id=int(acct_id),
+                        type_='TRANSPORTER_FEE_CHARGED',
+                        message=(f"Boss approved transporter fee charge for {transporter_name}: {amount_input:,.2f} {currency}."),
+                        related_type='payment_review',
+                        related_id=int(review.id),
+                    )
+        except Exception:
+            # If ledger-only write fails, log but continue so boss approval still persists.
+            logger.exception('Failed to apply transporter fee charge ledger on boss approval')
+
         if review_type == 'loan_disbursement':
             try:
                 loan_id = int(payload.get('loan_id') or 0)
@@ -3338,6 +4000,10 @@ def customer_receipts():
             )
             db.session.add(alloc)
 
+            if not plan.customer:
+                plan.customer = submitted_customer
+                db.session.add(plan)
+
             boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
             for (boss_id,) in boss_rows:
                 create_notification(
@@ -3351,8 +4017,8 @@ def customer_receipts():
                 )
 
             db.session.commit()
-            flash('Advance recorded successfully. You can come back later to set agreed total and deductions.', 'success')
-            return redirect(url_for('core.customer_receipts'))
+            flash('Advance recorded successfully. Use the handover page to send it to cashier.', 'success')
+            return redirect(url_for('core.customer_unearned_receipts'))
 
         try:
             total_expected_amount = float(request.form.get("total_expected_amount") or 0)
@@ -3512,6 +4178,25 @@ def customer_unearned_receipts():
             exchange_rate_input = 1.0
 
         note = (request.form.get('note') or '').strip() or None
+        confirm_new_customer = (request.form.get('confirm_new_customer') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+        try:
+            existing_names = [r[0] for r in db.session.query(CustomerReceipt.customer).filter(CustomerReceipt.customer.isnot(None)).all()]
+            existing_names += [r[0] for r in db.session.query(CustomerUnearnedReceipt.customer).filter(CustomerUnearnedReceipt.customer.isnot(None)).all()]
+            existing_names += [r[0] for r in db.session.query(BulkOutputPlan.customer).filter(BulkOutputPlan.customer.isnot(None)).all()]
+        except Exception:
+            existing_names = []
+
+        norm_customer = normalize_counterparty_name(customer)
+        exact_customer_exists = any(normalize_counterparty_name(name) == norm_customer for name in existing_names)
+        if not exact_customer_exists:
+            close_matches = close_name_matches(customer, existing_names, limit=5, cutoff=0.86)
+            if close_matches and not confirm_new_customer:
+                flash(
+                    f"Customer name looks similar to existing customer(s): {', '.join(close_matches[:3])}. Select the existing customer or confirm this is a new customer.",
+                    'warning',
+                )
+                return redirect(url_for('core.customer_unearned_receipts'))
 
         try:
             row = _create_customer_unearned_receipt(
@@ -4136,8 +4821,9 @@ def _customer_batch_cards(mineral_type: str, customer: str) -> list[dict]:
         if r.batch_id:
             batches.add(r.batch_id)
     for d in deductions:
-        if d.batch_id:
-            batches.add(d.batch_id)
+        # d.batch_id is INTEGER FK to plan.id, get the actual string batch_id from plan
+        if d.plan and d.plan.batch_id:
+            batches.add(d.plan.batch_id)
     for a in allocations:
         if a.batch_id:
             batches.add(a.batch_id)
@@ -4393,13 +5079,47 @@ def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None
     if to_dt:
         allocations_stmt = allocations_stmt.where(CustomerUnearnedAllocation.created_at <= to_dt)
 
+    # Include unearned receipts (advances not yet allocated to any batch)
+    unearned_stmt = (
+        select(
+            CustomerUnearnedReceipt.received_at.label('date'),
+            literal(5).label('sort_key'),
+            literal('unearned').label('entry_kind'),
+            typed_int_null.label('plan_id'),
+            CustomerUnearnedReceipt.id.label('receipt_id'),
+            typed_text_null.label('batch_id'),
+            literal(0.0).label('debit'),
+            CustomerUnearnedReceipt.amount_input.label('credit'),
+            CustomerUnearnedReceipt.amount_input.label('original_amount'),
+            CustomerUnearnedReceipt.currency.label('original_currency'),
+            CustomerUnearnedReceipt.exchange_rate.label('original_exchange_rate'),
+            literal(0.0).label('debit_rwf'),
+            func.coalesce(CustomerUnearnedReceipt.amount_rwf, 0).label('credit_rwf'),
+            typed_text_null.label('proof_path'),
+            literal('ADVANCE').label('detail'),
+        )
+        .where(
+            CustomerUnearnedReceipt.customer == customer_name,
+        )
+    )
+    if from_dt:
+        unearned_stmt = unearned_stmt.where(CustomerUnearnedReceipt.received_at >= from_dt)
+    if to_dt:
+        unearned_stmt = unearned_stmt.where(CustomerUnearnedReceipt.received_at <= to_dt)
+
     if batch:
         plans_stmt = plans_stmt.where(BulkOutputPlan.batch_id == batch)
         deductions_stmt = deductions_stmt.where(BulkOutputPlan.batch_id == batch)
         receipts_stmt = receipts_stmt.where(CustomerReceipt.batch_id == batch)
         allocations_stmt = allocations_stmt.where(CustomerUnearnedAllocation.batch_id == batch)
+        # Don't filter unearned by batch since they're not yet allocated
 
-    ledger_union = union_all(plans_stmt, deductions_stmt, receipts_stmt, allocations_stmt).subquery('ledger_union')
+    # When viewing a specific batch, do NOT include unallocated unearned receipts
+    # (they are not applied to the batch yet and would skew the batch remaining).
+    if batch:
+        ledger_union = union_all(plans_stmt, deductions_stmt, receipts_stmt, allocations_stmt).subquery('ledger_union')
+    else:
+        ledger_union = union_all(plans_stmt, deductions_stmt, receipts_stmt, allocations_stmt, unearned_stmt).subquery('ledger_union')
 
     # Count total rows for pagination
     total_q = db.session.query(func.count()).select_from(ledger_union)
@@ -4412,6 +5132,9 @@ def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None
     if plan:
         base_currency = plan.currency or 'RWF'
         base_exchange_rate = plan.exchange_rate or 1.0
+
+    def _base_amount(amount_input: float | None, amount_rwf: float | None, row_currency: str | None, row_rate: float | None) -> float:
+        return float(_to_base_currency(amount_input, amount_rwf, row_currency, row_rate, base_currency, base_exchange_rate) or 0.0)
 
     # Aggregate totals (unpaginated): sum of debits and credits in base currency
     totals_q = db.session.query(
@@ -4519,20 +5242,24 @@ def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None
         summary = plan_map.get(r.get('batch_id')) or {}
         entry_kind = (r.get('entry_kind') or '').strip().lower()
         detail = (r.get('detail') or '').strip()
+        debit_base = _base_amount(r.get('debit'), r.get('debit_rwf'), r.get('original_currency'), r.get('original_exchange_rate'))
+        credit_base = _base_amount(r.get('credit'), r.get('credit_rwf'), r.get('original_currency'), r.get('original_exchange_rate'))
         if entry_kind == 'deduction':
             description = f"Deduction / Expense: {detail or 'Adjustment'}"
         elif entry_kind == 'allocation':
             description = f"Advance Applied: {detail or 'Advance'}"
         elif entry_kind == 'receipt':
             description = f"Customer Settlement: {detail or 'Payment'}"
+        elif entry_kind == 'unearned':
+            description = "ADVANCE (Pending Allocation)"
         else:
             description = 'Agreement'
 
         ledger.append({
             'date': r.get('date'),
             'description': description,
-            'debit': float(r.get('debit', 0) or 0.0),
-            'credit': float(r.get('credit', 0) or 0.0),
+            'debit': debit_base,
+            'credit': credit_base,
             'debit_rwf': float(r.get('debit_rwf', 0) or 0.0),
             'credit_rwf': float(r.get('credit_rwf', 0) or 0.0),
             'original_amount': float(r.get('original_amount') or 0.0),
@@ -4551,13 +5278,16 @@ def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None
             'balance': 0.0,
             'balance_rwf': 0.0,
         })
-        running += float(r.get('debit', 0) or 0.0)
-        running -= float(r.get('credit', 0) or 0.0)
+        running += debit_base
+        running -= credit_base
         running_rwf += float(r.get('debit_rwf', 0) or 0.0)
         running_rwf -= float(r.get('credit_rwf', 0) or 0.0)
         ledger[-1]['balance'] = running
         ledger[-1]['balance_rwf'] = running_rwf
         ledger[-1]['base_currency'] = base_currency
+
+    if ledger:
+        remaining = float(max(ledger[-1]['balance'], 0.0))
 
     return ledger, total_expected, total_deductions, total_settlements, total_advances, remaining
 
@@ -4577,8 +5307,50 @@ def customer_ledger_index():
 @core_bp.route('/receipts/customers')
 @role_required('negotiator', 'accountant', 'boss', 'admin')
 def consolidated_customer_ledger_index():
-    customer_names = _customers_for_mineral('all')
-    return render_template('negotiator/customer_ledger_index.html', customers=customer_names, mineral_type='all')
+    try:
+        page = int(request.args.get('page') or 1)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(page, 1)
+    try:
+        per_page = int(request.args.get('per_page') or 20)
+    except (TypeError, ValueError):
+        per_page = 20
+    per_page = min(max(per_page, 1), 100)
+
+    customer_union = union_all(
+        select(BulkOutputPlan.customer.label('customer')).where(
+            BulkOutputPlan.customer.isnot(None),
+            BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
+        ),
+        select(CustomerReceipt.customer.label('customer')).where(
+            CustomerReceipt.customer.isnot(None),
+        ),
+        select(CustomerUnearnedReceipt.customer.label('customer')).where(
+            CustomerUnearnedReceipt.customer.isnot(None),
+        ),
+    ).subquery()
+
+    customers_query = (
+        db.session.query(
+            customer_union.c.customer.label('customer'),
+            func.lower(customer_union.c.customer).label('customer_sort'),
+        )
+        .filter(customer_union.c.customer.isnot(None))
+        .filter(func.trim(customer_union.c.customer) != '')
+        .group_by(customer_union.c.customer, func.lower(customer_union.c.customer))
+        .order_by(func.lower(customer_union.c.customer).asc(), customer_union.c.customer.asc())
+    )
+    customers_pagination = customers_query.paginate(page=page, per_page=per_page, error_out=False)
+    customer_names = [name for name, _sort in customers_pagination.items if name]
+
+    return render_template(
+        'negotiator/customer_ledger_index.html',
+        customers=customer_names,
+        customers_pagination=customers_pagination,
+        mineral_type='all',
+        page_size=per_page,
+    )
 
 
 @core_bp.route('/receipts/customers/<customer>')
@@ -4869,9 +5641,10 @@ def _batch_debt_options():
         if base_currency == 'USD' and base_rate > 0:
             remaining_display = remaining_rwf / base_rate
 
-        # Keep the customer visible even when the agreement is still draft/zero,
-        # but only expose payment-selectable rows when there is real remaining debt.
-        row_visible = remaining_rwf > 0.01 or planned_total <= 0.01
+        # Keep the customer visible in the dropdown even when the remaining
+        # balance is already zero. Users still need to find historical customers
+        # they have searched or recorded receipts for.
+        row_visible = True
 
         key = (canonical_mineral, p.customer, p.batch_id)
         rows_map[key] = {
@@ -4996,42 +5769,11 @@ def update_debts():
         if outstanding_rwf <= 0 and receipt_type != CustomerReceiptType.ADVANCE.value:
             _flash_and_notify('This customer batch has no outstanding balance. Use advance-only if you are recording money before final agreement.', 'warning')
             return redirect(url_for('core.update_debts'))
+        if receipt_type == CustomerReceiptType.ADVANCE.value:
+            _flash_and_notify('Advance receipts must be recorded from Record Customer Receipts or Unearned Receipts. Update Debts is for settlements only.', 'warning')
+            return redirect(url_for('core.update_debts'))
         if outstanding_rwf > 0 and amount_rwf - outstanding_rwf > 0.01:
             _flash_and_notify('Payment exceeds outstanding amount for selected batch.', 'danger')
-            return redirect(url_for('core.update_debts'))
-
-        if receipt_type == CustomerReceiptType.ADVANCE.value and outstanding_rwf <= 0:
-            boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
-            advance_row = None
-            try:
-                advance_row = _create_customer_unearned_receipt(
-                    customer=customer,
-                    mineral_type=mineral_type,
-                    amount_input=amount_input,
-                    currency=currency,
-                    exchange_rate_input=exchange_rate_input,
-                    payment_channel=payment_channel,
-                    note=note or None,
-                    batch_id=batch_id,
-                )
-            except Exception:
-                db.session.rollback()
-                _flash_and_notify('Could not record advance payment.', 'danger')
-                return redirect(url_for('core.update_debts'))
-
-            for (boss_id,) in boss_rows:
-                create_notification(
-                    user_id=int(boss_id),
-                    type_='CUSTOMER_UNEARNED_RECORDED',
-                    message=(
-                        f"Habonetse advance kuri batch {batch_id} ku mukiriya {customer}: {float(advance_row.amount_rwf or 0):,.2f} RWF (yanditswe na {getattr(current_user, 'username', 'unknown')})."
-                    ),
-                    related_type='customer_unearned_receipt',
-                    related_id=int(advance_row.id),
-                )
-
-            db.session.commit()
-            _flash_and_notify('Advance recorded successfully. You can return later to save the final agreement and deductions.', 'success')
             return redirect(url_for('core.update_debts'))
 
         stage = 'ADVANCE'

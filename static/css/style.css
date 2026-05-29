@@ -1,4 +1,15 @@
 
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* Custom styles below */
+
+/* Example: small helper to ensure body background uses gradient classes correctly */
+/* (Keep custom rules minimal — prefer Tailwind classes in templates.) */
+html, body {
+	height: 100%;
+}
 
 

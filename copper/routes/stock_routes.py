@@ -108,6 +108,7 @@ def _stock_has_payment_history(stock_id: int) -> bool:
 _AGG_CACHE = {}
 _AGG_CACHE_LOCK = Lock()
 
+
 def _get_dashboard_aggregates(ttl=1):
     try:
         with _AGG_CACHE_LOCK:
@@ -629,7 +630,6 @@ def add_stock():
             exchange = float(request.form.get("exchange") or 0)
             transport_tag = float(request.form.get("transport_tag") or 0)
             rra_3_percent_default = float(request.form.get("rra_3_percent_default") or 50)
-
             # Calculate derived fields
             u = nb * input_kg
             rma = rma_default * input_kg

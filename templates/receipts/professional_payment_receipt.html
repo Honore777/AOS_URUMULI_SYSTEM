@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ document_title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <style>
+        @media print {
+            @page { size: A4 portrait; margin: 10mm; }
+            .no-print { display: none !important; }
+            body { background: white; margin: 0; }
+            .receipt-shell { width: 100%; margin: 0; padding: 0; }
+        }
+        .receipt-shell { max-width: 900px; margin: 0 auto; padding: 18px; }
+        .receipt-grid { width: 100%; border-collapse: collapse; }
+        .receipt-grid th, .receipt-grid td { border: 1px solid #d1d5db; padding: 0.75rem; vertical-align: top; }
+        .receipt-grid th { background: #f3f4f6; text-align: left; font-weight: 700; width: 22%; }
+        .signature-line { border-top: 1px solid #374151; margin-top: 2.5rem; padding-top: 0.5rem; }
+        .signature-name { font-size: 0.95rem; font-weight: 700; color: #111827; }
+        .signature-role { font-size: 0.8rem; color: #6b7280; }
+    </style>
+</head>
+<body class="bg-white">
+    <div class="receipt-shell shadow-xl border border-gray-300 bg-white">
+        <div class="flex items-center" style="background: linear-gradient(90deg, #0f172a 0%, #1d4ed8 50%, #059669 100%); padding: 1rem;">
+            <img src="/static/logo.png" alt="Company Logo" class="h-12 mr-4">
+            <div>
+                <h2 class="text-white text-lg font-bold">{{ document_title }}</h2>
+                <p class="text-white text-xs">{{ document_subtitle }}</p>
+            </div>
+        </div>
+
+        <div class="p-6">
+            <div class="grid gap-4 md:grid-cols-2">
+                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-xs font-bold uppercase tracking-wider text-gray-500">Receipt Reference</p>
+                    <p class="mt-1 text-lg font-bold text-gray-900">{{ receipt_reference }}</p>
+                    <p class="mt-2 text-sm text-gray-600">Date: {{ document_date.strftime('%Y-%m-%d %H:%M') if document_date else '-' }}</p>
+                </div>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-xs font-bold uppercase tracking-wider text-gray-500">Status</p>
+                    <p class="mt-1 text-lg font-bold text-emerald-700">{{ status_label }}</p>
+                    <p class="mt-2 text-sm text-gray-600">Signed for audit and handover purposes.</p>
+                </div>
+            </div>
+
+            <table class="receipt-grid mt-6 text-sm">
+                <tr>
+                    <th>{{ party_role }} Name</th>
+                    <td>{{ party_name }}</td>
+                    <th>Currency</th>
+                    <td>{{ original_currency or 'RWF' }}</td>
+                </tr>
+                <tr>
+                    <th>Original Amount</th>
+                    <td>{{ '{:,.2f}'.format(original_amount or 0) }} {{ original_currency or 'RWF' }}</td>
+                    <th>Exchange Rate</th>
+                    <td>{% if original_currency and original_currency|upper == 'USD' %}{{ '{:,.4f}'.format(exchange_rate or 1.0) }}{% else %}-{% endif %}</td>
+                </tr>
+                <tr>
+                    <th>Paid Amount</th>
+                    <td>{{ '{:,.2f}'.format(paid_amount or 0) }} {{ paid_currency or original_currency or 'RWF' }}</td>
+                    <th>Paid Amount (RWF)</th>
+                    <td>{{ '{:,.2f}'.format(paid_amount_rwf or 0) }} RWF</td>
+                </tr>
+                <tr>
+                    <th>Remaining Amount</th>
+                    <td>{{ '{:,.2f}'.format(remaining_amount or 0) }} {{ remaining_currency or 'RWF' }}</td>
+                    <th>Note</th>
+                    <td>{{ note or '-' }}</td>
+                </tr>
+            </table>
+
+            {% if summary_values %}
+            <div class="mt-6 grid gap-4 md:grid-cols-3">
+                {% for key, value in summary_values.items() %}
+                <div class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                    <p class="text-xs font-bold uppercase tracking-wider text-gray-500">{{ key.replace('_', ' ') }}</p>
+                    <p class="mt-2 text-lg font-bold text-gray-900">{{ '{:,.2f}'.format(value or 0) }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="mt-8 grid gap-6 md:grid-cols-4">
+                {% for signer in signers %}
+                <div class="text-center">
+                    <div class="signature-line"></div>
+                    <div class="signature-name">{{ signer }}</div>
+                    <div class="signature-role">Signature</div>
+                    <div class="signature-role mt-2">Date: ______________</div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="mt-8 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+                This receipt confirms the transaction and should be kept with the account records for audit and handover verification.
+            </div>
+
+            <div class="mt-6 flex justify-end gap-3 no-print">
+                <button onclick="window.print()" class="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">Print</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

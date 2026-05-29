@@ -16,6 +16,18 @@
             </div>
         </div>
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="space-y-2">
+            {% for category, message in messages %}
+            <div class="rounded border px-4 py-3 text-sm {{ 'border-emerald-300 bg-emerald-50 text-emerald-800' if category in ['success', 'info'] else 'border-red-300 bg-red-50 text-red-800' if category in ['danger', 'error'] else 'border-amber-300 bg-amber-50 text-amber-800' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <aside class="lg:col-span-3 rounded-xl bg-white p-5 shadow-lg border border-slate-200">
                 <h2 class="text-sm font-bold text-slate-900 mb-4">Negotiator Pages</h2>
@@ -39,6 +51,7 @@
                                 <input id="customer-name" name="customer" autocomplete="off" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
                                 <div id="customer-suggestions" class="absolute z-20 mt-1 hidden w-full rounded-lg border border-slate-200 bg-white shadow-lg"></div>
                             </div>
+                            <p class="mt-1 text-xs text-slate-500">Start typing, then click a suggested customer if it already exists.</p>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
@@ -82,6 +95,10 @@
                             <label class="mb-1 block text-sm font-semibold text-slate-700">Note</label>
                             <input name="note" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
                         </div>
+                        <label class="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                            <input id="confirm-new-customer" name="confirm_new_customer" type="checkbox" class="mt-1 h-4 w-4 rounded border-amber-400 text-amber-700 focus:ring-amber-500">
+                            <span>Confirm this is a new customer name if it looks similar to an existing one.</span>
+                        </label>
                         <button class="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white">Save Unearned Receipt</button>
                     </form>
                 </div>

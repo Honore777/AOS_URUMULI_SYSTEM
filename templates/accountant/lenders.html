@@ -13,6 +13,18 @@
             <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
         </div>
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="space-y-2">
+            {% for category, message in messages %}
+            <div class="rounded border px-4 py-3 text-sm {{ 'border-emerald-300 bg-emerald-50 text-emerald-800' if category in ['success', 'info'] else 'border-red-300 bg-red-50 text-red-800' if category in ['danger', 'error'] else 'border-amber-300 bg-amber-50 text-amber-800' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 class="text-lg font-extrabold text-slate-900">Request Lender Payment (Boss Approval)</h2>
             <form method="post" action="{{ url_for('core.accountant_request_lender_payment') }}" class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -25,8 +37,21 @@
                 </div>
 
                 <div>
-                    <label class="mb-1 block text-sm font-semibold text-slate-700">Amount (RWF)</label>
+                    <label class="mb-1 block text-sm font-semibold text-slate-700">Amount</label>
                     <input name="amount" type="number" step="0.01" min="0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" placeholder="0.00" required>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-semibold text-slate-700">Currency</label>
+                    <select name="currency" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" required>
+                        <option value="RWF">RWF</option>
+                        <option value="USD">USD</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-semibold text-slate-700">Exchange Rate (RWF per USD)</label>
+                    <input name="exchange_rate" type="number" step="0.0001" min="0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200" placeholder="Only if USD">
                 </div>
 
                 <div>

@@ -501,7 +501,7 @@ def cashier_approved_requests_summary():
 @role_required("cashier", "boss", "admin", "accountant")
 def cashier_receipts_audit():
     """Unified recent receipts view for cashier operations and auditing."""
-    from core.models import WorkerPaymentReceipt, SupplierPaymentReceipt
+    from core.models import WorkerPaymentReceipt, SupplierPaymentReceipt, TransporterLedger
 
     kind = (request.args.get('kind') or 'all').strip().lower()
     mineral = (request.args.get('mineral') or 'all').strip().lower()
@@ -578,6 +578,36 @@ def cashier_receipts_audit():
             'note': getattr(row_obj, 'note', None),
         })
 
+    def _append_transporter_row(row_obj):
+        entry_kind = (row_obj.entry_type or '').upper()
+        if entry_kind == 'ADVANCE':
+            receipt_number = f"TRP-ADV-{int(row_obj.id):04d}"
+        elif entry_kind == 'TRANSPORTER_FEE_CHARGE':
+            receipt_number = f"TRP-FEE-{int(row_obj.id):04d}"
+        else:
+            receipt_number = f"TRP-PAY-{int(row_obj.id):04d}"
+        view_url = None
+        if entry_kind in {'ADVANCE', 'CASH_PAYMENT', 'TRANSPORTER_FEE_CHARGE'}:
+            view_url = url_for('core.transporter_payment_receipt_detail', ledger_id=int(row_obj.id))
+        rows.append({
+            'kind': 'transporter',
+            'id': row_obj.id,
+            'receipt_number': receipt_number,
+            'payment_id': row_obj.payment_review_id or row_obj.cash_transaction_id or row_obj.id,
+            'counterparty': row_obj.transporter_name,
+            'payment_type': row_obj.entry_type,
+            'mineral_type': None,
+            'amount': row_obj.amount_input,
+            'currency': row_obj.currency,
+            'is_printed': bool(row_obj.is_paid),
+            'printed_at': row_obj.paid_at,
+            'printed_by': None,
+            'generated_at': row_obj.created_at,
+            'generated_by': getattr(getattr(row_obj, 'created_by', None), 'username', None),
+            'view_url': view_url,
+            'note': row_obj.note,
+        })
+
     if kind in {'all', 'worker'}:
         w_query = WorkerPaymentReceipt.query.filter(WorkerPaymentReceipt.is_deleted.is_(False))
         if mineral in {'copper', 'coltan', 'cassiterite'}:
@@ -625,6 +655,22 @@ def cashier_receipts_audit():
             elif mt == 'cassiterite':
                 endpoint = 'cassiterite.supplier_receipt'
             _append_row('supplier', row, endpoint=endpoint, payment_type=row.payment_type)
+
+    if kind in {'all', 'transporter'}:
+        t_query = TransporterLedger.query
+        if printed == 'yes':
+            t_query = t_query.filter(TransporterLedger.is_paid.is_(True))
+        elif printed == 'no':
+            t_query = t_query.filter(TransporterLedger.is_paid.is_(False))
+
+        if from_date:
+            t_query = t_query.filter(TransporterLedger.created_at >= datetime.combine(from_date, datetime.min.time()))
+        if to_date:
+            t_query = t_query.filter(TransporterLedger.created_at <= datetime.combine(to_date, datetime.max.time()))
+
+        transporter_rows = t_query.order_by(TransporterLedger.created_at.desc(), TransporterLedger.id.desc()).all()
+        for row in transporter_rows:
+            _append_transporter_row(row)
 
     rows = [row for row in rows if _matches_date(row.get('generated_at')) and _matches_text(row)]
 
@@ -1295,19 +1341,27 @@ def suppliers_autocomplete():
 
     q_norm = ' '.join(q.lower().split())
     try:
-        from core.models import UnifiedSupplierAdvance
-        rows = (
-            db.session.query(UnifiedSupplierAdvance.supplier_name)
-            .filter(
-                UnifiedSupplierAdvance.is_deleted.is_(False),
-                UnifiedSupplierAdvance.supplier_name_norm.contains(q_norm),
-            )
-            .distinct()
-            .order_by(UnifiedSupplierAdvance.supplier_name.asc())
-            .limit(15)
-            .all()
-        )
-        results = [nm for (nm,) in rows if nm]
+        from utils import build_consolidated_supplier_choices, normalize_counterparty_name, close_name_matches
+
+        # Build candidate list from consolidated supplier choices
+        choices = build_consolidated_supplier_choices()
+        candidates = [v for v, _ in (choices or []) if v]
+
+        # First attempt fuzzy matching using our shared helper (more user-friendly)
+        fuzzy = close_name_matches(q_norm, candidates, limit=15, cutoff=0.6)
+        if fuzzy:
+            return safe_jsonify({'results': fuzzy})
+
+        # Fallback: substring match on normalized names (previous behaviour)
+        q_key = normalize_counterparty_name(q_norm)
+        results = []
+        for value, _label in choices:
+            if not value:
+                continue
+            if q_key and q_key in normalize_counterparty_name(value):
+                results.append(value)
+            if len(results) >= 15:
+                break
         return safe_jsonify({'results': results})
     except Exception:
         return safe_jsonify({'results': []})
@@ -1337,6 +1391,7 @@ def cashier_disburse_payment_review(review_id: int):
         return redirect(url_for('core.cashier_dashboard'))
 
     payload = {}
+    receipt_redirect_url = None
     try:
         payload = json.loads(review.request_payload or '{}') if review.request_payload else {}
         if not isinstance(payload, dict):
@@ -1483,9 +1538,6 @@ def cashier_disburse_payment_review(review_id: int):
             elif action == 'loan_repayment':
                 from core.models import Loan, LoanLedgerEntry
 
-                if (currency or 'RWF').upper() != 'RWF':
-                    raise ValueError('Loan repayments must be disbursed in RWF (loan ledger is in RWF).')
-
                 lender_name = (payload.get('lender_name') or review.customer or '').strip()
                 lender_norm = ' '.join((payload.get('lender_name_norm') or lender_name).strip().lower().split())
                 if not lender_name or not lender_norm:
@@ -1505,13 +1557,13 @@ def cashier_disburse_payment_review(review_id: int):
                     raise ValueError('No outstanding loans found for this lender.')
 
                 total_outstanding = float(sum([float(l.outstanding_rwf or 0.0) for l in loans]) or 0.0)
-                if tx_amount > total_outstanding:
+                if float(amount_rwf or 0.0) > total_outstanding:
                     raise ValueError(f"Repayment exceeds outstanding balance ({total_outstanding:,.2f} RWF).")
 
                 tx = CashTransaction(
                     account_id=account.id,
                     amount=tx_amount,
-                    currency=(account.currency or 'RWF').upper(),
+                    currency=currency,
                     exchange_rate=float(exchange_rate or 1.0),
                     amount_input=float(amount_input or tx_amount),
                     amount_rwf=float(amount_rwf or tx_amount),
@@ -1529,11 +1581,11 @@ def cashier_disburse_payment_review(review_id: int):
                 db.session.add(account)
                 db.session.flush()
 
-                remaining = float(tx_amount)
+                remaining_rwf = float(amount_rwf or 0.0)
                 for loan in loans:
-                    if remaining <= 0:
+                    if remaining_rwf <= 0:
                         break
-                    can_apply = min(float(loan.outstanding_rwf or 0.0), remaining)
+                    can_apply = min(float(loan.outstanding_rwf or 0.0), remaining_rwf)
                     if can_apply <= 0:
                         continue
                     loan.outstanding_rwf = float((loan.outstanding_rwf or 0.0) - can_apply)
@@ -1541,12 +1593,16 @@ def cashier_disburse_payment_review(review_id: int):
                     db.session.add(loan)
                     db.session.flush()
 
+                    entry_input = float(can_apply)
+                    if (currency or 'RWF').upper() == 'USD' and float(exchange_rate or 0.0) > 0:
+                        entry_input = float(can_apply / float(exchange_rate or 1.0))
+
                     entry = LoanLedgerEntry(
                         loan_id=int(loan.id),
                         entry_type='REPAYMENT',
-                        amount_input=float(amount_input or tx_amount),
-                        currency='RWF',
-                        exchange_rate=1.0,
+                        amount_input=float(entry_input),
+                        currency=currency,
+                        exchange_rate=float(exchange_rate or 1.0),
                         amount_rwf=float(can_apply),
                         cash_account_id=int(account.id),
                         cash_transaction_id=int(tx.id),
@@ -1554,7 +1610,7 @@ def cashier_disburse_payment_review(review_id: int):
                         note=f"{(payload.get('method') or 'CASH').upper()} repayment for {lender_name}",
                     )
                     db.session.add(entry)
-                    remaining = float(remaining - can_apply)
+                    remaining_rwf = float(remaining_rwf - can_apply)
 
                 review.cash_transaction_id = int(tx.id)
                 review.cash_account_id = int(account.id)
@@ -1652,6 +1708,123 @@ def cashier_disburse_payment_review(review_id: int):
                             f"Umubitsi {getattr(current_user, 'username', 'unknown')} yimuriye amafaranga kuri konti: "
                             f"{from_acc.name} -> {to_acc.name}. Amount: {tx_amount:,.2f} {(from_acc.currency or 'RWF').upper()}. "
                             f"Ref: {reference}."
+                        ),
+                        related_type='payment_review',
+                        related_id=int(review.id),
+                    )
+
+            elif action == 'pay_transporter':
+                from core.models import TransporterLedger
+
+                transporter_name = (payload.get('transporter_name') or review.customer or '').strip()
+                if not transporter_name:
+                    raise ValueError('Missing transporter name.')
+                entry_kind = (payload.get('entry_kind') or 'CASH_PAYMENT').strip().upper()
+                ledger_amount = float(abs(amount_rwf or tx_amount))
+                if entry_kind == 'ADVANCE':
+                    ledger_amount = abs(ledger_amount)
+                else:
+                    ledger_amount = -abs(ledger_amount)
+
+                tx = CashTransaction(
+                    account_id=account.id,
+                    amount=tx_amount,
+                    currency=(account.currency or 'RWF').upper(),
+                    exchange_rate=float(exchange_rate or 1.0),
+                    amount_input=float(amount_input or tx_amount),
+                    amount_rwf=float(amount_rwf or tx_amount),
+                    direction='OUT',
+                    reference=f"transporter_payment:{int(review.id)}",
+                    note=note or f"Transporter payment - {transporter_name}",
+                    created_by_id=getattr(current_user, 'id', None),
+                )
+                account_balance = float(account.current_balance or 0.0)
+                account.current_balance = float(account_balance - float(tx_amount or 0.0))
+                if account.current_balance < 0:
+                    raise ValueError('Insufficient funds in selected cash account.')
+
+                db.session.add(tx)
+                db.session.add(account)
+                db.session.flush()
+
+                cash_ledger = TransporterLedger(
+                    transporter_name=transporter_name,
+                    supplier_name=None,
+                    entry_type=entry_kind,
+                    amount_input=float(amount_input or tx_amount),
+                    currency=currency,
+                    exchange_rate=float(exchange_rate or 1.0),
+                    amount_rwf=float(ledger_amount),
+                    is_paid=True,
+                    paid_at=datetime.utcnow(),
+                    created_by_id=getattr(current_user, 'id', None),
+                    note=note or f'Transporter cash payment - {transporter_name}',
+                    payment_review_id=int(review.id),
+                    cash_transaction_id=int(tx.id),
+                )
+                db.session.add(cash_ledger)
+                db.session.flush()
+
+                review.cash_transaction_id = int(tx.id)
+                review.cash_account_id = int(account.id)
+                if entry_kind == 'ADVANCE':
+                    review.boss_comment = (review.boss_comment or '') + f" | transporter_advance_ledger_id={int(cash_ledger.id)}"
+                    receipt_redirect_url = url_for('core.transporter_advance_receipt_detail', ledger_id=int(cash_ledger.id))
+
+                boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+                for (boss_id,) in boss_rows:
+                    create_notification(
+                        user_id=int(boss_id),
+                        type_='TRANSPORTER_PAID',
+                        message=(
+                            f"Umubitsi {getattr(current_user, 'username', 'unknown')} yatanze amafaranga ku mutwara: {ledger.transporter_name} "
+                            f"Amount: {tx_amount:,.2f} {currency}."
+                        ),
+                        related_type='payment_review',
+                        related_id=int(review.id),
+                    )
+
+            elif action == 'charge_transporter_fee':
+                from core.models import TransporterLedger
+
+                transporter_name = (payload.get('transporter_name') or review.customer or '').strip()
+                if not transporter_name:
+                    raise ValueError('Missing transporter name.')
+                entry_kind = (payload.get('entry_kind') or 'TRANSPORTER_FEE_CHARGE').strip().upper()
+                charge_amount = float(abs(amount_rwf or tx_amount))
+
+                cash_ledger = TransporterLedger(
+                    transporter_name=transporter_name,
+                    supplier_name=None,
+                    entry_type=entry_kind,
+                    amount_input=float(amount_input or tx_amount),
+                    currency=(payload.get('currency') or 'RWF').upper(),
+                    exchange_rate=float(exchange_rate or 1.0),
+                    amount_rwf=float(-abs(charge_amount)),
+                    is_paid=True,
+                    paid_at=datetime.utcnow(),
+                    created_by_id=getattr(current_user, 'id', None),
+                    note=note or f'Transporter fee charge - {transporter_name}',
+                    payment_review_id=int(review.id),
+                )
+                db.session.add(cash_ledger)
+                db.session.flush()
+                receipt_redirect_url = url_for('core.transporter_payment_receipt_detail', ledger_id=int(cash_ledger.id))
+
+                review.disbursement_status = 'DISBURSED'
+                review.disbursed_by_id = getattr(current_user, 'id', None)
+                review.disbursed_at = datetime.utcnow()
+                review.boss_comment = (review.boss_comment or '') + f" | transporter_fee_charge_ledger_id={int(cash_ledger.id)}"
+                db.session.add(review)
+
+                boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+                for (boss_id,) in boss_rows:
+                    create_notification(
+                        user_id=int(boss_id),
+                        type_='TRANSPORTER_FEE_CHARGED',
+                        message=(
+                            f"Umubitsi {getattr(current_user, 'username', 'unknown')} yaciye amafaranga ku mutwara: {transporter_name} "
+                            f"Amount: {charge_amount:,.2f} {(payload.get('currency') or 'RWF').upper()}."
                         ),
                         related_type='payment_review',
                         related_id=int(review.id),
@@ -2557,6 +2730,8 @@ def cashier_disburse_payment_review(review_id: int):
         flash('Request disbursed successfully, but auto-open receipt failed. Open it from Receipts Audit.', 'warning')
 
     flash('Request disbursed successfully.', 'success')
+    if receipt_redirect_url:
+        return redirect(receipt_redirect_url)
     if review.payment_id:
         return redirect(url_for('core.cashier_receipts_audit', payment_id=int(review.payment_id)))
     return redirect(url_for('core.cashier_dashboard'))

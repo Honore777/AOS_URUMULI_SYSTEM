@@ -22,6 +22,12 @@
                 <a href="{{ url_for('core.supplier_settlement_statement', supplier_norm=supplier_norm) }}" target="_blank" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 shadow-sm">
                     Urutonde rw'ibyabaye mukwishyura
                 </a>
+                <a href="{{ url_for('core.supplier_charge_fee') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-rose-700 text-white font-semibold hover:bg-rose-800 shadow-md ring-1 ring-rose-900/20">
+                    Charge fee
+                </a>
+                <a href="{{ url_for('core.transporter_ledger_index') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-fuchsia-700 text-white font-semibold hover:bg-fuchsia-800 shadow-md ring-1 ring-fuchsia-900/20">
+                    Transporter ledger
+                </a>
                 <form method="post" action="{{ url_for('core.settle_supplier_open_balances', supplier_norm=supplier_norm) }}" onsubmit="return confirm('Settle all open balances for this supplier now?');">
                     <input type="hidden" name="note" value="Direct supplier settlement from consolidated ledger">
                     <button type="submit" class="inline-flex items-center px-4 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shadow-sm disabled hidden">
