@@ -32,7 +32,14 @@ def _get_or_create_supplier_id(name):
 	clean = (name or '').strip()
 	if not clean:
 		return None
-	supplier = CassiteriteSupplier.query.filter(func.lower(CassiteriteSupplier.name) == clean.lower()).first()
+	normalized = normalize_counterparty_name(clean)
+	supplier = CassiteriteSupplier.query.filter(
+		func.lower(func.trim(CassiteriteSupplier.name)) == clean.lower()
+	).first()
+	if not supplier and normalized:
+		supplier = CassiteriteSupplier.query.filter(
+			func.lower(func.trim(CassiteriteSupplier.name)).ilike(f"%{'%'.join(normalized.split())}%")
+		).first()
 	if supplier:
 		return supplier.id
 	supplier = CassiteriteSupplier(name=clean)

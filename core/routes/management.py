@@ -63,10 +63,9 @@ def _build_transporter_ledger_rows(transporter_rows):
             'amount_rwf': float(row.amount_rwf or 0.0),
             'running_balance_rwf': float(current_balance),
             'note': row.note,
-            'receipt_url': url_for('core.transporter_payment_receipt_detail', ledger_id=int(row.id)) if (row.entry_type or '').upper() in {'ADVANCE', 'CASH_PAYMENT', 'TRANSPORTER_FEE_CHARGE'} else None,
+            'receipt_url': url_for('core.transporter_payment_receipt_detail', ledger_id=int(row.id)) if (row.entry_type or '').upper() in {'ADVANCE', 'CASH_PAYMENT'} else None,
         })
     return display_rows
-
 
 def _transporter_ledger_date_window(preset: str):
     preset = (preset or '30d').strip().lower()
@@ -339,8 +338,54 @@ def consolidated_supplier_ledger_lookup():
         flash("Utanga ibicuruzwa ntabuze niba.", "warning")
         return redirect(url_for("core.boss_dashboard"))
 
-    supplier_norm = " ".join(supplier.lower().split())
-    return redirect(url_for("core.consolidated_supplier_ledger", supplier_norm=supplier_norm))
+    from utils import generate_supplier_slug, normalize_counterparty_name
+
+    supplier_slug = generate_supplier_slug(supplier)
+    if not supplier_slug:
+        supplier_slug = normalize_counterparty_name(supplier)
+    return redirect(url_for("core.consolidated_supplier_ledger", supplier_norm=supplier_slug))
+
+
+def _resolve_supplier_ledger_identity(supplier_input: str):
+    from core.models import UnifiedSupplierAdvance
+    from utils import generate_supplier_slug, normalize_counterparty_name
+
+    input_value = (supplier_input or "").strip()
+    if not input_value:
+        return None
+
+    normalized_input = normalize_counterparty_name(input_value)
+    slug_candidates = []
+    for candidate in (input_value.lower(), generate_supplier_slug(input_value)):
+        candidate = (candidate or "").strip().lower()
+        if candidate and candidate not in slug_candidates:
+            slug_candidates.append(candidate)
+
+    query_filters = []
+    if slug_candidates:
+        query_filters.append(UnifiedSupplierAdvance.supplier_slug.in_(slug_candidates))
+    if normalized_input:
+        query_filters.append(UnifiedSupplierAdvance.supplier_name_norm == normalized_input)
+    query_filters.append(func.lower(func.trim(UnifiedSupplierAdvance.supplier_name)) == input_value.lower())
+
+    row = (
+        db.session.query(
+            UnifiedSupplierAdvance.supplier_name,
+            UnifiedSupplierAdvance.supplier_name_norm,
+            UnifiedSupplierAdvance.supplier_slug,
+        )
+        .filter(
+            UnifiedSupplierAdvance.is_deleted.is_(False),
+            or_(*query_filters),
+        )
+        .order_by(UnifiedSupplierAdvance.paid_at.desc(), UnifiedSupplierAdvance.id.desc())
+        .first()
+    )
+    if row:
+        return row
+
+    fallback_slug = generate_supplier_slug(input_value) or normalized_input
+    return input_value, normalized_input, fallback_slug
 
 
 @core_bp.route("/accountant/suppliers/suggest", methods=["GET"])
@@ -352,6 +397,7 @@ def supplier_name_suggest():
         return safe_jsonify({"results": []})
 
     try:
+        from utils import generate_supplier_slug, sql_normalize_counterparty_expr
         from copper.models import CopperSupplier
         from cassiterite.models import CassiteriteSupplier
         from copper.models import CopperStock
@@ -359,10 +405,19 @@ def supplier_name_suggest():
         from core.models import UnifiedSupplierAdvance
 
         pattern = f"%{q}%"
+        normalized_q = normalize_counterparty_name(q)
+        normalized_pattern = f"%{'%'.join(normalized_q.split())}%" if normalized_q else pattern
+        slug_q = generate_supplier_slug(q)
+
+        copper_name_expr = sql_normalize_counterparty_expr(CopperSupplier.name)
+        cass_name_expr = sql_normalize_counterparty_expr(CassiteriteSupplier.name)
+        copper_stock_expr = sql_normalize_counterparty_expr(CopperStock.supplier)
+        cass_stock_expr = sql_normalize_counterparty_expr(CassiteriteStock.supplier)
+        unified_name_expr = sql_normalize_counterparty_expr(UnifiedSupplierAdvance.supplier_name)
         copper_rows = (
             db.session.query(CopperSupplier.name)
             .filter(CopperSupplier.is_deleted.is_(False))
-            .filter(CopperSupplier.name.ilike(pattern))
+            .filter(or_(CopperSupplier.name.ilike(pattern), copper_name_expr.ilike(normalized_pattern)))
             .order_by(CopperSupplier.name.asc())
             .limit(10)
             .all()
@@ -370,8 +425,24 @@ def supplier_name_suggest():
         cass_rows = (
             db.session.query(CassiteriteSupplier.name)
             .filter(CassiteriteSupplier.is_deleted.is_(False))
-            .filter(CassiteriteSupplier.name.ilike(pattern))
+            .filter(or_(CassiteriteSupplier.name.ilike(pattern), cass_name_expr.ilike(normalized_pattern)))
             .order_by(CassiteriteSupplier.name.asc())
+            .limit(10)
+            .all()
+        )
+
+        unified_rows = (
+            db.session.query(UnifiedSupplierAdvance.supplier_name)
+            .filter(UnifiedSupplierAdvance.is_deleted.is_(False))
+            .filter(
+                or_(
+                    UnifiedSupplierAdvance.supplier_name.ilike(pattern),
+                    unified_name_expr.ilike(normalized_pattern),
+                    UnifiedSupplierAdvance.supplier_name_norm == normalized_q,
+                    UnifiedSupplierAdvance.supplier_slug == slug_q,
+                )
+            )
+            .order_by(UnifiedSupplierAdvance.paid_at.desc(), UnifiedSupplierAdvance.id.desc())
             .limit(10)
             .all()
         )
@@ -381,7 +452,7 @@ def supplier_name_suggest():
         copper_stock_rows = (
             db.session.query(func.trim(CopperStock.supplier))
             .filter(CopperStock.is_deleted.is_(False))
-            .filter(func.trim(CopperStock.supplier).ilike(pattern))
+            .filter(or_(func.trim(CopperStock.supplier).ilike(pattern), copper_stock_expr.ilike(normalized_pattern)))
             .group_by(func.trim(CopperStock.supplier))
             .order_by(func.trim(CopperStock.supplier).asc())
             .limit(10)
@@ -390,7 +461,7 @@ def supplier_name_suggest():
         cass_stock_rows = (
             db.session.query(func.trim(CassiteriteStock.supplier))
             .filter(CassiteriteStock.is_deleted.is_(False))
-            .filter(func.trim(CassiteriteStock.supplier).ilike(pattern))
+            .filter(or_(func.trim(CassiteriteStock.supplier).ilike(pattern), cass_stock_expr.ilike(normalized_pattern)))
             .group_by(func.trim(CassiteriteStock.supplier))
             .order_by(func.trim(CassiteriteStock.supplier).asc())
             .limit(10)
@@ -408,6 +479,15 @@ def supplier_name_suggest():
             seen.add(key)
             results.append({"name": name})
         for (name,) in (cass_rows or []):
+            if not name:
+                continue
+            key = name.strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({"name": name})
+
+        for (name,) in (unified_rows or []):
             if not name:
                 continue
             key = name.strip().lower()
@@ -580,38 +660,20 @@ def voucher_suggest():
 @role_required("accountant", "boss", "admin")
 def consolidated_supplier_ledger(supplier_norm: str):
     from core.models import UnifiedSupplierAdvance, UnifiedSupplierAdvanceAllocation
-    from utils import calculate_consolidated_supplier_remaining_balance, normalize_counterparty_name
+    from utils import calculate_consolidated_supplier_remaining_balance, normalize_counterparty_name, sql_normalize_counterparty_expr
 
     # Resolve supplier name from parameter (could be slug, normalized name, or direct name)
     input_norm = (supplier_norm or '').strip().lower()
     if not input_norm:
         abort(404)
-    
-    norm = None
-    was_slug_input = False
-    
-    # Strategy 1: If input looks like a slug (contains hyphens, no spaces/slashes),
-    # try to find the actual supplier name by matching the supplier_slug in DB
-    if '-' in input_norm and ' ' not in input_norm and '/' not in input_norm:
-        was_slug_input = True
-        slug_matches = (
-            db.session.query(UnifiedSupplierAdvance.supplier_name_norm)
-            .filter(
-                UnifiedSupplierAdvance.is_deleted.is_(False),
-                UnifiedSupplierAdvance.supplier_slug == input_norm,
-            )
-            .group_by(UnifiedSupplierAdvance.supplier_name_norm)
-            .first()
-        )
-        if slug_matches:
-            norm = slug_matches[0]
-    
-    # Strategy 2: If no match yet, canonicalize input safely for names that may
-    # contain slashes/punctuation (e.g. "uwimana/alphonse").
-    if not norm:
-        candidate = ' '.join(input_norm.split('-')) if was_slug_input else input_norm
-        norm = normalize_counterparty_name(candidate)
-    
+
+    resolved = _resolve_supplier_ledger_identity(input_norm)
+    if not resolved:
+        abort(404)
+
+    supplier_name, norm, supplier_slug = resolved
+    norm = norm or normalize_counterparty_name(supplier_name or input_norm)
+
     if not norm:
         abort(404)
 
@@ -759,7 +821,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
             CopperStock.query
             .filter(
                 CopperStock.is_deleted.is_(False),
-                func.lower(CopperStock.supplier).ilike(supplier_like),
+                sql_normalize_counterparty_expr(CopperStock.supplier).ilike(supplier_like),
             )
         )
         if filter_from:
@@ -778,7 +840,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 CopperStock.query
                 .filter(
                     CopperStock.is_deleted.is_(False),
-                    func.lower(CopperStock.supplier).ilike(supplier_like),
+                    sql_normalize_counterparty_expr(CopperStock.supplier).ilike(supplier_like),
                 )
                 .order_by(CopperStock.date.desc(), CopperStock.id.desc())
                 .limit(500)
@@ -795,7 +857,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
             CassiteriteStock.query
             .filter(
                 CassiteriteStock.is_deleted.is_(False),
-                func.lower(CassiteriteStock.supplier).ilike(supplier_like),
+                sql_normalize_counterparty_expr(CassiteriteStock.supplier).ilike(supplier_like),
             )
         )
         if filter_from:
@@ -813,7 +875,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
                 CassiteriteStock.query
                 .filter(
                     CassiteriteStock.is_deleted.is_(False),
-                    func.lower(CassiteriteStock.supplier).ilike(supplier_like),
+                    sql_normalize_counterparty_expr(CassiteriteStock.supplier).ilike(supplier_like),
                 )
                 .order_by(CassiteriteStock.date.desc(), CassiteriteStock.id.desc())
                 .limit(500)
@@ -1283,7 +1345,7 @@ def consolidated_supplier_ledger(supplier_norm: str):
         "suppliers/consolidated_ledger.html",
         supplier_name=supplier_name,
         supplier_norm=norm,
-        supplier_slug=generate_supplier_slug(supplier_name or norm),
+        supplier_slug=supplier_slug or generate_supplier_slug(supplier_name or norm),
         wallet_remaining=wallet_remaining,
         total_advanced=total_advanced,
         total_refunded=total_refunded,
@@ -1799,7 +1861,7 @@ def _render_transporter_receipt_detail(ledger_id: int):
     )
 
     is_advance = entry_type == 'ADVANCE'
-    is_fee_charge = entry_type == 'TRANSPORTER_FEE_CHARGE'
+    is_fee_charge = entry_type in {'TRANSPORTER_FEE_CHARGE', 'BUSINESS_RETENTION_RECOVERY'}
     if is_advance:
         receipt_reference = f'TRP-ADV-{row.id:04d}'
         document_title = 'TRANSPORTER ADVANCE RECEIPT'
@@ -1839,6 +1901,7 @@ def _render_transporter_receipt_detail(ledger_id: int):
             'balance_rwf': float(current_balance or 0.0),
             'amount_rwf': float(row.amount_rwf or 0.0),
         },
+        hide_balance_rows=bool(is_fee_charge or float(row.amount_rwf or 0.0) < 0.0),
     )
 
 
@@ -1858,6 +1921,7 @@ def transporter_advance_receipt_detail(ledger_id: int):
 @role_required('accountant', 'boss', 'admin', 'cashier')
 def supplier_settlement_statement(supplier_norm: str):
     from core.models import UnifiedSupplierAdvance
+    from utils import sql_normalize_counterparty_expr
     
     # Resolve supplier name from parameter (could be slug, normalized name, or direct name)
     input_norm = (supplier_norm or '').strip().lower()
@@ -1908,7 +1972,7 @@ def supplier_settlement_statement(supplier_norm: str):
     try:
         supplier_name = (
             db.session.query(func.max(func.trim(CopperStock.supplier)))
-            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+            .filter(CopperStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CopperStock.supplier).ilike(supplier_like))
             .scalar()
         )
     except Exception:
@@ -1917,7 +1981,7 @@ def supplier_settlement_statement(supplier_norm: str):
         try:
             supplier_name = (
                 db.session.query(func.max(func.trim(CassiteriteStock.supplier)))
-                .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+                .filter(CassiteriteStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CassiteriteStock.supplier).ilike(supplier_like))
                 .scalar()
             )
         except Exception:
@@ -1928,7 +1992,7 @@ def supplier_settlement_statement(supplier_norm: str):
 
     copper_rows = (
         CopperStock.query
-        .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+        .filter(CopperStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CopperStock.supplier).ilike(supplier_like))
         .order_by(CopperStock.date.desc(), CopperStock.id.desc())
         .limit(2000)
         .all()
@@ -1963,7 +2027,7 @@ def supplier_settlement_statement(supplier_norm: str):
 
     cass_rows = (
         CassiteriteStock.query
-        .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+        .filter(CassiteriteStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CassiteriteStock.supplier).ilike(supplier_like))
         .order_by(CassiteriteStock.date.desc(), CassiteriteStock.id.desc())
         .limit(2000)
         .all()
@@ -2035,7 +2099,7 @@ def supplier_settlement_statement(supplier_norm: str):
 @core_bp.route('/accountant/suppliers/<path:supplier_norm>/settle-open-balances', methods=['POST'])
 @role_required('accountant', 'boss', 'admin')
 def settle_supplier_open_balances(supplier_norm: str):
-    from utils import normalize_counterparty_name, generate_supplier_slug
+    from utils import normalize_counterparty_name, generate_supplier_slug, sql_normalize_counterparty_expr
     from copper.models import CopperStock, SupplierPayment as CopperSupplierPayment
     from cassiterite.models import CassiteriteStock, CassiteriteSupplierPayment
     from core.models import User
@@ -2050,7 +2114,7 @@ def settle_supplier_open_balances(supplier_norm: str):
         was_slug_input = True
         slug_matches = (
             db.session.query(func.max(func.trim(CopperStock.supplier)))
-            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(f"%{'%'.join(input_norm.split('-'))}%"))
+            .filter(CopperStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CopperStock.supplier).ilike(f"%{'%'.join(input_norm.split('-'))}%"))
             .scalar()
         )
         if slug_matches:
@@ -2068,7 +2132,7 @@ def settle_supplier_open_balances(supplier_norm: str):
     try:
         supplier_name = (
             db.session.query(func.max(func.trim(CopperStock.supplier)))
-            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+            .filter(CopperStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CopperStock.supplier).ilike(supplier_like))
             .scalar()
         )
     except Exception:
@@ -2077,7 +2141,7 @@ def settle_supplier_open_balances(supplier_norm: str):
         try:
             supplier_name = (
                 db.session.query(func.max(func.trim(CassiteriteStock.supplier)))
-                .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+                .filter(CassiteriteStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CassiteriteStock.supplier).ilike(supplier_like))
                 .scalar()
             )
         except Exception:
@@ -2096,7 +2160,7 @@ def settle_supplier_open_balances(supplier_norm: str):
     # Copper stocks
     copper_stocks = (
         CopperStock.query
-        .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+        .filter(CopperStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CopperStock.supplier).ilike(supplier_like))
         .order_by(CopperStock.date.asc(), CopperStock.id.asc())
         .all()
     )
@@ -2132,7 +2196,7 @@ def settle_supplier_open_balances(supplier_norm: str):
     # Cassiterite stocks
     cass_stocks = (
         CassiteriteStock.query
-        .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+        .filter(CassiteriteStock.is_deleted.is_(False), sql_normalize_counterparty_expr(CassiteriteStock.supplier).ilike(supplier_like))
         .order_by(CassiteriteStock.date.asc(), CassiteriteStock.id.asc())
         .all()
     )
@@ -3920,6 +3984,51 @@ def store_execute_bulk_plan(plan_id: int):
         return redirect(url_for("core.store_dashboard"))
 
     flash("Stock confirmed and output executed successfully.", "success")
+    return redirect(url_for("core.store_dashboard"))
+
+
+@core_bp.route("/store/bulk-plan/<int:plan_id>/reject", methods=["POST"])
+@role_required("store_keeper")
+def store_reject_bulk_plan(plan_id: int):
+    """Store keeper rejects a bulk output plan when the stock is not actually available."""
+
+    plan = BulkOutputPlan.query.get_or_404(plan_id)
+    if plan.status != BulkPlanStatus.SENT_TO_STORE.value:
+        flash("Only plans waiting for store confirmation can be rejected.", "warning")
+        return redirect(url_for("core.store_dashboard"))
+
+    reject_reason = (request.form.get("reject_reason") or request.form.get("note") or "").strip()
+    if not reject_reason:
+        reject_reason = "Stock not found or not available in store"
+
+    plan.status = BulkPlanStatus.CANCELLED.value
+    if plan.note:
+        plan.note = f"{plan.note} | REJECTED: {reject_reason}"
+    else:
+        plan.note = f"REJECTED: {reject_reason}"
+
+    try:
+        from core.models import create_notification, User
+
+        active_users = User.query.filter_by(is_active=True).all()
+        for user in active_users:
+            if getattr(user, "role", None) in {"accountant", "boss", "admin"}:
+                create_notification(
+                    user_id=user.id,
+                    type_="BULK_PLAN_REJECTED",
+                    message=(
+                        f"Store keeper rejected {plan.mineral_type} batch {plan.batch_id}. Reason: {reject_reason}"
+                    ),
+                    related_type="bulk_plan",
+                    related_id=plan.id,
+                )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        flash("Failed to reject plan. Please try again.", "danger")
+        return redirect(url_for("core.store_dashboard"))
+
+    flash("Bulk output plan rejected.", "warning")
     return redirect(url_for("core.store_dashboard"))
 
 

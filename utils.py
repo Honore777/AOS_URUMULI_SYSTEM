@@ -28,6 +28,16 @@ def normalize_counterparty_name(name: str) -> str:
     return ' '.join(raw.split())
 
 
+def sql_normalize_counterparty_expr(column_expr):
+    """Normalize a text SQL expression using the same separator rules as Python normalization."""
+    from sqlalchemy import func
+
+    expr = func.lower(func.trim(func.coalesce(column_expr, '')))
+    for separator in ('/', '-', '.', '_'):
+        expr = func.replace(expr, separator, ' ')
+    return func.trim(expr)
+
+
 def generate_supplier_slug(name: str) -> str:
     """Generate a URL-safe slug from supplier name.
     
@@ -152,15 +162,21 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
 
         supplier_like = f"%{'%'.join(normalized.split())}%"
 
+        copper_supplier_expr = sql_normalize_counterparty_expr(CopperStock.supplier)
+        cassiterite_supplier_expr = sql_normalize_counterparty_expr(CassiteriteStock.supplier)
+        copper_payment_expr = sql_normalize_counterparty_expr(CopperSupplierPayment.supplier_name)
+        cassiterite_payment_expr = sql_normalize_counterparty_expr(CassiteriteSupplierPayment.supplier_name)
+        deduction_expr = sql_normalize_counterparty_expr(SupplierDeduction.supplier_name)
+
         copper_stock_debt = float(
             db.session.query(func.coalesce(func.sum(CopperStock.net_balance), 0))
-            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+            .filter(CopperStock.is_deleted.is_(False), copper_supplier_expr.ilike(supplier_like))
             .scalar()
             or 0.0
         )
         cass_stock_debt = float(
             db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0))
-            .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+            .filter(CassiteriteStock.is_deleted.is_(False), cassiterite_supplier_expr.ilike(supplier_like))
             .scalar()
             or 0.0
         )
@@ -168,14 +184,14 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
         copper_allocation = float(
             db.session.query(func.coalesce(func.sum(CopperAdvanceAllocation.applied_amount), 0))
             .join(CopperStock, CopperStock.id == CopperAdvanceAllocation.stock_id)
-            .filter(CopperStock.is_deleted.is_(False), func.lower(CopperStock.supplier).ilike(supplier_like))
+            .filter(CopperStock.is_deleted.is_(False), copper_supplier_expr.ilike(supplier_like))
             .scalar()
             or 0.0
         )
         cass_allocation = float(
             db.session.query(func.coalesce(func.sum(CassiteriteAdvanceAllocation.applied_amount), 0))
             .join(CassiteriteStock, CassiteriteStock.id == CassiteriteAdvanceAllocation.stock_id)
-            .filter(CassiteriteStock.is_deleted.is_(False), func.lower(CassiteriteStock.supplier).ilike(supplier_like))
+            .filter(CassiteriteStock.is_deleted.is_(False), cassiterite_supplier_expr.ilike(supplier_like))
             .scalar()
             or 0.0
         )
@@ -187,8 +203,8 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
                 CopperSupplierPayment.is_deleted.is_(False),
                 CopperSupplierPayment.is_advance.is_(False),
                 or_(
-                    func.lower(CopperStock.supplier).ilike(supplier_like),
-                    func.lower(func.coalesce(CopperSupplierPayment.supplier_name, '')).ilike(supplier_like),
+                    copper_supplier_expr.ilike(supplier_like),
+                    copper_payment_expr.ilike(supplier_like),
                 ),
             )
             .scalar()
@@ -201,8 +217,8 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
                 CassiteriteSupplierPayment.is_deleted.is_(False),
                 CassiteriteSupplierPayment.is_advance.is_(False),
                 or_(
-                    func.lower(CassiteriteStock.supplier).ilike(supplier_like),
-                    func.lower(func.coalesce(CassiteriteSupplierPayment.supplier_name, '')).ilike(supplier_like),
+                    cassiterite_supplier_expr.ilike(supplier_like),
+                    cassiterite_payment_expr.ilike(supplier_like),
                 ),
             )
             .scalar()
@@ -226,7 +242,7 @@ def calculate_consolidated_supplier_remaining_balance(supplier_name: str) -> flo
 
         supplier_deduction_credit = float(
             db.session.query(func.coalesce(func.sum(SupplierDeduction.amount_rwf), 0))
-            .filter(SupplierDeduction.supplier_name.ilike(supplier_like))
+            .filter(deduction_expr.ilike(supplier_like))
             .scalar()
             or 0.0
         )

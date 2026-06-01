@@ -36,7 +36,14 @@ def _get_or_create_supplier_id(name):
     clean = (name or '').strip()
     if not clean:
         return None
-    supplier = CopperSupplier.query.filter(func.lower(CopperSupplier.name) == clean.lower()).first()
+    normalized = normalize_counterparty_name(clean)
+    supplier = CopperSupplier.query.filter(
+        func.lower(func.trim(CopperSupplier.name)) == clean.lower()
+    ).first()
+    if not supplier and normalized:
+        supplier = CopperSupplier.query.filter(
+            func.lower(func.trim(CopperSupplier.name)).ilike(f"%{'%'.join(normalized.split())}%")
+        ).first()
     if supplier:
         return supplier.id
     supplier = CopperSupplier(name=clean)
@@ -65,10 +72,14 @@ def pay_supplier_search():
     """AJAX endpoint: search suppliers by partial name and return remaining amount (Copper)."""
     # use safe_jsonify to ensure Decimal -> float conversion
     from copper.models import CopperStock, CopperSupplier
+    from cassiterite.models import CassiteriteStock, CassiteriteSupplier
+    from core.models import UnifiedSupplierAdvance
 
     q = (request.args.get('q') or '').strip()
     if not q:
         return safe_jsonify([])
+
+    q_norm = normalize_counterparty_name(q)
 
     names = set()
     try:
@@ -88,6 +99,62 @@ def pay_supplier_search():
             db.session.rollback()
         except Exception:
             pass
+
+    try:
+        rows3 = db.session.query(CassiteriteStock.supplier).filter(CassiteriteStock.supplier.ilike(f"%{q}%")).distinct().all()
+        names.update([r[0] for r in rows3 if r[0]])
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+    try:
+        rows4 = db.session.query(CassiteriteSupplier.name).filter(CassiteriteSupplier.name.ilike(f"%{q}%")).distinct().all()
+        names.update([r[0] for r in rows4 if r[0]])
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+    try:
+        rows5 = (
+            db.session.query(UnifiedSupplierAdvance.supplier_name)
+            .filter(
+                UnifiedSupplierAdvance.is_deleted.is_(False),
+                UnifiedSupplierAdvance.supplier_name.isnot(None),
+                UnifiedSupplierAdvance.supplier_name.ilike(f"%{q}%"),
+            )
+            .distinct()
+            .all()
+        )
+        names.update([r[0] for r in rows5 if r[0]])
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+    if q_norm:
+        try:
+            rows6 = (
+                db.session.query(UnifiedSupplierAdvance.supplier_name)
+                .filter(
+                    UnifiedSupplierAdvance.is_deleted.is_(False),
+                    UnifiedSupplierAdvance.supplier_name.isnot(None),
+                )
+                .distinct()
+                .all()
+            )
+            for (name,) in rows6:
+                if name and q_norm in normalize_counterparty_name(name):
+                    names.add(name)
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
 
     results = []
     for name in sorted(names):
@@ -685,6 +752,7 @@ def pay_supplier():
         row = _ensure(name)
         if not row:
             continue
+        row['advance_total'] = float(row.get('advance_total') or 0.0) + 1.0
         if r.latest_paid_at and (row['latest_paid_at'] is None or r.latest_paid_at > row['latest_paid_at']):
             row['latest_paid_at'] = r.latest_paid_at
         row['minerals'].add('Advance')
@@ -706,7 +774,7 @@ def pay_supplier():
         net_balance = float(r.get('net_balance') or 0.0)
         total_paid = float(r.get('total_paid') or 0.0)
         remaining = float(remaining_map.get(' '.join(supplier_name.lower().split()), net_balance - total_paid))
-        if abs(remaining) <= 0.0001 and net_balance <= 0 and total_paid <= 0:
+        if abs(remaining) <= 0.0001 and net_balance <= 0 and total_paid <= 0 and float(r.get('advance_total') or 0.0) <= 0:
             continue
         rows.append({
             'supplier': supplier_name,

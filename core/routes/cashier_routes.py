@@ -587,7 +587,7 @@ def cashier_receipts_audit():
         else:
             receipt_number = f"TRP-PAY-{int(row_obj.id):04d}"
         view_url = None
-        if entry_kind in {'ADVANCE', 'CASH_PAYMENT', 'TRANSPORTER_FEE_CHARGE'}:
+        if entry_kind in {'ADVANCE', 'CASH_PAYMENT'}:
             view_url = url_for('core.transporter_payment_receipt_detail', ledger_id=int(row_obj.id))
         rows.append({
             'kind': 'transporter',
@@ -1777,7 +1777,7 @@ def cashier_disburse_payment_review(review_id: int):
                         user_id=int(boss_id),
                         type_='TRANSPORTER_PAID',
                         message=(
-                            f"Umubitsi {getattr(current_user, 'username', 'unknown')} yatanze amafaranga ku mutwara: {ledger.transporter_name} "
+                            f"Umubitsi {getattr(current_user, 'username', 'unknown')} yatanze amafaranga ku mutwara: {transporter_name} "
                             f"Amount: {tx_amount:,.2f} {currency}."
                         ),
                         related_type='payment_review',

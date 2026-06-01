@@ -19,7 +19,7 @@
                 <a href="{{ url_for('core.boss_dashboard') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 shadow-sm">
                     Subira inyuma
                 </a>
-                <a href="{{ url_for('core.supplier_settlement_statement', supplier_norm=supplier_norm) }}" target="_blank" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 shadow-sm">
+                <a href="{{ url_for('core.supplier_settlement_statement', supplier_norm=supplier_slug or supplier_norm) }}" target="_blank" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 shadow-sm">
                     Urutonde rw'ibyabaye mukwishyura
                 </a>
                 <a href="{{ url_for('core.supplier_charge_fee') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-rose-700 text-white font-semibold hover:bg-rose-800 shadow-md ring-1 ring-rose-900/20">
@@ -28,7 +28,7 @@
                 <a href="{{ url_for('core.transporter_ledger_index') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-fuchsia-700 text-white font-semibold hover:bg-fuchsia-800 shadow-md ring-1 ring-fuchsia-900/20">
                     Transporter ledger
                 </a>
-                <form method="post" action="{{ url_for('core.settle_supplier_open_balances', supplier_norm=supplier_norm) }}" onsubmit="return confirm('Settle all open balances for this supplier now?');">
+                <form method="post" action="{{ url_for('core.settle_supplier_open_balances', supplier_norm=supplier_slug or supplier_norm) }}" onsubmit="return confirm('Settle all open balances for this supplier now?');">
                     <input type="hidden" name="note" value="Direct supplier settlement from consolidated ledger">
                     <button type="submit" class="inline-flex items-center px-4 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shadow-sm disabled hidden">
                         Settle Open Balances
@@ -92,13 +92,13 @@
                 <p class="mt-1 text-sm text-slate-500">Igitabo mbaruramari.</p>
                 <div class="mt-4 flex flex-col gap-3">
                     <div class="flex flex-wrap gap-2">
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='30d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '30d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 30 days</a>
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='90d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '90d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 90 days</a>
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='month') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'month' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">This month</a>
-                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm, preset='all') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'all' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">All time</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug or supplier_norm, preset='30d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '30d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 30 days</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug or supplier_norm, preset='90d') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == '90d' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">Last 90 days</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug or supplier_norm, preset='month') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'month' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">This month</a>
+                        <a href="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug or supplier_norm, preset='all') }}" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border {% if filter_preset == 'all' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-50{% endif %}">All time</a>
                     </div>
 
-                    <form method="GET" action="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_norm) }}" class="grid grid-cols-1 gap-3 md:grid-cols-5">
+                    <form method="GET" action="{{ url_for('core.consolidated_supplier_ledger', supplier_norm=supplier_slug or supplier_norm) }}" class="grid grid-cols-1 gap-3 md:grid-cols-5">
                         <div>
                             <label class="block text-xs font-semibold text-slate-600">From</label>
                             <input type="date" name="from" value="{{ filter_from.strftime('%Y-%m-%d') if filter_from else '' }}" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />

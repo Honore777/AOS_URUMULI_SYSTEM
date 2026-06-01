@@ -60,16 +60,18 @@
                 </tr>
                 <tr>
                     <th>Paid Amount</th>
-                    <td>{{ '{:,.2f}'.format(paid_amount or 0) }} {{ paid_currency or original_currency or 'RWF' }}</td>
+                    <td class="{% if (paid_amount or 0) < 0 %}text-red-700 font-bold{% else %}text-slate-900{% endif %}">{{ '{:,.2f}'.format(paid_amount or 0) }} {{ paid_currency or original_currency or 'RWF' }}</td>
                     <th>Paid Amount (RWF)</th>
-                    <td>{{ '{:,.2f}'.format(paid_amount_rwf or 0) }} RWF</td>
+                    <td class="{% if (paid_amount_rwf or 0) < 0 %}text-red-700 font-bold{% else %}text-slate-900{% endif %}">{{ '{:,.2f}'.format(paid_amount_rwf or 0) }} RWF</td>
                 </tr>
+                {% if not hide_balance_rows %}
                 <tr>
                     <th>Remaining Amount</th>
-                    <td>{{ '{:,.2f}'.format(remaining_amount or 0) }} {{ remaining_currency or 'RWF' }}</td>
+                    <td class="{% if (remaining_amount or 0) < 0 %}text-red-700 font-bold{% else %}text-slate-900{% endif %}">{{ '{:,.2f}'.format(remaining_amount or 0) }} {{ remaining_currency or 'RWF' }}</td>
                     <th>Note</th>
                     <td>{{ note or '-' }}</td>
                 </tr>
+                {% endif %}
             </table>
 
             {% if summary_values %}

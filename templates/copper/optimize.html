@@ -345,6 +345,8 @@
                                     <th class="px-4 py-2 text-left">Supplier</th>
                                     <th class="px-4 py-2 text-left">Unit %</th>
                                     <th class="px-4 py-2 text-left">T_Unity</th>
+                                    <th class="px-4 py-2 text-left">Percentage</th>
+                                    <th class="px-4 py-2 text-left">Nobelium</th>
                                     <th class="px-4 py-2 text-left">Available (kg)</th>
                                     <th class="px-4 py-2 text-left">Quantity (kg) - EDIT</th>
                                 </tr>
@@ -357,6 +359,8 @@
                                     <td class="px-4 py-2">{{ stock.supplier }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.unit_percent) }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.t_unity) }}</td>
+                                    <td class="px-4 py-2">{{ "%.4f"|format(stock.percentage or 0) }}</td>
+                                    <td class="px-4 py-2">{{ "%.4f"|format(stock.nb or 0) }}</td>
                                     <td class="px-4 py-2 text-right">{{ "%.2f"|format(stock.local_balance) }}</td>
                                     <td class="px-4 py-2">
                                         <input type="number" 

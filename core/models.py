@@ -357,6 +357,7 @@ class BulkPlanStatus(enum.Enum):
         SENT_TO_STORE = "SENT_TO_STORE"
         STOCK_CONFIRMED = "STOCK_CONFIRMED"
         EXECUTED = "EXECUTED"
+        CANCELLED = "CANCELLED"
 
 
 class BulkOutputPlan(db.Model):

@@ -63,6 +63,7 @@
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Mineral</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Customer</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Batch</th>
+                                <th class="px-4 py-3 text-left text-sm font-semibold">Note</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Planned Lines</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Action</th>
@@ -75,6 +76,7 @@
                                     <td class="px-4 py-3 text-gray-700 uppercase">{{ plan.mineral_type }}</td>
                                     <td class="px-4 py-3 text-gray-700">{{ plan.customer or 'N/A' }}</td>
                                     <td class="px-4 py-3 text-gray-700">{{ plan.batch_id or 'N/A' }}</td>
+                                    <td class="px-4 py-3 text-gray-700 text-sm leading-5">{{ plan.note or 'N/A' }}</td>
                                     <td class="px-4 py-3 text-gray-700">{{ plan.status }}</td>
                                     <td class="px-4 py-3 text-gray-700">
                                         {% if plan.plan_json %}
@@ -107,13 +109,23 @@
                                     </td>
                                     <td class="px-4 py-3 text-gray-700">
                                         {% if plan.status == 'SENT_TO_STORE' %}
-                                        <form method="post" action="{{ url_for('core.store_execute_bulk_plan', plan_id=plan.id) }}">
-                                            <button type="submit" class="inline-flex items-center rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
-                                                Confirm Stock & Execute
-                                            </button>
-                                        </form>
+                                        <div class="flex flex-wrap gap-2">
+                                            <form method="post" action="{{ url_for('core.store_execute_bulk_plan', plan_id=plan.id) }}">
+                                                <button type="submit" class="inline-flex items-center rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                                                    Confirm Stock & Execute
+                                                </button>
+                                            </form>
+                                            <form method="post" action="{{ url_for('core.store_reject_bulk_plan', plan_id=plan.id) }}" class="js-reject-plan">
+                                                <input type="hidden" name="reject_reason" value="">
+                                                <button type="submit" class="inline-flex items-center rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700">
+                                                    Reject Plan
+                                                </button>
+                                            </form>
+                                        </div>
                                         {% elif plan.status == 'STOCK_CONFIRMED' %}
                                         <span class="inline-flex items-center rounded bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-700">Executed (Awaiting Receipts)</span>
+                                        {% elif plan.status == 'CANCELLED' %}
+                                        <span class="inline-flex items-center rounded bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-700">Rejected</span>
                                         {% else %}
                                         <span class="inline-flex items-center rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{{ plan.status }}</span>
                                         {% endif %}
@@ -131,6 +143,77 @@
     </div>
     </div>
     <script>
+        (function () {
+            const modal = document.createElement('div');
+            modal.id = 'reject-plan-modal';
+            modal.className = 'fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/60 px-4';
+            modal.innerHTML = `
+                <div class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <p class="text-xs font-semibold uppercase tracking-[0.3em] text-red-600">Confirm Rejection</p>
+                            <h2 class="mt-2 text-xl font-black text-slate-900">Reject this bulk output plan?</h2>
+                            <p class="mt-2 text-sm text-slate-600">Add a reason so the audit trail stays clear.</p>
+                        </div>
+                        <button type="button" id="reject-plan-close" class="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-200">Close</button>
+                    </div>
+                    <label class="mt-5 block text-sm font-semibold text-slate-700" for="reject-plan-reason">Reason</label>
+                    <textarea id="reject-plan-reason" rows="4" class="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Example: stock mismatch, supplier error, or customer request"></textarea>
+                    <div class="mt-6 flex items-center justify-end gap-3">
+                        <button type="button" id="reject-plan-cancel" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Cancel</button>
+                        <button type="button" id="reject-plan-submit" class="rounded-xl bg-rose-600 px-4 py-2 text-sm font-bold text-white hover:bg-rose-700">Reject Plan</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            let activeForm = null;
+
+            function showModal(form) {
+                activeForm = form;
+                const input = document.getElementById('reject-plan-reason');
+                if (input) {
+                    input.value = '';
+                }
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+                if (input) {
+                    setTimeout(() => input.focus(), 0);
+                }
+            }
+
+            function hideModal() {
+                activeForm = null;
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+
+            document.querySelectorAll('.js-reject-plan').forEach((form) => {
+                form.addEventListener('submit', function (event) {
+                    event.preventDefault();
+                    showModal(form);
+                });
+            });
+
+            document.getElementById('reject-plan-close')?.addEventListener('click', hideModal);
+            document.getElementById('reject-plan-cancel')?.addEventListener('click', hideModal);
+            modal.addEventListener('click', (event) => {
+                if (event.target === modal) hideModal();
+            });
+            document.getElementById('reject-plan-submit')?.addEventListener('click', () => {
+                const input = document.getElementById('reject-plan-reason');
+                const reason = (input?.value || '').trim();
+                if (!reason) {
+                    if (input) input.focus();
+                    return;
+                }
+                if (!activeForm) return;
+                const hidden = activeForm.querySelector('input[name="reject_reason"]');
+                if (hidden) hidden.value = reason;
+                activeForm.submit();
+            });
+        })();
+
         function formatNumber(n, decimals = 2) {
             if (n === null || n === undefined || isNaN(n)) {
                 return Number(0).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
