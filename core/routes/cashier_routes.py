@@ -1770,6 +1770,7 @@ def cashier_disburse_payment_review(review_id: int):
                 if entry_kind == 'ADVANCE':
                     review.boss_comment = (review.boss_comment or '') + f" | transporter_advance_ledger_id={int(cash_ledger.id)}"
                     receipt_redirect_url = url_for('core.transporter_advance_receipt_detail', ledger_id=int(cash_ledger.id))
+                db.session.add(review)
 
                 boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
                 for (boss_id,) in boss_rows:
