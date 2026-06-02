@@ -1723,6 +1723,8 @@ def cashier_disburse_payment_review(review_id: int):
                 if entry_kind not in {'ADVANCE', 'CASH_PAYMENT'}:
                     raise ValueError('Invalid payment type for transporter.')
 
+                logger.info(f"pay_transporter action: transporter={transporter_name}, entry_kind={entry_kind}, amount_rwf={amount_rwf}")
+
                 tx = CashTransaction(
                     account_id=account.id,
                     amount=tx_amount,
@@ -1744,36 +1746,44 @@ def cashier_disburse_payment_review(review_id: int):
                 db.session.add(account)
                 db.session.flush()
 
+                logger.info(f"CashTransaction created: tx_id={tx.id}, amount_rwf={tx.amount_rwf}, new_balance={account.current_balance}")
+
                 # Only create TransporterLedger for ADVANCE; CASH_PAYMENT is just a normal business expense
                 if entry_kind == 'ADVANCE':
-                    ledger_amount = float(abs(amount_rwf or tx_amount))
-                    cash_ledger = TransporterLedger(
-                        transporter_name=transporter_name,
-                        supplier_name=None,
-                        entry_type='ADVANCE',
-                        amount_input=float(amount_input or tx_amount),
-                        currency=currency,
-                        exchange_rate=float(exchange_rate or 1.0),
-                        amount_rwf=float(ledger_amount),
-                        is_paid=True,
-                        paid_at=datetime.utcnow(),
-                        created_by_id=getattr(current_user, 'id', None),
-                        note=note or f'Transporter cash payment - {transporter_name}',
-                        payment_review_id=int(review.id),
-                        cash_transaction_id=int(tx.id),
-                    )
-                    db.session.add(cash_ledger)
-                    db.session.flush()
+                    try:
+                        ledger_amount = float(abs(amount_rwf or tx_amount))
+                        cash_ledger = TransporterLedger(
+                            transporter_name=transporter_name,
+                            supplier_name=None,
+                            entry_type='ADVANCE',
+                            amount_input=float(amount_input or tx_amount),
+                            currency=currency,
+                            exchange_rate=float(exchange_rate or 1.0),
+                            amount_rwf=float(ledger_amount),
+                            is_paid=True,
+                            paid_at=datetime.utcnow(),
+                            created_by_id=getattr(current_user, 'id', None),
+                            note=note or f'Transporter cash payment - {transporter_name}',
+                            payment_review_id=int(review.id),
+                            cash_transaction_id=int(tx.id),
+                        )
+                        db.session.add(cash_ledger)
+                        db.session.flush()
+                        logger.info(f"Created TransporterLedger for {transporter_name}: ledger_id={cash_ledger.id}, amount_rwf={ledger_amount}")
 
-                    review.cash_transaction_id = int(tx.id)
-                    review.cash_account_id = int(account.id)
-                    review.boss_comment = (review.boss_comment or '') + f" | transporter_advance_ledger_id={int(cash_ledger.id)}"
-                    receipt_redirect_url = url_for('core.transporter_advance_receipt_detail', ledger_id=int(cash_ledger.id))
+                        review.cash_transaction_id = int(tx.id)
+                        review.cash_account_id = int(account.id)
+                        review.boss_comment = (review.boss_comment or '') + f" | transporter_advance_ledger_id={int(cash_ledger.id)}"
+                        receipt_redirect_url = url_for('core.transporter_advance_receipt_detail', ledger_id=int(cash_ledger.id))
+                    except Exception as ledger_err:
+                        logger.exception(f"Failed to create TransporterLedger for {transporter_name}: {ledger_err}")
+                        raise
                 else:
                     # CASH_PAYMENT is normal business expense - generates cash transaction receipt
                     review.cash_transaction_id = int(tx.id)
                     review.cash_account_id = int(account.id)
                     receipt_redirect_url = url_for('core.cash_transaction_detail', tx_id=int(tx.id))
+                    logger.info(f"Created CASH_PAYMENT for {transporter_name}: tx_id={tx.id}, amount_rwf={tx_amount}")
                 
                 db.session.add(review)
 
