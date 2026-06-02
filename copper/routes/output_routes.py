@@ -165,7 +165,7 @@ def record_output():
         date_from = request.args.get('from') or ''
         date_to = request.args.get('to') or ''
 
-        q = CopperOutput.query
+        q = CopperOutput.query.filter(CopperOutput.is_deleted.is_(False))
         if customer_filter:
             q = q.filter(CopperOutput.customer == customer_filter)
         if batch_filter:

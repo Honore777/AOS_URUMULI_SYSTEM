@@ -668,7 +668,7 @@ def list_outputs():
     date_from = request.args.get('from') or ''
     date_to = request.args.get('to') or ''
 
-    q = CassiteriteOutput.query
+    q = CassiteriteOutput.query.filter(CassiteriteOutput.is_deleted.is_(False))
     if customer_filter:
         q = q.filter(CassiteriteOutput.customer == customer_filter)
     if batch_filter:

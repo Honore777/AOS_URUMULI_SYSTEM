@@ -66,6 +66,7 @@ def track_debts():
 
     # Base query: all outputs that still have remaining debt
     debts_query = CassiteriteOutput.query.filter(
+        CassiteriteOutput.is_deleted.is_(False),
         CassiteriteOutput.debt_remaining > 0
     )
 
@@ -107,7 +108,7 @@ def update_payment():
             return redirect(url_for("cassiterite.track_debts"))
         
         outputs_with_debt = (
-            CassiteriteOutput.query.filter(CassiteriteOutput.customer == customer_name)
+            CassiteriteOutput.query.filter(CassiteriteOutput.is_deleted.is_(False), CassiteriteOutput.customer == customer_name)
             .filter(CassiteriteOutput.debt_remaining > 0)
             .order_by(CassiteriteOutput.date)
             .all()

@@ -32,6 +32,11 @@ class CopperOutput(db.Model):
     debt_remaining = db.Column(db.Float, default=0)
     note = db.Column(db.Text)
     voucher_no=db.Column(db.String(100), db.ForeignKey('copper_stock.voucher_no'),nullable=True)
+    
+    # Soft delete fields
+    is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    deleted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
     stock = db.relationship('CopperStock', 
                            back_populates='outputs', 

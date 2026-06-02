@@ -784,7 +784,7 @@ def dashboard():
         # load related supplier payments via the model relationship named `payments`
         stocks_pagination = CassiteriteStock.query.filter(CassiteriteStock.is_deleted.is_(False)).options(selectinload(CassiteriteStock.payments)).order_by(CassiteriteStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
         stocks = stocks_pagination.items
-        outputs = CassiteriteOutput.query.join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False)).order_by(CassiteriteOutput.date.desc()).limit(10).all()
+        outputs = CassiteriteOutput.query.join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False), CassiteriteOutput.is_deleted.is_(False)).order_by(CassiteriteOutput.date.desc()).limit(10).all()
 
         # Compute a small distinct list of voucher/lot choices to populate the
         # filter dropdown without materializing large lists in the template.
@@ -960,7 +960,7 @@ def cassiterite_filter_stocks():
             stocks_query = stocks_query.filter(
                 func.lower(CassiteriteStock.voucher_no).ilike(search_like) | func.lower(CassiteriteStock.supplier).ilike(search_like)
             )
-        outputs_query = CassiteriteOutput.query.order_by(CassiteriteOutput.date.desc())
+        outputs_query = CassiteriteOutput.query.filter(CassiteriteOutput.is_deleted.is_(False)).order_by(CassiteriteOutput.date.desc())
 
         from datetime import datetime as _dt
 

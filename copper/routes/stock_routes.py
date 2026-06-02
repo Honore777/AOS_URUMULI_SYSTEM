@@ -838,7 +838,7 @@ def dashboard():
     # Avoid pre-loading related supplier_payments here to reduce hydration cost on dashboard.
     stocks_pagination = CopperStock.query.filter(CopperStock.is_deleted.is_(False)).order_by(CopperStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
     stocks = stocks_pagination.items
-    outputs = CopperOutput.query.order_by(CopperOutput.date.desc()).limit(10).all()
+    outputs = CopperOutput.query.filter(CopperOutput.is_deleted.is_(False)).order_by(CopperOutput.date.desc()).limit(10).all()
     # Compute a small distinct list of voucher choices separately so the
     # template doesn't materialize voucher values by iterating over `stocks`.
     try:
@@ -1348,7 +1348,7 @@ FROM (
                 logger.warning("filter_stocks: include_all requested but total %d > max %d", stocks_pagination.total, MAX_RETURN_ROWS)
                 return safe_jsonify({'error': 'Request would return too many rows; please narrow your filter or use the export endpoint.'}), 400
 
-            outputs_query = CopperOutput.query.order_by(CopperOutput.date.desc())
+            outputs_query = CopperOutput.query.filter(CopperOutput.is_deleted.is_(False)).order_by(CopperOutput.date.desc())
             if start_date:
                 outputs_query = outputs_query.filter(CopperOutput.date >= start)
             if end_date:

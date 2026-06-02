@@ -39,7 +39,7 @@ def track_debts():
         form = DebtTrackingForm()
 
         customers_with_debt = (
-            CopperOutput.query.filter(CopperOutput.debt_remaining > 0).all()
+            CopperOutput.query.filter(CopperOutput.is_deleted.is_(False), CopperOutput.debt_remaining > 0).all()
         )
 
         selected_customer = None
@@ -50,7 +50,7 @@ def track_debts():
             payment_amount = form.payment_amount.data
 
             filtered_debts = (
-                CopperOutput.query.filter(CopperOutput.customer == selected_customer)
+                CopperOutput.query.filter(CopperOutput.is_deleted.is_(False), CopperOutput.customer == selected_customer)
                 .filter(CopperOutput.debt_remaining > 0).all()
             )
 
