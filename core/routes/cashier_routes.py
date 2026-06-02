@@ -1417,6 +1417,8 @@ def cashier_disburse_payment_review(review_id: int):
             action = 'loan_repayment'
         elif review_type == 'cash_transfer':
             action = 'cash_transfer'
+        elif review_type in {'transporter_advance', 'transporter_payment'}:
+            action = 'pay_transporter'
 
     try:
         # Execute per approved request.
@@ -1431,7 +1433,7 @@ def cashier_disburse_payment_review(review_id: int):
             chosen_account_id = 0
 
         # Cash desk actions (cash account required)
-        if action in {'cash_transaction', 'collect_receipt', 'collect_unearned_receipt', 'supplier_refund', 'loan_disbursement', 'loan_repayment', 'cash_transfer'}:
+        if action in {'cash_transaction', 'collect_receipt', 'collect_unearned_receipt', 'supplier_refund', 'loan_disbursement', 'loan_repayment', 'cash_transfer', 'pay_transporter'}:
             if action == 'cash_transfer':
                 try:
                     account_id = int(payload.get('from_account_id') or 0)
