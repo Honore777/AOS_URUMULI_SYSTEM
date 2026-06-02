@@ -304,7 +304,7 @@ def api_dashboard_data():
         app.logger.info("api_dashboard_data: starting")
         # Use DB-side aggregates to avoid loading full tables
         total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).scalar()
-        total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).scalar()
+        total_output = db.session.query(func.coalesce(func.sum(CopperOutput.output_kg), 0)).filter(CopperOutput.is_deleted.is_(False)).scalar()
 
         # Single source of truth: customer outstanding = plans - receipts
         total_expected = (

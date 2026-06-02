@@ -804,7 +804,7 @@ def dashboard():
         from sqlalchemy import func
         try:
             total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).filter(CassiteriteStock.is_deleted.is_(False)).scalar()
-            total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False)).scalar()
+            total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False), CassiteriteOutput.is_deleted.is_(False)).scalar()
             # Sales must be in sync with customer ledger truth (plans), because
             # Output rows may exist without monetary fields populated.
             total_sales = (
@@ -1129,13 +1129,13 @@ FROM (
         total_input = db.session.query(func.coalesce(func.sum(CassiteriteStock.input_kg), 0)).filter(*stock_filters).scalar() or 0
         total_stocks = db.session.query(func.coalesce(func.count(CassiteriteStock.id), 0)).filter(*stock_filters).scalar() or 0
 
-        output_filters = []
+        output_filters = [CassiteriteOutput.is_deleted.is_(False)]
         if start_date:
             output_filters.append(CassiteriteOutput.date >= start)
         if end_date:
             output_filters.append(CassiteriteOutput.date <= end)
 
-        total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False), *output_filters).scalar() or 0
+        total_output = db.session.query(func.coalesce(func.sum(CassiteriteOutput.output_kg), 0)).join(CassiteriteStock, CassiteriteOutput.stock_id == CassiteriteStock.id).filter(CassiteriteStock.is_deleted.is_(False), CassiteriteOutput.is_deleted.is_(False), *output_filters).scalar() or 0
 
         # Customer outstanding debt from single source of truth: plans - receipts
         try:

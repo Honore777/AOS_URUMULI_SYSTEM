@@ -1719,12 +1719,9 @@ def cashier_disburse_payment_review(review_id: int):
                 transporter_name = (payload.get('transporter_name') or review.customer or '').strip()
                 if not transporter_name:
                     raise ValueError('Missing transporter name.')
-                entry_kind = (payload.get('entry_kind') or 'CASH_PAYMENT').strip().upper()
-                ledger_amount = float(abs(amount_rwf or tx_amount))
-                if entry_kind == 'ADVANCE':
-                    ledger_amount = abs(ledger_amount)
-                else:
-                    ledger_amount = -abs(ledger_amount)
+                entry_kind = (payload.get('entry_kind') or '').strip().upper()
+                if entry_kind not in {'ADVANCE', 'CASH_PAYMENT'}:
+                    raise ValueError('Invalid payment type for transporter.')
 
                 tx = CashTransaction(
                     account_id=account.id,
@@ -1747,29 +1744,37 @@ def cashier_disburse_payment_review(review_id: int):
                 db.session.add(account)
                 db.session.flush()
 
-                cash_ledger = TransporterLedger(
-                    transporter_name=transporter_name,
-                    supplier_name=None,
-                    entry_type=entry_kind,
-                    amount_input=float(amount_input or tx_amount),
-                    currency=currency,
-                    exchange_rate=float(exchange_rate or 1.0),
-                    amount_rwf=float(ledger_amount),
-                    is_paid=True,
-                    paid_at=datetime.utcnow(),
-                    created_by_id=getattr(current_user, 'id', None),
-                    note=note or f'Transporter cash payment - {transporter_name}',
-                    payment_review_id=int(review.id),
-                    cash_transaction_id=int(tx.id),
-                )
-                db.session.add(cash_ledger)
-                db.session.flush()
-
-                review.cash_transaction_id = int(tx.id)
-                review.cash_account_id = int(account.id)
+                # Only create TransporterLedger for ADVANCE; CASH_PAYMENT is just a normal business expense
                 if entry_kind == 'ADVANCE':
+                    ledger_amount = float(abs(amount_rwf or tx_amount))
+                    cash_ledger = TransporterLedger(
+                        transporter_name=transporter_name,
+                        supplier_name=None,
+                        entry_type='ADVANCE',
+                        amount_input=float(amount_input or tx_amount),
+                        currency=currency,
+                        exchange_rate=float(exchange_rate or 1.0),
+                        amount_rwf=float(ledger_amount),
+                        is_paid=True,
+                        paid_at=datetime.utcnow(),
+                        created_by_id=getattr(current_user, 'id', None),
+                        note=note or f'Transporter cash payment - {transporter_name}',
+                        payment_review_id=int(review.id),
+                        cash_transaction_id=int(tx.id),
+                    )
+                    db.session.add(cash_ledger)
+                    db.session.flush()
+
+                    review.cash_transaction_id = int(tx.id)
+                    review.cash_account_id = int(account.id)
                     review.boss_comment = (review.boss_comment or '') + f" | transporter_advance_ledger_id={int(cash_ledger.id)}"
                     receipt_redirect_url = url_for('core.transporter_advance_receipt_detail', ledger_id=int(cash_ledger.id))
+                else:
+                    # CASH_PAYMENT is normal business expense - generates cash transaction receipt
+                    review.cash_transaction_id = int(tx.id)
+                    review.cash_account_id = int(account.id)
+                    receipt_redirect_url = url_for('core.cash_transaction_detail', tx_id=int(tx.id))
+                
                 db.session.add(review)
 
                 boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()

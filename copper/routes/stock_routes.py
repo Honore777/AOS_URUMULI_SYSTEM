@@ -1408,7 +1408,7 @@ FROM (
             if voucher_no:
                 stock_filters.append(CopperStock.voucher_no == voucher_no)
 
-            output_filters = []
+            output_filters = [CopperOutput.is_deleted.is_(False)]
             if start_date:
                 output_filters.append(CopperOutput.date >= start)
             if end_date:
@@ -1440,7 +1440,7 @@ FROM (
 SELECT
     (SELECT COALESCE(SUM(s.input_kg),0) FROM copper_stock s WHERE {stock_where}) AS total_input,
     (SELECT COALESCE(COUNT(s.id),0) FROM copper_stock s WHERE {stock_where}) AS total_stocks,
-    (SELECT COALESCE(SUM(o.output_kg),0) FROM copper_output o JOIN copper_stock s ON o.stock_id = s.id WHERE s.is_deleted IS FALSE AND {output_where}) AS total_output,
+    (SELECT COALESCE(SUM(o.output_kg),0) FROM copper_output o JOIN copper_stock s ON o.stock_id = s.id WHERE s.is_deleted IS FALSE AND o.is_deleted IS FALSE AND {output_where}) AS total_output,
   0 AS total_debt,
   0 AS total_sales,
     (SELECT COALESCE(SUM(s.net_balance),0) FROM copper_stock s WHERE {stock_where}) AS total_supplier_obligation,
@@ -1727,9 +1727,9 @@ SELECT
 SELECT
     (SELECT COALESCE(SUM(input_kg),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_input,
     (SELECT COALESCE(COUNT(id),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_stocks,
-  (SELECT COALESCE(SUM(output_kg),0) FROM copper_output) AS total_output,
-  (SELECT COALESCE(SUM(debt_remaining),0) FROM copper_output) AS total_debt,
-  (SELECT COALESCE(SUM(output_amount),0) FROM copper_output) AS total_sales,
+  (SELECT COALESCE(SUM(output_kg),0) FROM copper_output WHERE is_deleted IS FALSE) AS total_output,
+  (SELECT COALESCE(SUM(debt_remaining),0) FROM copper_output WHERE is_deleted IS FALSE) AS total_debt,
+  (SELECT COALESCE(SUM(output_amount),0) FROM copper_output WHERE is_deleted IS FALSE) AS total_sales,
     (SELECT COALESCE(SUM(net_balance),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_supplier_obligation,
         (SELECT COALESCE(SUM(COALESCE(sp.amount_rwf, sp.amount)),0) FROM supplier_payment sp JOIN copper_stock s ON sp.stock_id = s.id WHERE s.local_balance > 0 AND s.is_deleted IS FALSE) AS total_payments
 """

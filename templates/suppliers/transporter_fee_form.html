@@ -63,6 +63,27 @@
                 <label class="block text-sm font-bold text-slate-800 mb-2">{{ 'Note' if mode == 'pay' else 'Reason' }}</label>
                 <textarea name="note" rows="4" placeholder="{{ 'Add notes about this transporter payment...' if mode == 'pay' else 'Explain why this transporter is being charged...' }}" class="w-full rounded-lg border-2 border-slate-300 bg-white px-4 py-3 text-base text-slate-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200">{{ note or '' }}</textarea>
             </div>
+            {% if mode == 'pay' %}
+            <div class="md:col-span-2">
+                <label class="block text-sm font-bold text-slate-800 mb-3">Payment Type <span class="text-red-600">*</span></label>
+                <div class="space-y-3">
+                    <label class="flex items-center gap-3 cursor-pointer p-3 border-2 border-slate-300 rounded-lg hover:border-emerald-600 transition">
+                        <input type="radio" name="entry_kind" value="ADVANCE" required class="w-4 h-4 text-emerald-600">
+                        <div>
+                            <p class="font-semibold text-slate-800">Advance Payment</p>
+                            <p class="text-xs text-slate-600">Money given to transporter (tracked in ledger, generates receipt)</p>
+                        </div>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer p-3 border-2 border-slate-300 rounded-lg hover:border-emerald-600 transition">
+                        <input type="radio" name="entry_kind" value="CASH_PAYMENT" required class="w-4 h-4 text-emerald-600">
+                        <div>
+                            <p class="font-semibold text-slate-800">Transport Fees</p>
+                            <p class="text-xs text-slate-600">Normal business expense (NOT tracked in ledger, no receipt)</p>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            {% endif %}
             <div class="md:col-span-2 flex justify-end gap-3 pt-2">
                 <a href="{{ url_for('core.transporter_ledger_index') }}" class="rounded-lg border-2 border-slate-300 bg-white px-6 py-3 font-semibold text-slate-800 hover:bg-slate-50">Cancel</a>
                 <button type="submit" class="rounded-lg px-8 py-3 font-bold text-white shadow-lg {{ 'bg-emerald-600 hover:bg-emerald-700' if mode == 'pay' else 'bg-rose-700 hover:bg-rose-800' }}">

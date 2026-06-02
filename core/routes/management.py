@@ -1559,6 +1559,7 @@ def transporter_pay_fee():
     transporter_name = (request.form.get('transporter_name') or '').strip()
     currency = (request.form.get('currency') or 'RWF').strip().upper()
     note = (request.form.get('note') or '').strip() or None
+    entry_kind = (request.form.get('entry_kind') or 'ADVANCE').strip().upper()
     try:
         amount_input = float(request.form.get('amount_input') or 0.0)
     except Exception:
@@ -1574,6 +1575,8 @@ def transporter_pay_fee():
     if amount_input <= 0:
         flash('Amount must be greater than zero.', 'danger')
         return _render_transporter_fee_form('pay', transporter_name=transporter_name, currency=currency, exchange_rate=exchange_rate, note=note or '')
+    if entry_kind not in {'ADVANCE', 'CASH_PAYMENT'}:
+        entry_kind = 'ADVANCE'
 
     existing_names = _get_transporter_names()
     close_matches = close_name_matches(transporter_name, existing_names, limit=5, cutoff=0.86)
@@ -1581,20 +1584,28 @@ def transporter_pay_fee():
         flash(f"Did you mean: {', '.join(close_matches)}? Use the exact transporter name to avoid duplicate ledgers.", 'info')
 
     amount_rwf = float(amount_input) * (exchange_rate if currency == 'USD' else 1.0)
+    
+    # Determine default note based on entry_kind
+    if not note:
+        if entry_kind == 'ADVANCE':
+            note = f'Transporter advance for {transporter_name}'
+        else:
+            note = f'Transporter transport fees for {transporter_name}'
+    
     payload = {
         'action': 'pay_transporter',
-        'entry_kind': 'ADVANCE',
+        'entry_kind': entry_kind,
         'transporter_name': transporter_name,
         'amount_input': amount_input,
         'currency': currency,
         'exchange_rate': exchange_rate if currency == 'USD' else 1.0,
         'amount_rwf': amount_rwf,
-        'note': note or f'Transporter advance for {transporter_name}',
+        'note': note,
     }
 
     review = PaymentReview(
         mineral_type=None,
-        type='transporter_advance',
+        type='transporter_advance' if entry_kind == 'ADVANCE' else 'transporter_payment',
         customer=transporter_name,
         amount=amount_input,
         currency=currency,
@@ -1607,15 +1618,18 @@ def transporter_pay_fee():
 
     boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
     for (boss_id,) in boss_rows:
+        notification_type = 'TRANSPORTER_ADVANCE_REQUEST' if entry_kind == 'ADVANCE' else 'TRANSPORTER_PAYMENT_REQUEST'
+        message_text = f'Advance request created for transporter {transporter_name}: {amount_input:,.2f} {currency}.' if entry_kind == 'ADVANCE' else f'Transport fees payment request created for {transporter_name}: {amount_input:,.2f} {currency}.'
         create_notification(
             user_id=int(boss_id),
-            type_='TRANSPORTER_ADVANCE_REQUEST',
-            message=f'Advance request created for transporter {transporter_name}: {amount_input:,.2f} {currency}.',
+            type_=notification_type,
+            message=message_text,
             related_type='payment_review',
             related_id=int(review.id),
         )
 
-    flash(f'Transporter pay-fee request submitted for boss approval: {amount_input:,.2f} {currency} (~{amount_rwf:,.0f} RWF).', 'success')
+    kind_label = 'Advance' if entry_kind == 'ADVANCE' else 'Transport fees'
+    flash(f'Transporter {kind_label} request submitted for boss approval: {amount_input:,.2f} {currency} (~{amount_rwf:,.0f} RWF).', 'success')
     return redirect(url_for('core.transporter_ledger_detail', transporter_name=transporter_name))
 
 
