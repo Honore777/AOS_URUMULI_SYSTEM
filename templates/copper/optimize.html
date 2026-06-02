@@ -112,6 +112,7 @@
                             <tr>
                                 <th class="px-4 py-2 text-left">Stock ID</th>
                                 <th class="px-4 py-2 text-left">Voucher</th>
+                                <th class="px-4 py-2 text-left">Date</th>
                                 <th class="px-4 py-2 text-left">Supplier</th>
                                 <th class="px-4 py-2 text-left">Unit %</th>
                                 <th class="px-4 py-2 text-left">T_Unity</th>
@@ -128,6 +129,7 @@
                             <tr class="hover:bg-gray-50">
                                 <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
                                 <td class="px-4 py-2">{{ stock.voucher_no }}</td>
+                                <td class="px-4 py-2">{{ stock.date.strftime('%Y-%m-%d') if stock.date else 'N/A' }}</td>
                                 <td class="px-4 py-2">{{ stock.supplier }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.unit_percent) }}</td>
                                 <td class="px-4 py-2">{{ '{:,.2f}'.format(stock.t_unity) }}</td>
@@ -342,6 +344,7 @@
                                 <tr>
                                     <th class="px-4 py-2 text-left">Stock ID</th>
                                     <th class="px-4 py-2 text-left">Voucher</th>
+                                    <th class="px-4 py-2 text-left">Date</th>
                                     <th class="px-4 py-2 text-left">Supplier</th>
                                     <th class="px-4 py-2 text-left">Unit %</th>
                                     <th class="px-4 py-2 text-left">T_Unity</th>
@@ -356,6 +359,7 @@
                                 <tr class="hover:bg-gray-50">
                                     <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
                                     <td class="px-4 py-2">{{ stock.voucher_no }}</td>
+                                    <td class="px-4 py-2">{{ stock.date.strftime('%Y-%m-%d') if stock.date else 'N/A' }}</td>
                                     <td class="px-4 py-2">{{ stock.supplier }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.unit_percent) }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.t_unity) }}</td>
@@ -456,9 +460,12 @@
                             <tr>
                                 <th class="px-4 py-2 text-left">Stock ID</th>
                                 <th class="px-4 py-2 text-left">Voucher</th>
+                                <th class="px-4 py-2 text-left">Date</th>
                                 <th class="px-4 py-2 text-left">Supplier</th>
                                 <th class="px-4 py-2 text-left">Unit %</th>
                                 <th class="px-4 py-2 text-left">T_Unity</th>
+                                <th class="px-4 py-2 text-left">Percentage</th>
+                                <th class="px-4 py-2 text-left">Nobelium</th>
                                 <th class="px-4 py-2 text-left">Available (kg)</th>
                                 <th class="px-4 py-2 text-left">Selected Quantity (kg)</th>
                             </tr>
@@ -470,9 +477,12 @@
                                 <tr class="hover:bg-gray-50">
                                     <td class="px-4 py-2 font-semibold">{{ stock.id }}</td>
                                     <td class="px-4 py-2">{{ stock.voucher_no }}</td>
+                                    <td class="px-4 py-2">{{ stock.date.strftime('%Y-%m-%d') if stock.date else 'N/A' }}</td>
                                     <td class="px-4 py-2">{{ stock.supplier }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.unit_percent) }}</td>
                                     <td class="px-4 py-2">{{ "%.2f"|format(stock.t_unity) }}</td>
+                                    <td class="px-4 py-2">{{ "%.4f"|format(stock.percentage or 0) }}</td>
+                                    <td class="px-4 py-2">{{ "%.4f"|format(stock.nb or 0) }}</td>
                                     <td class="px-4 py-2 font-bold text-green-600">{{ "%.2f"|format(stock.local_balance) }} kg</td>
                                     <td class="px-4 py-2 font-bold text-green-600">{{ "%.2f"|format(quantity) }} kg</td>
                                 </tr>
@@ -585,7 +595,7 @@
                 </div>
 
                 <!-- Alternative Actions -->
-                <div class="flex gap-3">
+                <div class="flex flex-wrap gap-3">
                     <button type="button" 
                             onclick="document.getElementById('bulk-output-form').style.display='block'"
                             class="bg-green-600 text-white px-6 py-3 rounded-md hover:bg-green-700 font-medium">
@@ -596,6 +606,16 @@
                             class="bg-orange-600 text-white px-6 py-3 rounded-md hover:bg-orange-700 font-medium">
                         ⚡ Direct Output (Bypass Negotiator)
                     </button>
+                    <!-- Form to go back to Edit section with target values preserved -->
+                    <form method="GET" action="{{ url_for('copper.optimize_stocks') }}" class="inline">
+                        <input type="hidden" name="mode" value="edit">
+                        <input type="hidden" name="target_moyenne" value="{{ form.target_moyenne.data|default('', true) }}">
+                        <input type="hidden" name="target_moyenne_nb" value="{{ form.target_moyenne_nb.data|default('', true) }}">
+                        <input type="hidden" name="target_total_quantity" value="{{ form.target_total_quantity.data|default('', true) }}">
+                        <button type="submit" class="bg-amber-600 text-white px-6 py-3 rounded-md hover:bg-amber-700 font-medium">
+                            ✏️ Re-Edit Selection
+                        </button>
+                    </form>
                     <button type="button" 
                             onclick="window.print()"
                             class="bg-gray-600 text-white px-6 py-3 rounded-md hover:bg-gray-700 font-medium">

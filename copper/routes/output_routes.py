@@ -203,6 +203,8 @@ def record_output():
                         'total_paid': 0.0,
                         'total_debt': 0.0,
                         'count': 0,
+                        'moyenne_values': [],  # Track percentage values for averaging
+                        'nb_values': [],       # Track nobelium values for averaging
                     }
                 b = batches[bid]
                 if out.date and (not b['first_date'] or out.date < b['first_date']):
@@ -214,6 +216,21 @@ def record_output():
                 b['total_paid'] += float(out.amount_paid_rwf or out.amount_paid or 0.0)
                 b['total_debt'] += float(out.debt_remaining or 0.0)
                 b['count'] += 1
+                
+                # Capture moyenne and nobelium from stock (skip if stock is deleted)
+                if out.stock and not out.stock.is_deleted:
+                    if out.stock.percentage is not None:
+                        b['moyenne_values'].append(float(out.stock.percentage))
+                    if out.stock.nb is not None:
+                        b['nb_values'].append(float(out.stock.nb))
+            
+            # Calculate averages for each batch
+            for bid, b in batches.items():
+                b['moyenne'] = sum(b['moyenne_values']) / len(b['moyenne_values']) if b['moyenne_values'] else 0.0
+                b['nb'] = sum(b['nb_values']) / len(b['nb_values']) if b['nb_values'] else 0.0
+                # Clean up temporary arrays
+                del b['moyenne_values']
+                del b['nb_values']
 
             batch_summaries = sorted(
                 list(batches.values()),

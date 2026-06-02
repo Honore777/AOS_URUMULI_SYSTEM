@@ -90,6 +90,8 @@
                   <th class="px-4 py-2">Stock</th>
                   <th class="px-4 py-2">Customer</th>
                   <th class="px-4 py-2">Output(kg)</th>
+                  <th class="px-4 py-2">Moyenne</th>
+                  <th class="px-4 py-2">Nobelium</th>
                   <th class="px-4 py-2">output_amount</th>
                   <th class="px-4 py-2">amount_paid</th>
                   <th class="px-4 py-2">currency</th>
@@ -105,6 +107,8 @@
                       <td class="px-4 py-2">{{ out.stock.voucher_no if out.stock else '-' }}</td>
                       <td class="px-4 py-2">{{ out.customer }}</td>
                       <td class="px-4 py-2">{{ out.output_kg }}</td>
+                      <td class="px-4 py-2 font-semibold text-blue-600">{{ '%.4f'|format(out.stock.percentage or 0) if out.stock else '-' }}</td>
+                      <td class="px-4 py-2 font-semibold text-purple-600">{{ '%.4f'|format(out.stock.nb or 0) if out.stock else '-' }}</td>
                       <td class="px-4 py-2">{{ out.output_amount_rwf or out.output_amount }}</td>
                       <td class="px-4 py-2">{{ out.amount_paid_rwf or out.amount_paid }}</td>
                       <td class="px-4 py-2">{{ out.currency }}</td>
@@ -123,6 +127,8 @@
                   <th class="px-4 py-2">Batch</th>
                   <th class="px-4 py-2">Customer</th>
                   <th class="px-4 py-2 text-right">Total Output(kg)</th>
+                  <th class="px-4 py-2 text-right">Moyenne</th>
+                  <th class="px-4 py-2 text-right">Nobelium</th>
                   <th class="px-4 py-2 text-right">Paid</th>
                   <th class="px-4 py-2 text-right">Remaining</th>
                   <th class="px-4 py-2 text-right">Action</th>
@@ -135,6 +141,8 @@
                       <td class="px-4 py-2 font-mono text-sm">{{ b.batch_id }}</td>
                       <td class="px-4 py-2">{{ b.customer or '-' }}</td>
                       <td class="px-4 py-2 text-right">{{ '%.2f'|format(b.total_kg or 0) }}</td>
+                      <td class="px-4 py-2 text-right font-semibold text-blue-600">{{ '%.4f'|format(b.moyenne or 0) }}</td>
+                      <td class="px-4 py-2 text-right font-semibold text-purple-600">{{ '%.4f'|format(b.nb or 0) }}</td>
                       <td class="px-4 py-2 text-right text-green-700">{{ '{:,.0f}'.format(b.total_paid or 0) }}</td>
                       <td class="px-4 py-2 text-right font-semibold {{ 'text-red-700' if (b.total_debt or 0) > 0 else 'text-slate-700' }}">{{ '{:,.0f}'.format(b.total_debt or 0) }}</td>
                       <td class="px-4 py-2 text-right">
