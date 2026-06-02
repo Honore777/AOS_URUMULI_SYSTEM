@@ -43,9 +43,31 @@ from utils import safe_jsonify, close_name_matches, normalize_counterparty_name
 logger = logging.getLogger(__name__)
 
 
-def _build_transporter_ledger_rows(transporter_rows):
+def _build_transporter_ledger_rows(transporter_rows, opening_balance=None):
     display_rows = []
     running_balances = {}
+    
+    # Add opening balance row if provided (for 30-day view)
+    if opening_balance is not None:
+        transporter_name = (transporter_rows[0].transporter_name if transporter_rows else 'Unknown')
+        transporter_key = ' '.join(transporter_name.strip().lower().split())
+        running_balances[transporter_key] = float(opening_balance)
+        display_rows.append({
+            'id': None,
+            'created_at': None,
+            'transporter_name': transporter_name,
+            'supplier_name': None,
+            'entry_type': 'OPENING_BALANCE',
+            'amount_input': 0.0,
+            'currency': 'RWF',
+            'exchange_rate': 1.0,
+            'amount_rwf': 0.0,
+            'running_balance_rwf': float(opening_balance),
+            'note': 'Opening balance at start of period',
+            'receipt_url': None,
+            'is_opening_balance': True,
+        })
+    
     for row in sorted(transporter_rows or [], key=lambda r: ((r.created_at or datetime.min), int(getattr(r, 'id', 0) or 0))):
         transporter_name = row.transporter_name or 'Unknown'
         transporter_key = ' '.join(transporter_name.strip().lower().split())
@@ -64,6 +86,7 @@ def _build_transporter_ledger_rows(transporter_rows):
             'running_balance_rwf': float(current_balance),
             'note': row.note,
             'receipt_url': url_for('core.transporter_payment_receipt_detail', ledger_id=int(row.id)) if (row.entry_type or '').upper() in {'ADVANCE', 'CASH_PAYMENT'} else None,
+            'is_opening_balance': False,
         })
     return display_rows
 
@@ -1679,7 +1702,18 @@ def transporter_ledger_detail(transporter_name: str):
         .order_by(TransporterLedger.created_at.desc(), TransporterLedger.id.desc())
         .all()
     )
-    recent_rows = _build_transporter_ledger_rows(recent)
+    
+    # Calculate opening balance (sum of all entries BEFORE filter period)
+    opening_balance = 0.0
+    if filter_from:
+        opening_balance = float(
+            db.session.query(func.coalesce(func.sum(TransporterLedger.amount_rwf), 0.0))
+            .filter(func.lower(func.trim(TransporterLedger.transporter_name)) == normalized)
+            .filter(TransporterLedger.created_at < datetime.combine(filter_from, datetime.min.time()))
+            .scalar() or 0.0
+        )
+    
+    recent_rows = _build_transporter_ledger_rows(recent, opening_balance=opening_balance if filter_from else None)
     transporter_names = [
         name for (name,) in (
             db.session.query(TransporterLedger.transporter_name)
@@ -1697,6 +1731,7 @@ def transporter_ledger_detail(transporter_name: str):
         selected_transporter=display_name,
         filter_preset=filter_preset,
         ledger_url_base=url_for('core.transporter_ledger_detail', transporter_name=display_name),
+        opening_balance=opening_balance if filter_from else None,
     )
 
 
@@ -2021,7 +2056,7 @@ def _render_transporter_receipt_detail(ledger_id: int):
             'balance_rwf': float(current_balance or 0.0),
             'amount_rwf': float(row.amount_rwf or 0.0),
         },
-        hide_balance_rows=bool(is_fee_charge or float(row.amount_rwf or 0.0) < 0.0),
+        hide_balance_rows=bool(is_advance or is_fee_charge or float(row.amount_rwf or 0.0) < 0.0),
     )
 
 

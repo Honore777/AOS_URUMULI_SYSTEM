@@ -1401,6 +1401,7 @@ def cashier_disburse_payment_review(review_id: int):
 
     review_type = (review.type or '').strip().lower()
     mineral = (review.mineral_type or '').strip().lower()
+    logger.info(f"DISBURSEMENT START: review_id={review.id}, review_type={review_type}, mineral={mineral}, payload={payload}")
     action = (payload.get('action') or '').strip().lower()
     if not action:
         if review_type == 'cash_transaction':
@@ -1419,6 +1420,8 @@ def cashier_disburse_payment_review(review_id: int):
             action = 'cash_transfer'
         elif review_type in {'transporter_advance', 'transporter_payment'}:
             action = 'pay_transporter'
+
+    logger.info(f"DISBURSEMENT ACTION: final_action={action}, entry_kind={payload.get('entry_kind')}")
 
     try:
         # Execute per approved request.

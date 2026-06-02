@@ -126,18 +126,7 @@
             </div>
         </div>
 
-        <div class="mt-8 rounded-2xl border border-slate-200 bg-white p-8 shadow-xl">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
-                <div>
-                    <h2 class="text-2xl font-bold text-slate-900">Transporter Workflow</h2>
-                    <p class="mt-2 text-sm text-slate-600">Pay transporter fee creates a boss review for an advance in USD or RWF. Charge transport fees creates a boss review with a reason and reduces the transporter ledger when approved.</p>
-                </div>
-                <div class="flex gap-2">
-                    <a href="{{ url_for('core.transporter_pay_fee') }}" class="rounded-lg bg-emerald-600 px-5 py-3 font-semibold text-white hover:bg-emerald-700">Pay transporter fee</a>
-                    <a href="{{ url_for('core.transporter_charge_fee') }}" class="rounded-lg bg-rose-700 px-5 py-3 font-semibold text-white hover:bg-rose-800">Charge transport fee</a>
-                </div>
-            </div>
-        </div>
+       
 
         {% if selected_transporter %}
         <div class="mt-8 rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
@@ -167,9 +156,9 @@
                     </thead>
                     <tbody class="divide-y divide-slate-200 bg-white">
                         {% for entry in recent_rows %}
-                        <tr class="hover:bg-slate-50">
-                            <td class="px-4 py-3 text-slate-600">{{ entry.created_at.strftime('%Y-%m-%d %H:%M') if entry.created_at else '-' }}</td>
-                            <td class="px-4 py-3 text-slate-700">{{ entry.entry_type or '-' }}{% if entry.supplier_name %} • {{ entry.supplier_name }}{% endif %}{% if entry.note %} — {{ entry.note }}{% endif %}</td>
+                        <tr class="{% if entry.is_opening_balance %}bg-blue-50 hover:bg-blue-100{% else %}hover:bg-slate-50{% endif %}">
+                            <td class="px-4 py-3 {% if entry.is_opening_balance %}text-blue-700 font-bold{% else %}text-slate-600{% endif %}">{{ entry.created_at.strftime('%Y-%m-%d %H:%M') if entry.created_at else 'OPENING' }}</td>
+                            <td class="px-4 py-3 {% if entry.is_opening_balance %}text-blue-700 font-bold{% else %}text-slate-700{% endif %}">{{ entry.entry_type or '-' }}{% if entry.supplier_name %} • {{ entry.supplier_name }}{% endif %}{% if entry.note %} — {{ entry.note }}{% endif %}</td>
                             <td class="px-4 py-3 text-right font-extrabold text-red-700">{% if (entry.amount_rwf or 0) < 0 %}{{ '{:,.2f}'.format((entry.amount_rwf or 0) * -1) }}{% endif %}</td>
                             <td class="px-4 py-3 text-right font-extrabold text-emerald-700">{% if (entry.amount_rwf or 0) >= 0 %}{{ '{:,.2f}'.format(entry.amount_rwf or 0) }}{% endif %}</td>
                             <td class="px-4 py-3 text-right font-semibold text-slate-700">
@@ -178,7 +167,7 @@
                                     <div class="text-xs text-slate-500 mt-1">@ {{ '{:.2f}'.format(entry.exchange_rate or 1.0) }}</div>
                                 {% endif %}
                             </td>
-                            <td class="px-4 py-3 text-right font-bold text-slate-900">{{ '{:,.2f}'.format(entry.running_balance_rwf or 0) }} RWF</td>
+                            <td class="px-4 py-3 text-right font-bold {% if entry.is_opening_balance %}text-blue-900 bg-blue-100{% else %}text-slate-900{% endif %}">{{ '{:,.2f}'.format(entry.running_balance_rwf or 0) }} RWF</td>
                         </tr>
                         {% endfor %}
                         {% if recent_rows|length == 0 %}
