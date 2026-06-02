@@ -1755,6 +1755,112 @@ def transporter_charge_fee():
     return redirect(url_for('core.transporter_ledger_detail', transporter_name=transporter_name))
 
 
+@core_bp.route('/accountant/transporter-ledger/historical-record', methods=['GET', 'POST'])
+@role_required('accountant', 'boss', 'admin')
+def record_historical_transporter_advance():
+    """
+    Temporary workflow to record historical transporter advances directly into the ledger
+    without going through boss approval or cash disbursement.
+    This bypasses the normal workflow and directly creates TransporterLedger entries.
+    """
+    from core.models import TransporterLedger
+
+    if request.method == 'GET':
+        return render_template(
+            'suppliers/historical_transporter_advance.html',
+            transporter_names=_get_transporter_names(),
+        )
+
+    # POST: Record the historical advance
+    transporter_name = (request.form.get('transporter_name') or '').strip()
+    currency = (request.form.get('currency') or 'RWF').strip().upper()
+    note = (request.form.get('note') or '').strip() or None
+    recorded_at_str = (request.form.get('recorded_at') or '').strip()
+    
+    try:
+        amount_input = float(request.form.get('amount_input') or 0.0)
+    except Exception:
+        amount_input = 0.0
+    try:
+        exchange_rate = float(request.form.get('exchange_rate') or 1.0)
+    except Exception:
+        exchange_rate = 1.0
+
+    if not transporter_name:
+        flash('Transporter name is required.', 'danger')
+        return render_template(
+            'suppliers/historical_transporter_advance.html',
+            transporter_names=_get_transporter_names(),
+            transporter_name=transporter_name,
+            amount_input=amount_input,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            note=note or '',
+        )
+    if amount_input <= 0:
+        flash('Amount must be greater than zero.', 'danger')
+        return render_template(
+            'suppliers/historical_transporter_advance.html',
+            transporter_names=_get_transporter_names(),
+            transporter_name=transporter_name,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            note=note or '',
+        )
+
+    # Parse the recorded date if provided
+    recorded_at = None
+    if recorded_at_str:
+        try:
+            recorded_at = datetime.fromisoformat(recorded_at_str)
+        except Exception:
+            flash('Invalid date format. Using current time.', 'warning')
+            recorded_at = datetime.utcnow()
+    else:
+        recorded_at = datetime.utcnow()
+
+    amount_rwf = float(amount_input) * (exchange_rate if currency == 'USD' else 1.0)
+
+    try:
+        # Directly create a TransporterLedger entry with no approval workflow
+        ledger = TransporterLedger(
+            transporter_name=transporter_name,
+            supplier_name=None,
+            entry_type='ADVANCE',
+            amount_input=amount_input,
+            currency=currency,
+            exchange_rate=exchange_rate if currency == 'USD' else 1.0,
+            amount_rwf=float(amount_rwf),
+            is_paid=True,
+            paid_at=recorded_at,
+            created_by_id=getattr(current_user, 'id', None),
+            created_at=recorded_at,
+            note=note or f'Historical transporter advance (recorded {recorded_at.strftime("%Y-%m-%d")})',
+        )
+        db.session.add(ledger)
+        db.session.commit()
+
+        flash(
+            f'Historical advance recorded directly: {amount_input:,.2f} {currency} (~{amount_rwf:,.0f} RWF) for {transporter_name} on {recorded_at.strftime("%Y-%m-%d")}.',
+            'success'
+        )
+        return redirect(url_for('core.transporter_ledger_detail', transporter_name=transporter_name))
+    except Exception as e:
+        db.session.rollback()
+        logger.exception('Failed to record historical transporter advance')
+        flash(f'Failed to record historical advance: {str(e)}', 'danger')
+        return render_template(
+            'suppliers/historical_transporter_advance.html',
+            transporter_names=_get_transporter_names(),
+            transporter_name=transporter_name,
+            amount_input=amount_input,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            note=note or '',
+            recorded_at=recorded_at_str,
+        )
+
+
 @core_bp.route('/api/transporters/autocomplete')
 @role_required('accountant', 'boss', 'admin', 'cashier', 'negotiator')
 def transporters_autocomplete():

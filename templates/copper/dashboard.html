@@ -136,6 +136,31 @@
             </div>
         </div>
 
+        <!-- Quick Actions for Accountants -->
+        {% if current_user.is_authenticated and current_user.role in ['accountant', 'admin', 'boss'] %}
+        <div class="mb-10 p-6 rounded-lg shadow-md border-2 border-slate-200 bg-slate-50">
+            <h3 class="text-lg font-bold text-gray-900 mb-4 inline-flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                </svg>
+                <span>Quick Actions</span>
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <a href="{{ url_for('core.record_historical_transporter_advance') }}" class="bg-gradient-to-br from-cyan-600 to-cyan-800 hover:from-cyan-700 hover:to-cyan-900 text-white p-6 rounded-lg shadow-lg transition transform hover:scale-105">
+                    <div class="flex items-center gap-3 mb-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 5v14" />
+                            <path d="M5 12h14" />
+                        </svg>
+                        <span class="font-bold">Record Historical Transporter Advance</span>
+                    </div>
+                    <p class="text-sm opacity-90">Enter historical transporter advances to backfill ledger data</p>
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Date & Voucher Filter Form -->
 <div class="bg-blue-50 p-6 rounded-lg shadow-md mb-10 border-2 border-blue-200">
     <h3 class="text-lg font-bold text-gray-900 mb-4 inline-flex items-center gap-2">
