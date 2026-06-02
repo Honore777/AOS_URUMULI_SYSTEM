@@ -43,7 +43,7 @@ def record_output():
     # Populate stock choices
     # Populate choices by selecting only required columns to avoid loading full ORM objects
     stock_rows = (
-        db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.local_balance)
+        db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.percentage, CassiteriteStock.local_balance)
         .filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False))
         .order_by(CassiteriteStock.date.desc())
         .all()
@@ -233,6 +233,7 @@ def optimize():
                 CassiteriteStock.id,
                 CassiteriteStock.voucher_no,
                 CassiteriteStock.supplier,
+                CassiteriteStock.percentage,
                 CassiteriteStock.local_balance,
             ).filter(
                 CassiteriteStock.local_balance > 0,
@@ -259,6 +260,7 @@ def optimize():
                 CassiteriteStock.id,
                 CassiteriteStock.voucher_no,
                 CassiteriteStock.supplier,
+                CassiteriteStock.percentage,
                 CassiteriteStock.local_balance,
             ).filter(
                 CassiteriteStock.local_balance > 0,
@@ -379,6 +381,7 @@ def optimize():
         CassiteriteStock.id,
         CassiteriteStock.voucher_no,
         CassiteriteStock.supplier,
+        CassiteriteStock.percentage,
         CassiteriteStock.local_balance,
     ).filter(
         CassiteriteStock.local_balance > 0,
@@ -419,8 +422,31 @@ def optimize():
     # explicit query params when present (pagination/search links).
     if request.method == 'POST' and form is not None:
         _set_session_target_if_present('optimization_target_moyenne', form.target_moyenne.data)
+        _set_session_target_if_present('optimization_target_total_quantity', form.target_total_quantity.data)
     else:
         _set_session_target_if_present('optimization_target_moyenne', request.args.get('target_moyenne'))
+        _set_session_target_if_present('optimization_target_total_quantity', request.args.get('target_total_quantity'))
+    
+    # Ensure all_stocks is populated for result view template lookups
+    # If we have selected_stocks from optimization (initial/result modes),
+    # use those for template to lookup stock details by ID
+    if mode in ('initial', 'result') and selected_stocks and not all_stocks:
+        try:
+            # Extract IDs from selected_stocks and fetch full stock details
+            stock_ids = [s.id for s in selected_stocks if hasattr(s, 'id')]
+            if stock_ids:
+                all_stocks = db.session.query(
+                    CassiteriteStock.id,
+                    CassiteriteStock.voucher_no,
+                    CassiteriteStock.supplier,
+                    CassiteriteStock.local_balance,
+                    CassiteriteStock.percentage,
+                ).filter(
+                    CassiteriteStock.id.in_(stock_ids),
+                    CassiteriteStock.is_deleted.is_(False),
+                ).all()
+        except Exception:
+            pass
     
     return render_template(
         'cassiterite/optimize.html',

@@ -138,6 +138,7 @@ class RecordCassiteritePaymentForm(FlaskForm):
 class OptimizeCassiteriteForm(FlaskForm):
     """Form to optimize cassiterite stocks by target quality"""
     target_moyenne = FloatField("Moyenne (quality percentage) that you want", validators=[Optional()])
+    target_total_quantity = FloatField("Target total quantity (kg)", validators=[Optional()])
     submit = SubmitField('Filter Stocks')
 
 
