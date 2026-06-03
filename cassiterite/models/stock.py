@@ -226,10 +226,12 @@ class CassiteriteStock(db.Model):
         This method is intended for backfills/repairs or when you explicitly
         want to force a full recalculation. Normal add/edit/delete/output
         flows should use delta updates instead.
+        
+        IMPORTANT: Must filter by is_deleted=False to stay in sync with optimization engine
         """
-        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
-        total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
-        total_t_unity = db.session.query(func.coalesce(func.sum(CassiteriteStock.t_unity), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+        total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).scalar() or 0
+        total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).scalar() or 0
+        total_t_unity = db.session.query(func.coalesce(func.sum(CassiteriteStock.t_unity), 0)).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).scalar() or 0
 
         total_unit_percent = float(total_unit_percent or 0.0)
         total_remaining_balance = float(total_remaining_balance or 0.0)
@@ -300,9 +302,9 @@ class CassiteriteStock(db.Model):
     def rebuild_stock_aggregate():
         """Full recompute of the stock aggregate (safety/repair)."""
         try:
-            total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
-            total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
-            total_t_unity = db.session.query(func.coalesce(func.sum(CassiteriteStock.t_unity), 0)).filter(CassiteriteStock.local_balance > 0).scalar() or 0
+            total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).scalar() or 0
+            total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).scalar() or 0
+            total_t_unity = db.session.query(func.coalesce(func.sum(CassiteriteStock.t_unity), 0)).filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False)).scalar() or 0
 
             agg = db.session.query(StockAggregate).filter_by(mineral_type='cassiterite').with_for_update().first()
             if not agg:

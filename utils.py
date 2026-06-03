@@ -680,9 +680,22 @@ def update_stock(stock_id):
 
 
 def calculate_unit_percentage(local_balance, percentage):
+    """
+    Calculate unit_percent = local_balance × (percentage / 100)
+    
+    Args:
+        local_balance: Remaining quantity in kg
+        percentage: Quality percentage (0-100, e.g., 47.32 for 47.32%)
+    
+    Returns:
+        unit_percent: local_balance × (percentage / 100)
+    
+    This is used in Moyenne calculation:
+        Moyenne = sum(unit_percent) / sum(local_balance)
+    """
     if local_balance is None or percentage is None:
-        return 0  # or return None based on business logic
-    return local_balance * percentage
+        return 0
+    return local_balance * (percentage / 100)
 
 def calculate_moyenne(stocks):
     """

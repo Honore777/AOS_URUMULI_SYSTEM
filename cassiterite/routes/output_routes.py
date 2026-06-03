@@ -194,9 +194,46 @@ def optimize():
             'cassiterite_optimization_edits',
         ):
             session.pop(_k, None)
+    # If mode=edit is explicitly requested, set it early so the template can render correctly
+    elif request.method == 'GET' and mode_arg == 'edit':
+        mode = 'edit'
+        # Rehydrate quantities from session for edit mode
+        try:
+            sess_qty = session.get('optimization_quantities') or {}
+            if sess_qty:
+                quantities = {int(k): float(v) for k, v in sess_qty.items()}
+                # Restore achieved values from session
+                achieved_moyenne = float(session.get('optimization_achieved_moyenne', 0.0))
+                achieved_total_quantity = float(session.get('optimization_achieved_total_quantity', 0.0))
+                # Get selected stocks for display
+                ids = list(quantities.keys())
+                if ids:
+                    selected_stocks = CassiteriteStock.query.filter(
+                        CassiteriteStock.id.in_(ids),
+                        CassiteriteStock.is_deleted.is_(False),
+                    ).all()
+            else:
+                # Fall back to recomputing selection using provided or stored target
+                tgt = request.args.get('target_moyenne') or session.get('optimization_target_moyenne')
+                tgt_qty = request.args.get('target_total_quantity') or session.get('optimization_target_total_quantity')
+                try:
+                    tgt_f = float(tgt) if tgt not in (None, '') else None
+                except Exception:
+                    tgt_f = None
+                try:
+                    tgt_qty_f = float(tgt_qty) if tgt_qty not in (None, '') else None
+                except Exception:
+                    tgt_qty_f = None
+                if tgt_f is not None:
+                    selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(target_moyenne=tgt_f, target_total_quantity=tgt_qty_f, minimize_quantity=True)
+                    quantities = {s.id: s.local_balance for s in selected_stocks}
+        except Exception as e:
+            logger.exception(f"Failed to rehydrate edit mode: {e}")
+            quantities = {}
     
     if form.validate_on_submit():
         target_moyenne = form.target_moyenne.data
+        target_total_quantity = form.target_total_quantity.data
         action = request.form.get('action', '')
         
         # ═══════════════════════════════════════════════════
@@ -204,7 +241,8 @@ def optimize():
         # ═══════════════════════════════════════════════════
         if action == 'filter':
             selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(
-                target_moyenne=target_moyenne
+                target_moyenne=target_moyenne,
+                target_total_quantity=target_total_quantity,
             )
             
             # Create quantity dict (show full available amount as recommended)
@@ -223,6 +261,7 @@ def optimize():
             # Get the previously selected stocks for reference
             selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(
                 target_moyenne=target_moyenne,
+                target_total_quantity=target_total_quantity,
                 minimize_quantity=True,
             )
             
@@ -314,8 +353,21 @@ def optimize():
             # Re-optimize with hybrid variables
             selected_stocks, achieved_moyenne, quantities = select_stocks_with_minimum_quantities_cassiterite(
                 target_moyenne=target_moyenne,
-                minimum_quantities=minimum_quantities
+                minimum_quantities=minimum_quantities,
+                target_total_quantity=target_total_quantity,
             )
+            # Compute achieved total quantity from returned quantities dict
+            try:
+                achieved_total_quantity = float(sum(float(v) for v in quantities.values())) if quantities else 0.0
+            except Exception:
+                achieved_total_quantity = 0.0
+            
+            # Save recalculate results to session for re-edit
+            if quantities:
+                session['optimization_quantities'] = quantities
+                session['optimization_achieved_moyenne'] = float(achieved_moyenne) if achieved_moyenne else 0.0
+                session['optimization_achieved_total_quantity'] = float(achieved_total_quantity) if achieved_total_quantity else 0.0
+            
             mode = 'result'
         
         # ═══════════════════════════════════════════════════
@@ -324,7 +376,8 @@ def optimize():
         elif action == 'back_to_initial':
             mode = 'initial'
             selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(
-                target_moyenne=target_moyenne
+                target_moyenne=target_moyenne,
+                target_total_quantity=target_total_quantity,
             )
             quantities = {s.id: s.local_balance for s in selected_stocks}
     
@@ -332,32 +385,7 @@ def optimize():
         # rehydrate the previously computed recommendation from session so the
         # supplier search / pagination keeps the user in the edit view instead
         # of dropping back to the initial page.
-        if request.method == 'GET' and request.args.get('mode') == 'edit':
-            try:
-                sess_qty = session.get('optimization_quantities') or {}
-                if sess_qty:
-                    ids = [int(k) for k in sess_qty.keys()]
-                    selected_stocks = CassiteriteStock.query.filter(
-                        CassiteriteStock.id.in_(ids),
-                        CassiteriteStock.is_deleted.is_(False),
-                    ).all()
-                    quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
-                    mode = 'edit'
-                else:
-                    # Fall back to recomputing selection using provided or stored target
-                    tgt = request.args.get('target_moyenne') or session.get('optimization_target_moyenne')
-                    try:
-                        tgt_f = float(tgt) if tgt not in (None, '') else None
-                    except Exception:
-                        tgt_f = None
-                    if tgt_f is not None:
-                        selected_stocks, achieved_moyenne, achieved_total_quantity = select_stocks_for_average_quality(target_moyenne=tgt_f, minimize_quantity=True)
-                        quantities = {s.id: s.local_balance for s in selected_stocks}
-                        mode = 'edit'
-            except Exception:
-                selected_stocks = []
-                quantities = {}
-                mode = None
+        # NOTE: This is now handled in the early mode=edit handler above to avoid duplication
 
         # Get all stocks for edit mode display (only selected columns)
         # Support pagination and supplier search for edit table
@@ -411,9 +439,10 @@ def optimize():
 
     if quantities:
         session['optimization_quantities'] = quantities
-        # IMPORTANT: Store achieved moyenne for O(1) lookup in batch selector
-        # This avoids recalculation when negotiator views the batch
+        # IMPORTANT: Store achieved moyenne and total quantity for O(1) lookup and re-edit restoration
+        # This avoids recalculation when negotiator views the batch or user re-edits
         session['optimization_achieved_moyenne'] = float(achieved_moyenne) if achieved_moyenne else 0.0
+        session['optimization_achieved_total_quantity'] = float(achieved_total_quantity) if achieved_total_quantity else 0.0
 
     if mode is not None:
         session['optimization_mode'] = mode
@@ -448,6 +477,11 @@ def optimize():
         except Exception:
             pass
     
+    # Ensure target values are available for template even on GET requests
+    # This fixes the Re-Edit workflow where form.data might be empty
+    target_moyenne_for_template = session.get('optimization_target_moyenne')
+    target_quantity_for_template = session.get('optimization_target_total_quantity')
+    
     return render_template(
         'cassiterite/optimize.html',
         selected_stocks=selected_stocks,
@@ -462,6 +496,8 @@ def optimize():
         total_pages=total_pages,
         total_count=total_count,
         q=q,
+        target_moyenne_value=target_moyenne_for_template,
+        target_quantity_value=target_quantity_for_template,
     )
 
 
@@ -483,7 +519,12 @@ def cassiterite_optimize_totals():
 
             if _has_valid_target(tgt):
                 try:
-                    selected_stocks, achieved, _achieved_total = select_stocks_for_average_quality(target_moyenne=tgt)
+                    tgt_qty = session.get('optimization_target_total_quantity')
+                    try:
+                        tgt_qty_f = float(tgt_qty) if tgt_qty not in (None, '') else None
+                    except Exception:
+                        tgt_qty_f = None
+                    selected_stocks, achieved, _achieved_total = select_stocks_for_average_quality(target_moyenne=tgt, target_total_quantity=tgt_qty_f)
                     quantities = {s.id: s.local_balance for s in selected_stocks}
                     session['optimization_quantities'] = quantities
                 except Exception:
@@ -611,8 +652,8 @@ def confirm_bulk_output():
             total_unit += unit_per_kg * qty_f
             total_tunity += tunity_per_kg * qty_f
 
-        achieved_moyenne_val = float(total_unit / total_qty) if total_qty else 0.0
-        achieved_moyenne_nb_val = float(total_tunity / total_qty) if total_qty else 0.0
+        achieved_moyenne_val = float((total_unit / total_qty) * 100) if total_qty else 0.0
+        achieved_moyenne_nb_val = float((total_tunity / total_qty) * 100) if total_qty else 0.0
         
         # Store metadata at top level of plan_json for quick retrieval
         plan_metadata = {

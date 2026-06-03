@@ -6553,3 +6553,79 @@ def admin_delete_user(user_id: int):
     db.session.commit()
     flash("User deleted successfully.", "success")
     return redirect(request.referrer or url_for("core.admin_users"))
+
+
+@core_bp.route("/admin/rebuild_aggregate/<mineral_type>", methods=["POST"])
+@role_required("admin")
+def admin_rebuild_aggregate(mineral_type: str):
+    """Rebuild StockAggregate for a specific mineral type from current stock data.
+
+    This fixes stale aggregate data that can occur when:
+    - Delta updates are missed or fail
+    - Direct database modifications bypass the application
+    - Transaction rollbacks leave aggregate in inconsistent state
+    - Historical data migration without aggregate updates
+    """
+    from sqlalchemy import func
+    from core.models import StockAggregate
+
+    if mineral_type not in ['cassiterite', 'copper']:
+        flash(f"Invalid mineral type: {mineral_type}", "danger")
+        return redirect(request.referrer or url_for("core.admin_users"))
+
+    try:
+        # Import the correct model based on mineral type
+        if mineral_type == 'cassiterite':
+            from cassiterite.models import CassiteriteStock as StockModel
+        else:
+            from copper.models import CopperStock as StockModel
+
+        # Calculate current totals from actual stock data
+        total_unit_percent = db.session.query(func.coalesce(func.sum(StockModel.unit_percent), 0)).filter(
+            StockModel.local_balance > 0,
+            StockModel.is_deleted.is_(False),
+        ).scalar() or 0
+
+        total_remaining_balance = db.session.query(func.coalesce(func.sum(StockModel.local_balance), 0)).filter(
+            StockModel.local_balance > 0,
+            StockModel.is_deleted.is_(False),
+        ).scalar() or 0
+
+        total_t_unity = db.session.query(func.coalesce(func.sum(StockModel.t_unity), 0)).filter(
+            StockModel.local_balance > 0,
+            StockModel.is_deleted.is_(False),
+        ).scalar() or 0
+
+        # Convert to float
+        total_unit_percent = float(total_unit_percent or 0.0)
+        total_remaining_balance = float(total_remaining_balance or 0.0)
+        total_t_unity = float(total_t_unity or 0.0)
+
+        # Calculate moyenne
+        moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+
+        # Update or create StockAggregate
+        agg = db.session.query(StockAggregate).filter_by(mineral_type=mineral_type).with_for_update().first()
+        if not agg:
+            agg = StockAggregate(mineral_type=mineral_type)
+            db.session.add(agg)
+
+        old_qty = agg.total_quantity or 0
+        old_wp = agg.total_weighted_percent or 0
+
+        agg.total_quantity = total_remaining_balance
+        agg.total_weighted_percent = total_unit_percent
+        agg.total_t_unity = total_t_unity
+
+        db.session.commit()
+
+        flash(f"✓ {mineral_type.capitalize()} aggregate rebuilt successfully! "
+              f"Old: {old_qty:.2f}kg → New: {total_remaining_balance:.2f}kg, "
+              f"Moyenne: {moyenne * 100:.2f}%", "success")
+
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"admin_rebuild_aggregate failed for {mineral_type}")
+        flash(f"✗ Error rebuilding {mineral_type} aggregate: {str(e)}", "danger")
+
+    return redirect(request.referrer or url_for("core.admin_users"))

@@ -1204,8 +1204,7 @@ FROM (
 
         # Remaining stocks aggregates (only local_balance > 0)
         remaining_filters = list(stock_filters) + [CassiteriteStock.local_balance > 0]
-        # If no date/lot filters are provided, prefer the lightweight
-        # single-row StockAggregate to avoid expensive SUMs.
+        # Use StockAggregate for performance, but rebuild if stale
         total_unit_percent = 0
         total_remaining_balance = 0
         moyenne = 0
@@ -1227,26 +1226,21 @@ FROM (
             total_unit_percent = db.session.query(func.coalesce(func.sum(CassiteriteStock.unit_percent), 0)).filter(*remaining_filters).scalar() or 0
             total_remaining_balance = db.session.query(func.coalesce(func.sum(CassiteriteStock.local_balance), 0)).filter(*remaining_filters).scalar() or 0
             moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
-            # Total supplier obligation (balance_to_pay) respecting the same stock
-            # filters. This is the original cost basis for these lots (what we
-            # owe suppliers before any payments are deducted).
-           
+
+        # Total supplier obligation (balance_to_pay) respecting the same stock
+        # filters. This is the original cost basis for these lots (what we
+        # owe suppliers before any payments are deducted).
         total_supplier_obligation = db.session.query(func.coalesce(func.sum(CassiteriteStock.balance_to_pay), 0)).filter(*stock_filters).scalar() or 0
 
-            # Total payments made against the filtered cassiterite stocks
+        # Total payments made against the filtered cassiterite stocks
         from cassiterite.models import CassiteriteSupplierPayment
         total_payments = db.session.query(func.coalesce(func.sum(func.coalesce(CassiteriteSupplierPayment.amount_rwf, CassiteriteSupplierPayment.amount)), 0)).join(CassiteriteStock, CassiteriteSupplierPayment.stock_id == CassiteriteStock.id).filter(*stock_filters).scalar() or 0
 
-            # Remaining stocks aggregates (only local_balance > 0). We will reuse
-            # this both for moyenne and Inventory Value (current cost of remaining
-            # stock).
-        remaining_filters = list(stock_filters) + [CassiteriteStock.local_balance > 0]
-
-            # Inventory Value (current cost of remaining cassiterite stock).
-            # Per lot: cost_per_kg = balance_to_pay / input_kg, then
-            # current_value = cost_per_kg * local_balance.
-            # Implemented in SQL as SUM(balance_to_pay * local_balance / input_kg)
-            # and restricted to positive input_kg to avoid division-by-zero.
+        # Inventory Value (current cost of remaining cassiterite stock).
+        # Per lot: cost_per_kg = balance_to_pay / input_kg, then
+        # current_value = cost_per_kg * local_balance.
+        # Implemented in SQL as SUM(balance_to_pay * local_balance / input_kg)
+        # and restricted to positive input_kg to avoid division-by-zero.
         remaining_value_filters = list(remaining_filters) + [CassiteriteStock.input_kg > 0]
         import time
         timings = {}

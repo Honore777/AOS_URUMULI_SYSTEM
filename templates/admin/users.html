@@ -26,6 +26,24 @@
             </div>
         </div>
 
+        <!-- Stock Aggregate Management -->
+        <div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6">
+            <h2 class="text-lg font-bold text-slate-800 mb-3">Stock Aggregate Management</h2>
+            <p class="text-sm text-slate-600 mb-3">Rebuild stock aggregates to fix stale data (e.g., incorrect moyenne on dashboard).</p>
+            <div class="flex flex-wrap gap-2">
+                <form method="post" action="{{ url_for('core.admin_rebuild_aggregate', mineral_type='cassiterite') }}" onsubmit="return confirm('Rebuild cassiterite stock aggregate? This will recalculate from current stock data.');">
+                    <button type="submit" class="inline-flex items-center rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
+                        🔄 Rebuild Cassiterite Aggregate
+                    </button>
+                </form>
+                <form method="post" action="{{ url_for('core.admin_rebuild_aggregate', mineral_type='copper') }}" onsubmit="return confirm('Rebuild copper stock aggregate? This will recalculate from current stock data.');">
+                    <button type="submit" class="inline-flex items-center rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
+                        🔄 Rebuild Copper Aggregate
+                    </button>
+                </form>
+            </div>
+        </div>
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 <div class="mb-4 space-y-2">
