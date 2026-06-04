@@ -205,7 +205,7 @@ def pay_supplier():
 			CassiteriteStock.supplier,
 			CassiteriteStock.balance_to_pay,
 		)
-		.filter(CassiteriteStock.balance_to_pay > 0, CassiteriteStock.is_deleted.is_(False))
+		.filter(CassiteriteStock.is_deleted.is_(False))
 		.order_by(CassiteriteStock.date.desc())
 		.all()
 	)
@@ -242,10 +242,11 @@ def pay_supplier():
 			stock = CassiteriteStock.query.get_or_404(form.stock_id.data)
 			payment_supplier = stock.supplier
 			supplier_id = _get_or_create_supplier_id(payment_supplier)
-			stock_remaining = float(stock.remaining_to_pay() or 0.0)
-			if amount_rwf > stock_remaining:
+			from utils import calculate_consolidated_supplier_remaining_balance
+			supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(payment_supplier) or 0.0)
+			if amount_rwf > supplier_remaining:
 				flash(
-					f"Payment exceeds remaining balance ({stock_remaining:,.2f} RWF).",
+					f"Payment exceeds consolidated supplier balance ({supplier_remaining:,.2f} RWF).",
 					"danger",
 				)
 				return render_template('cassiterite/pay_supplier.html', form=form, selected_stock_label=selected_stock_label, supplier_summaries=supplier_summaries, pending_reviews=pending_reviews, recent_settlements=recent_settlements, recent_suppliers=recent_suppliers, suppliers_pagination=suppliers_pagination, supplier_query=supplier_query)
@@ -543,7 +544,7 @@ def pay_supplier_advance():
 			CassiteriteStock.supplier,
 			CassiteriteStock.balance_to_pay,
 		)
-		.filter(CassiteriteStock.balance_to_pay > 0, CassiteriteStock.is_deleted.is_(False))
+		.filter(CassiteriteStock.is_deleted.is_(False))
 		.order_by(CassiteriteStock.date.desc())
 		.all()
 	)

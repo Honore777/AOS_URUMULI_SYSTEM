@@ -439,7 +439,6 @@ def pay_supplier():
 
     # populate stock choices - select only required columns, compute remaining via grouped aggregate
     stock_rows = db.session.query(CopperStock.id, CopperStock.voucher_no, CopperStock.supplier, CopperStock.net_balance).filter(
-        CopperStock.net_balance > 0,
         CopperStock.is_deleted.is_(False),
     ).order_by(CopperStock.date.desc()).all()
     stock_ids = [r.id for r in stock_rows]
@@ -512,9 +511,10 @@ def pay_supplier():
             stock = CopperStock.query.get_or_404(form.stock_id.data)
             payment_supplier = stock.supplier
             supplier_id = _get_or_create_supplier_id(payment_supplier)
-            stock_remaining = float(stock.remaining_to_pay() or 0.0)
-            if amount_rwf > stock_remaining:
-                flash(f"Payment exceeds remaining balance ({stock_remaining:,.2f} RWF).", "danger")
+            from utils import calculate_consolidated_supplier_remaining_balance
+            supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(payment_supplier) or 0.0)
+            if amount_rwf > supplier_remaining:
+                flash(f"Payment exceeds consolidated supplier balance ({supplier_remaining:,.2f} RWF).", "danger")
                 pending_reviews = PaymentReview.query.filter_by(
                     created_by_id=getattr(current_user, 'id', None),
                     status=PaymentReviewStatus.PENDING_REVIEW.value,

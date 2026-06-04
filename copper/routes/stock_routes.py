@@ -898,6 +898,12 @@ def dashboard():
     customer_debt = 0
     cash_position = 0
 
+    # Ensure clean session state before dashboard queries
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+
     # Calculate total input (all undeleted stock)
     try:
         total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).filter(CopperStock.is_deleted.is_(False)).scalar() or 0
