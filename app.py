@@ -12,6 +12,7 @@ from flask_migrate import Migrate
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from datetime import datetime, date, time, timedelta, timezone
 from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
 
 from config import Config, db
 import logging
@@ -20,6 +21,9 @@ from logging.handlers import RotatingFileHandler
 from utils import trace_time
 from sqlalchemy import func, or_
 from core.models import User
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
 app.config.from_object(Config)

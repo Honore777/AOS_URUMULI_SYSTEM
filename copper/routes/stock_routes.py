@@ -836,7 +836,7 @@ def dashboard():
     page = request.args.get('page', 1, type=int)
     per_page = 20
     # Avoid pre-loading related supplier_payments here to reduce hydration cost on dashboard.
-    stocks_pagination = CopperStock.query.filter(CopperStock.is_deleted.is_(False)).order_by(CopperStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    stocks_pagination = CopperStock.query.filter(CopperStock.is_deleted.is_(False), CopperStock.local_balance > 0).order_by(CopperStock.date.desc()).paginate(page=page, per_page=per_page, error_out=False)
     stocks = stocks_pagination.items
     outputs = CopperOutput.query.filter(CopperOutput.is_deleted.is_(False)).order_by(CopperOutput.date.desc()).limit(10).all()
     # Compute a small distinct list of voucher choices separately so the
@@ -885,34 +885,18 @@ def dashboard():
         latest_achieved_moyenne = None
         latest_achieved_moyenne_nb = None
 
-    cached_aggs = _get_dashboard_aggregates(ttl=10)
-    if cached_aggs:
-        total_input = cached_aggs.get('total_input', 0)
-        total_output = cached_aggs.get('total_output', 0)
-        total_debt = cached_aggs.get('total_debt', 0)
-        total_sales = cached_aggs.get('total_sales', 0)
-        total_supplier_obligation = cached_aggs.get('total_supplier_obligation', 0)
-        copper_inventory_value = cached_aggs.get('inventory_value', 0)
-        copper_cost_of_stock_sold = cached_aggs.get('cost_of_stock_sold', 0)
-        gross_profit = cached_aggs.get('gross_profit', 0)
-        supplier_debt = total_supplier_obligation
-        customer_debt = total_debt
-        cash_position = cached_aggs.get('cash_position', 0)
-        moyenne = cached_aggs.get('moyenne', 0)
-        moyenne_nb = cached_aggs.get('moyenne_nb', 0)
-    else:
-        # Lightweight placeholders - real aggregates are fetched asynchronously
-        total_input = 0
-        total_output = 0
-        total_debt = 0
-        total_sales = 0
-        total_supplier_obligation = 0
-        copper_inventory_value = 0
-        copper_cost_of_stock_sold = 0
-        gross_profit = 0
-        supplier_debt = 0
-        customer_debt = 0
-        cash_position = 0
+    # Compute aggregates in real-time (no caching)
+    total_input = 0
+    total_output = 0
+    total_debt = 0
+    total_sales = 0
+    total_supplier_obligation = 0
+    copper_inventory_value = 0
+    copper_cost_of_stock_sold = 0
+    gross_profit = 0
+    supplier_debt = 0
+    customer_debt = 0
+    cash_position = 0
 
     user_notifications = []
     unread_count = 0
@@ -935,42 +919,18 @@ def dashboard():
 
         # Remaining stocks aggregates (compute counts/aggregates only — avoid hydrating full lists)
         # Prefer the single-row StockAggregate for moyenne values to avoid SUM(...) on render.
-        cached = _get_dashboard_aggregates(ttl=10)
-        if cached:
-            remaining_stocks_count = cached.get('remaining_stocks_count', 0)
-            total_unit_percent = cached.get('total_unit_percent', 0)
-            total_remaining_balance = cached.get('total_remaining_balance', 0)
-            moyenne = cached.get('moyenne', 0)
-            total_t_unity = cached.get('total_t_unity', 0)
-            moyenne_nb = cached.get('moyenne_nb', 0)
-        else:
-            remaining_stocks_count = CopperStock.query.filter(CopperStock.is_deleted.is_(False), CopperStock.local_balance > 0).count()
-            # Try StockAggregate first for the moyenne values (single-row, cheap)
-            try:
-                from core.models import StockAggregate
-                agg = StockAggregate.get('copper')
-                if agg and agg.total_quantity:
-                    total_unit_percent = float(agg.total_weighted_percent or 0)
-                    total_remaining_balance = float(agg.total_quantity or 0)
-                    total_t_unity = float(agg.total_t_unity or 0)
-                    moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
-                    moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
-                else:
-                    total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(
-                        CopperStock.local_balance > 0,
-                        CopperStock.is_deleted.is_(False),
-                    ).scalar() or 0
-                    total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(
-                        CopperStock.local_balance > 0,
-                        CopperStock.is_deleted.is_(False),
-                    ).scalar() or 0
-                    total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(
-                        CopperStock.local_balance > 0,
-                        CopperStock.is_deleted.is_(False),
-                    ).scalar() or 0
-                    moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
-                    moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
-            except Exception:
+        remaining_stocks_count = CopperStock.query.filter(CopperStock.is_deleted.is_(False), CopperStock.local_balance > 0).count()
+        # Try StockAggregate first for the moyenne values (single-row, cheap)
+        try:
+            from core.models import StockAggregate
+            agg = StockAggregate.get('copper')
+            if agg and agg.total_quantity:
+                total_unit_percent = float(agg.total_weighted_percent or 0)
+                total_remaining_balance = float(agg.total_quantity or 0)
+                total_t_unity = float(agg.total_t_unity or 0)
+                moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+                moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
+            else:
                 total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(
                     CopperStock.local_balance > 0,
                     CopperStock.is_deleted.is_(False),
@@ -985,19 +945,21 @@ def dashboard():
                 ).scalar() or 0
                 moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
                 moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
-
-            # Cache small dashboard card values (still owned by dashboard view)
-            try:
-                _set_dashboard_aggregates({
-                    'remaining_stocks_count': remaining_stocks_count,
-                    'total_unit_percent': total_unit_percent,
-                    'total_remaining_balance': total_remaining_balance,
-                    'moyenne': moyenne,
-                    'total_t_unity': total_t_unity,
-                    'moyenne_nb': moyenne_nb,
-                }, ttl=10)
-            except Exception:
-                pass
+        except Exception:
+            total_unit_percent = db.session.query(func.coalesce(func.sum(CopperStock.unit_percent), 0)).filter(
+                CopperStock.local_balance > 0,
+                CopperStock.is_deleted.is_(False),
+            ).scalar() or 0
+            total_remaining_balance = db.session.query(func.coalesce(func.sum(CopperStock.local_balance), 0)).filter(
+                CopperStock.local_balance > 0,
+                CopperStock.is_deleted.is_(False),
+            ).scalar() or 0
+            total_t_unity = db.session.query(func.coalesce(func.sum(CopperStock.t_unity), 0)).filter(
+                CopperStock.local_balance > 0,
+                CopperStock.is_deleted.is_(False),
+            ).scalar() or 0
+            moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
+            moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
 
         if latest_achieved_moyenne is not None:
             moyenne = latest_achieved_moyenne
