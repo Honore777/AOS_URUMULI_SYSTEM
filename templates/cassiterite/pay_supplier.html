@@ -49,6 +49,7 @@
                     <div>
                         <label class="block text-gray-700 font-medium mb-1" for="cass-stock-search">{{ form.stock_id.label.text }}</label>
                         <input type="hidden" name="stock_id" id="cass-stock-id" value="{{ form.stock_id.data or '' }}">
+                        <input type="hidden" name="existing_supplier" id="cass-supplier-name" value="{{ form.existing_supplier.data or '' }}">
                         <input
                             type="text"
                             id="cass-stock-search"
@@ -105,6 +106,7 @@
                     (function () {
                         const filterInput = document.getElementById('cass-stock-search');
                         const hiddenInput = document.getElementById('cass-stock-id');
+                        const supplierName = document.getElementById('cass-supplier-name');
                         const holder = document.getElementById('cass-stock-suggest');
                         if (!filterInput || !hiddenInput || !holder) return;
 
@@ -143,6 +145,10 @@
                                     try { event.preventDefault(); } catch (error) {}
                                     hiddenInput.value = item.id || '';
                                     filterInput.value = item.display || '';
+                                    // For advance-only suppliers (id=0), populate supplier name field
+                                    if (supplierName) {
+                                        supplierName.value = (item.id === 0) ? (item.supplier || '') : '';
+                                    }
                                     hide();
                                 });
                                 list.appendChild(button);

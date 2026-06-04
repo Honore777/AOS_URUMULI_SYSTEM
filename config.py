@@ -14,11 +14,20 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'urumulismartsystem')
 
     # Database
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') 
     # Debug: Log which database URL is being used
     print(f"DEBUG: DATABASE_URL_CLONE = {os.environ.get('DATABASE_URL_CLONE')}")
     print(f"DEBUG: DATABASE_URL = {os.environ.get('DATABASE_URL')}")
     print(f"DEBUG: Using SQLALCHEMY_DATABASE_URI = {SQLALCHEMY_DATABASE_URI}")
+    # Force connection pool disposal to prevent caching
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+        'pool_size': int(os.environ.get('POOL_SIZE', '7')),
+        'max_overflow': int(os.environ.get('MAX_OVERFLOW', '10')),
+        'pool_timeout': int(os.environ.get('POOL_TIMEOUT', '35')),
+        'pool_recycle': int(os.environ.get('POOL_RECYCLE', '400')),
+        'pool_reset_on_return': 'commit',
+    }
     
     
     SQLALCHEMY_TRACK_MODIFICATIONS = os.environ.get(
@@ -33,15 +42,6 @@ class Config:
     # Optional Supabase (useful for storage/auth separate from DB)
     SUPABASE_URL = os.environ.get('SUPABASE_URL_TESTING')
     SUPABASE_KEY = os.environ.get('SERVICE_KEY')
-
-    # SQLAlchemy engine options for robust connections (adjust pool_size for production)
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_pre_ping': True,
-        'pool_size': int(os.environ.get('POOL_SIZE', '7')),
-        'max_overflow': int(os.environ.get('MAX_OVERFLOW', '10')),
-        'pool_timeout': int(os.environ.get('POOL_TIMEOUT', '35')),
-        'pool_recycle': int(os.environ.get('POOL_RECYCLE', '400')),
-    }
 
     # Logging configuration (controlled by env vars)
     LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()

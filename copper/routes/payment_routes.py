@@ -195,6 +195,27 @@ def pay_supplier_stock_search():
             'remaining': f"{remaining:,.2f} RWF",
         })
 
+    # Also include suppliers from advances who may not have stock
+    from utils import build_consolidated_supplier_choices
+    consolidated_choices = build_consolidated_supplier_choices()
+    for choice in consolidated_choices:
+        supplier_name = choice[0]
+        if not supplier_name or supplier_name == '':
+            continue
+        if q and q.lower() not in supplier_name.lower():
+            continue
+        # Check if already in results from stock
+        if any(r['supplier'] == supplier_name for r in results):
+            continue
+        # Add supplier from advances with their consolidated balance
+        balance_str = choice[1].split('[')[1].split(']')[0] if '[' in choice[1] else '0.00 RWF'
+        results.append({
+            'id': 0,  # No stock ID for advance-only suppliers
+            'display': supplier_name,
+            'supplier': supplier_name,
+            'remaining': balance_str,
+        })
+
     return safe_jsonify(results)
 
 
@@ -472,6 +493,11 @@ def pay_supplier():
         allocation_map = {}
 
     supplier_names = sorted({(r.supplier or '').strip() for r in stock_rows if (r.supplier or '').strip()})
+    # Include suppliers from advances and payments who may not have stock
+    from utils import build_consolidated_supplier_choices
+    consolidated_choices = build_consolidated_supplier_choices()
+    consolidated_suppliers = {choice[0] for choice in consolidated_choices if choice[0]}
+    supplier_names = sorted(set(supplier_names) | consolidated_suppliers)
     form.existing_supplier.choices = [('', 'Select existing supplier')] + [(s, s) for s in supplier_names]
 
     form.stock_id.choices = []
@@ -500,7 +526,8 @@ def pay_supplier():
             payment_supplier = None
             stock = None
 
-            if not form.stock_id.data:
+            # Allow payment for advance-only suppliers (no stock selected)
+            if not form.stock_id.data and not form.existing_supplier.data:
                 flash('Please select a supplier obligation from the suggestions.', 'danger')
                 pending_reviews = PaymentReview.query.filter_by(
                     created_by_id=getattr(current_user, 'id', None),
@@ -508,12 +535,21 @@ def pay_supplier():
                 ).order_by(PaymentReview.created_at.desc()).limit(10).all()
                 return render_template('copper/pay_supplier.html', form=form, pending_reviews=pending_reviews, selected_stock_label=selected_stock_label)
 
-            stock = CopperStock.query.get_or_404(form.stock_id.data)
-            payment_supplier = stock.supplier
+            # If stock_id is provided, use stock supplier
+            if form.stock_id.data:
+                stock = CopperStock.query.get_or_404(form.stock_id.data)
+                payment_supplier = stock.supplier
+            else:
+                # For advance-only suppliers, use the selected supplier name
+                payment_supplier = form.existing_supplier.data
+
             supplier_id = _get_or_create_supplier_id(payment_supplier)
             from utils import calculate_consolidated_supplier_remaining_balance
             supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(payment_supplier) or 0.0)
-            if amount_rwf > supplier_remaining:
+            # Allow payments up to the absolute value of the balance
+            # Positive balance: system owes supplier, payment can't exceed what we owe
+            # Negative balance: supplier owes system (advance), payment can't exceed what they owe
+            if amount_rwf > abs(supplier_remaining):
                 flash(f"Payment exceeds consolidated supplier balance ({supplier_remaining:,.2f} RWF).", "danger")
                 pending_reviews = PaymentReview.query.filter_by(
                     created_by_id=getattr(current_user, 'id', None),

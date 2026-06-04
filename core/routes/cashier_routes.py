@@ -2282,21 +2282,25 @@ def cashier_disburse_payment_review(review_id: int):
 
                     if payment_kind == 'settlement':
                         stock_id = payload.get('stock_id')
-                        if not stock_id:
-                            raise ValueError('Missing stock for supplier settlement request.')
-                        stock = CopperStock.query.filter(
-                            CopperStock.id == stock_id,
-                            CopperStock.is_deleted.is_(False),
-                        ).first()
-                        if not stock:
-                            raise ValueError('Stock not found for supplier settlement request.')
-                        if float(amount_rwf) > float(stock.remaining_to_pay() or 0.0):
-                            raise ValueError('Requested payment now exceeds remaining supplier debt.')
-                        requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
-                        if supplier_id is None:
-                            supplier_id = _resolve_copper_supplier_id(stock.supplier)
-                        payment = SupplierPayment(
-                            stock_id=stock.id,
+                        # Allow settlement for advance-only suppliers (no stock)
+                        if stock_id:
+                            stock = CopperStock.query.filter(
+                                CopperStock.id == stock_id,
+                                CopperStock.is_deleted.is_(False),
+                            ).first()
+                            if not stock:
+                                raise ValueError('Stock not found for supplier settlement request.')
+                            # Use consolidated supplier balance instead of stock-level balance
+                            # This allows payments when supplier has advances (negative balance)
+                            from utils import calculate_consolidated_supplier_remaining_balance
+                            supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(stock.supplier) or 0.0)
+                            if float(amount_rwf) > abs(supplier_remaining):
+                                raise ValueError(f'Requested payment now exceeds remaining supplier debt ({supplier_remaining:,.2f} RWF).')
+                            requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
+                            if supplier_id is None:
+                                supplier_id = _resolve_copper_supplier_id(stock.supplier)
+                            payment = SupplierPayment(
+                                stock_id=stock.id,
                             supplier_id=supplier_id,
                             supplier_name=stock.supplier,
                             amount=amount_rwf,
@@ -2311,58 +2315,131 @@ def cashier_disburse_payment_review(review_id: int):
                             is_advance=False,
                             advance_remaining=0.0,
                         )
-                        payment.paid_at = requested_paid_at
-                        db.session.add(payment)
-                        db.session.flush()
-                        review.payment_id = int(payment.id)
+                            payment.paid_at = requested_paid_at
+                            db.session.add(payment)
+                            db.session.flush()
+                            review.payment_id = int(payment.id)
 
-                        # Generate supplier payment receipt
-                        try:
-                            from datetime import datetime as dt
-                            from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
-                            
-                            current_year = dt.utcnow().year
-                            seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
-                            
-                            if not seq_row:
-                                seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                            # Generate supplier payment receipt
+                            try:
+                                from datetime import datetime as dt
+                                from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                                
+                                current_year = dt.utcnow().year
+                                seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                                
+                                if not seq_row:
+                                    seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                    db.session.add(seq_row)
+                                    db.session.flush()
+                                
+                                receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                                seq_row.next_sequence += 1
                                 db.session.add(seq_row)
                                 db.session.flush()
-                            
-                            receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
-                            seq_row.next_sequence += 1
-                            db.session.add(seq_row)
-                            db.session.flush()
 
-                            receipt = SupplierPaymentReceipt(
-                                payment_id=int(payment.id),
-                                mineral_type='copper',
-                                receipt_number=receipt_number,
-                                supplier_name=stock.supplier,
+                                receipt = SupplierPaymentReceipt(
+                                    payment_id=int(payment.id),
+                                    mineral_type='copper',
+                                    receipt_number=receipt_number,
+                                    supplier_name=stock.supplier,
+                                    amount=amount_rwf,
+                                    currency=currency,
+                                    payment_type='SETTLEMENT',
+                                    generated_at=dt.utcnow(),
+                                    generated_by_id=getattr(current_user, 'id', None),
+                                )
+                                db.session.add(receipt)
+                                db.session.flush()
+                                logger.info(f"Generated receipt {receipt_number} for supplier payment (payment_id={payment.id})")
+                            except Exception as receipt_err:
+                                logger.exception("Failed to generate supplier receipt: %s", receipt_err)
+
+                            boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+                            for (boss_id,) in boss_rows:
+                                create_notification(
+                                    user_id=int(boss_id),
+                                    type_='SUPPLIER_PAYMENT_DISBURSED',
+                                    message=(
+                                        f"Umubitsi {getattr(current_user, 'username', 'unknown')} yashyize mu bikorwa kwishyura supplier "
+                                        f"{supplier_name or stock.supplier if stock else (review.customer or 'N/A')}. Amount: {tx_amount:,.2f} {currency}" + (f" (={float(amount_rwf or 0.0):,.2f} RWF)" if currency == 'USD' else "") + "."
+                                    ),
+                                    related_type='payment_review',
+                                    related_id=int(review.id),
+                                )
+                        else:
+                            # Advance-only supplier settlement (no stock)
+                            requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
+                            if supplier_id is None:
+                                supplier_id = _resolve_copper_supplier_id(supplier_name)
+                            payment = SupplierPayment(
+                                supplier_id=supplier_id,
+                                supplier_name=supplier_name,
+                                stock_id=None,
                                 amount=amount_rwf,
+                                input_amount=amount_input,
                                 currency=currency,
+                                exchange_rate=exchange_rate,
+                                amount_rwf=amount_rwf,
+                                method=method,
+                                reference=reference,
+                                note=note,
                                 payment_type='SETTLEMENT',
-                                generated_at=dt.utcnow(),
-                                generated_by_id=getattr(current_user, 'id', None),
+                                is_advance=False,
+                                advance_remaining=0.0,
                             )
-                            db.session.add(receipt)
+                            payment.paid_at = requested_paid_at
+                            db.session.add(payment)
                             db.session.flush()
-                            logger.info(f"Generated receipt {receipt_number} for supplier payment (payment_id={payment.id})")
-                        except Exception as receipt_err:
-                            logger.exception("Failed to generate supplier receipt: %s", receipt_err)
+                            review.payment_id = int(payment.id)
 
-                        boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
-                        for (boss_id,) in boss_rows:
-                            create_notification(
-                                user_id=int(boss_id),
-                                type_='SUPPLIER_PAYMENT_DISBURSED',
-                                message=(
-                                    f"Umubitsi {getattr(current_user, 'username', 'unknown')} yashyize mu bikorwa kwishyura supplier "
-                                    f"{supplier_name or stock.supplier if stock else (review.customer or 'N/A')}. Amount: {tx_amount:,.2f} {currency}" + (f" (={float(amount_rwf or 0.0):,.2f} RWF)" if currency == 'USD' else "") + "."
-                                ),
-                                related_type='payment_review',
-                                related_id=int(review.id),
-                            )
+                            # Generate supplier payment receipt
+                            try:
+                                from datetime import datetime as dt
+                                from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                                
+                                current_year = dt.utcnow().year
+                                seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                                
+                                if not seq_row:
+                                    seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                    db.session.add(seq_row)
+                                    db.session.flush()
+                                
+                                receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                                seq_row.next_sequence += 1
+                                db.session.add(seq_row)
+                                db.session.flush()
+
+                                receipt = SupplierPaymentReceipt(
+                                    payment_id=int(payment.id),
+                                    mineral_type='copper',
+                                    receipt_number=receipt_number,
+                                    supplier_name=supplier_name,
+                                    amount=amount_rwf,
+                                    currency=currency,
+                                    payment_type='SETTLEMENT',
+                                    generated_at=dt.utcnow(),
+                                    generated_by_id=getattr(current_user, 'id', None),
+                                )
+                                db.session.add(receipt)
+                                db.session.flush()
+                                logger.info(f"Generated receipt {receipt_number} for supplier payment (payment_id={payment.id})")
+                            except Exception as receipt_err:
+                                logger.exception("Failed to generate supplier receipt: %s", receipt_err)
+
+                            boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+                            for (boss_id,) in boss_rows:
+                                create_notification(
+                                    user_id=int(boss_id),
+                                    type_='SUPPLIER_PAYMENT_DISBURSED',
+                                    message=(
+                                        f"Umubitsi {getattr(current_user, 'username', 'unknown')} yashyize mu bikorwa kwishyura supplier "
+                                        f"{supplier_name or review.customer or 'N/A'}. Amount: {tx_amount:,.2f} {currency}" + (f" (={float(amount_rwf or 0.0):,.2f} RWF)" if currency == 'USD' else "") + "."
+                                    ),
+                                    related_type='payment_review',
+                                    related_id=int(review.id),
+                                )
                     else:
                         requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                         if supplier_id is None:
@@ -2453,6 +2530,7 @@ def cashier_disburse_payment_review(review_id: int):
                             unified = None
 
                         remaining_advance = float(amount_rwf or 0.0)
+                        # Only allocate advance to stocks if there are stocks
                         supplier_stocks = (
                             CopperStock.query
                             .filter(
@@ -2514,21 +2592,25 @@ def cashier_disburse_payment_review(review_id: int):
 
                     if payment_kind == 'settlement':
                         stock_id = payload.get('stock_id')
-                        if not stock_id:
-                            raise ValueError('Missing stock for supplier settlement request.')
-                        stock = CassiteriteStock.query.filter(
-                            CassiteriteStock.id == stock_id,
-                            CassiteriteStock.is_deleted.is_(False),
-                        ).first()
-                        if not stock:
-                            raise ValueError('Stock not found for supplier settlement request.')
-                        if float(amount_rwf) > float(stock.remaining_to_pay() or 0.0):
-                            raise ValueError('Requested payment now exceeds remaining supplier debt.')
-                        requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
-                        if supplier_id is None:
-                            supplier_id = _resolve_cass_supplier_id(stock.supplier)
-                        payment = CassiteriteSupplierPayment(
-                            stock_id=stock.id,
+                        # Allow settlement for advance-only suppliers (no stock)
+                        if stock_id:
+                            stock = CassiteriteStock.query.filter(
+                                CassiteriteStock.id == stock_id,
+                                CassiteriteStock.is_deleted.is_(False),
+                            ).first()
+                            if not stock:
+                                raise ValueError('Stock not found for supplier settlement request.')
+                            # Use consolidated supplier balance instead of stock-level balance
+                            # This allows payments when supplier has advances (negative balance)
+                            from utils import calculate_consolidated_supplier_remaining_balance
+                            supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(stock.supplier) or 0.0)
+                            if float(amount_rwf) > abs(supplier_remaining):
+                                raise ValueError(f'Requested payment now exceeds remaining supplier debt ({supplier_remaining:,.2f} RWF).')
+                            requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
+                            if supplier_id is None:
+                                supplier_id = _resolve_cass_supplier_id(stock.supplier)
+                            payment = CassiteriteSupplierPayment(
+                                stock_id=stock.id,
                             supplier_id=supplier_id,
                             supplier_name=stock.supplier,
                             amount=amount_rwf,
@@ -2543,45 +2625,105 @@ def cashier_disburse_payment_review(review_id: int):
                             is_advance=False,
                             advance_remaining=0.0,
                         )
-                        payment.paid_at = requested_paid_at
-                        db.session.add(payment)
-                        db.session.flush()
-                        review.payment_id = int(payment.id)
+                            payment.paid_at = requested_paid_at
+                            db.session.add(payment)
+                            db.session.flush()
+                            review.payment_id = int(payment.id)
 
-                        # Generate cassiterite supplier payment receipt
-                        try:
-                            from datetime import datetime as dt
-                            from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
-                            
-                            current_year = dt.utcnow().year
-                            seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
-                            
-                            if not seq_row:
-                                seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                            # Generate cassiterite supplier payment receipt
+                            try:
+                                from datetime import datetime as dt
+                                from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                                
+                                current_year = dt.utcnow().year
+                                seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                                
+                                if not seq_row:
+                                    seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                    db.session.add(seq_row)
+                                    db.session.flush()
+                                
+                                receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                                seq_row.next_sequence += 1
                                 db.session.add(seq_row)
                                 db.session.flush()
-                            
-                            receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
-                            seq_row.next_sequence += 1
-                            db.session.add(seq_row)
-                            db.session.flush()
 
-                            receipt = SupplierPaymentReceipt(
-                                payment_id=int(payment.id),
-                                mineral_type='cassiterite',
-                                receipt_number=receipt_number,
-                                supplier_name=stock.supplier,
+                                receipt = SupplierPaymentReceipt(
+                                    payment_id=int(payment.id),
+                                    mineral_type='cassiterite',
+                                    receipt_number=receipt_number,
+                                    supplier_name=stock.supplier,
+                                    amount=amount_rwf,
+                                    currency=currency,
+                                    payment_type='SETTLEMENT',
+                                    generated_at=dt.utcnow(),
+                                    generated_by_id=getattr(current_user, 'id', None),
+                                )
+                                db.session.add(receipt)
+                                db.session.flush()
+                                logger.info(f"Generated receipt {receipt_number} for cassiterite supplier payment (payment_id={payment.id})")
+                            except Exception as receipt_err:
+                                logger.exception("Failed to generate cassiterite supplier receipt: %s", receipt_err)
+                        else:
+                            # Advance-only supplier settlement (no stock)
+                            requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
+                            if supplier_id is None:
+                                supplier_id = _resolve_cass_supplier_id(supplier_name)
+                            payment = CassiteriteSupplierPayment(
+                                supplier_id=supplier_id,
+                                supplier_name=supplier_name,
+                                stock_id=None,
                                 amount=amount_rwf,
+                                input_amount=amount_input,
                                 currency=currency,
+                                exchange_rate=exchange_rate,
+                                amount_rwf=amount_rwf,
+                                method=method,
+                                reference=reference,
+                                note=note,
                                 payment_type='SETTLEMENT',
-                                generated_at=dt.utcnow(),
-                                generated_by_id=getattr(current_user, 'id', None),
+                                is_advance=False,
+                                advance_remaining=0.0,
                             )
-                            db.session.add(receipt)
+                            payment.paid_at = requested_paid_at
+                            db.session.add(payment)
                             db.session.flush()
-                            logger.info(f"Generated receipt {receipt_number} for cassiterite supplier payment (payment_id={payment.id})")
-                        except Exception as receipt_err:
-                            logger.exception("Failed to generate cassiterite supplier receipt: %s", receipt_err)
+                            review.payment_id = int(payment.id)
+
+                            # Generate cassiterite supplier payment receipt
+                            try:
+                                from datetime import datetime as dt
+                                from core.models import SupplierPaymentReceipt, SupplierPaymentReceiptSequence
+                                
+                                current_year = dt.utcnow().year
+                                seq_row = SupplierPaymentReceiptSequence.query.filter_by(year=current_year).with_for_update().first()
+                                
+                                if not seq_row:
+                                    seq_row = SupplierPaymentReceiptSequence(year=current_year, next_sequence=1)
+                                    db.session.add(seq_row)
+                                    db.session.flush()
+                                
+                                receipt_number = f"SUP-{current_year}-{seq_row.next_sequence:04d}"
+                                seq_row.next_sequence += 1
+                                db.session.add(seq_row)
+                                db.session.flush()
+
+                                receipt = SupplierPaymentReceipt(
+                                    payment_id=int(payment.id),
+                                    mineral_type='cassiterite',
+                                    receipt_number=receipt_number,
+                                    supplier_name=supplier_name,
+                                    amount=amount_rwf,
+                                    currency=currency,
+                                    payment_type='SETTLEMENT',
+                                    generated_at=dt.utcnow(),
+                                    generated_by_id=getattr(current_user, 'id', None),
+                                )
+                                db.session.add(receipt)
+                                db.session.flush()
+                                logger.info(f"Generated receipt {receipt_number} for cassiterite supplier payment (payment_id={payment.id})")
+                            except Exception as receipt_err:
+                                logger.exception("Failed to generate cassiterite supplier receipt: %s", receipt_err)
                     else:
                         requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                         if supplier_id is None:
@@ -2672,6 +2814,7 @@ def cashier_disburse_payment_review(review_id: int):
                             unified = None
 
                         remaining_advance = float(amount_rwf or 0.0)
+                        # Only allocate advance to stocks if there are stocks
                         supplier_stocks = (
                             CassiteriteStock.query
                             .filter(

@@ -47,6 +47,7 @@
     <div class="mb-4">
       <label class="block font-medium mb-1" for="copper-stock-search">{{ form.stock_id.label.text }}</label>
       <input type="hidden" name="stock_id" id="copper-stock-id" value="{{ form.stock_id.data or '' }}">
+      <input type="hidden" name="existing_supplier" id="copper-supplier-name" value="{{ form.existing_supplier.data or '' }}">
       <input
         type="text"
         id="copper-stock-search"
@@ -233,6 +234,7 @@
       (function () {
         const input = document.getElementById('copper-stock-search');
         const hidden = document.getElementById('copper-stock-id');
+        const supplierName = document.getElementById('copper-supplier-name');
         const holder = document.getElementById('copper-stock-suggest');
         if (!input || !hidden || !holder) return;
 
@@ -271,6 +273,10 @@
               try { event.preventDefault(); } catch (error) {}
               hidden.value = item.id || '';
               input.value = item.display || '';
+              // For advance-only suppliers (id=0), populate supplier name field
+              if (supplierName) {
+                supplierName.value = (item.id === 0) ? (item.supplier || '') : '';
+              }
               hide();
             });
             list.appendChild(button);
