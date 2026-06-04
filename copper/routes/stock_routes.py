@@ -886,7 +886,7 @@ def dashboard():
         latest_achieved_moyenne_nb = None
 
     # Compute aggregates in real-time (no caching)
-    total_input = 0
+    total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).filter(CopperStock.is_deleted.is_(False)).scalar() or 0
     total_output = 0
     total_debt = 0
     total_sales = 0
@@ -1687,7 +1687,7 @@ SELECT
                             from sqlalchemy import text
                             combined_sql = """
 SELECT
-    (SELECT COALESCE(SUM(input_kg),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_input,
+    (SELECT COALESCE(SUM(input_kg),0) FROM copper_stock WHERE is_deleted IS FALSE) AS total_input,
     (SELECT COALESCE(COUNT(id),0) FROM copper_stock WHERE local_balance > 0 AND is_deleted IS FALSE) AS total_stocks,
   (SELECT COALESCE(SUM(output_kg),0) FROM copper_output WHERE is_deleted IS FALSE) AS total_output,
   (SELECT COALESCE(SUM(debt_remaining),0) FROM copper_output WHERE is_deleted IS FALSE) AS total_debt,
