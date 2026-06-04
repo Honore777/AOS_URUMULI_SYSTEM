@@ -395,7 +395,7 @@ def cashier_approved_requests():
                 r.direction = 'IN'
             elif r.action in {'loan_repayment', 'cash_transfer'}:
                 r.direction = 'OUT'
-            elif review_type in {'cash_collect_receipt', 'cash_collect_unearned_receipt', 'cash_supplier_refund'}:
+            elif review_type in {'cash_collect_receipt', 'cash_collect_unearned_receipt', 'cash_collect_supplier_payment', 'cash_supplier_refund'}:
                 r.direction = 'IN'
             else:
                 # Supplier payments / internal expenses default to cash OUT.
@@ -484,7 +484,7 @@ def cashier_approved_requests_summary():
                 direction = 'IN'
             elif action in {'loan_repayment', 'cash_transfer'}:
                 direction = 'OUT'
-            elif review_type in {'cash_collect_receipt', 'cash_collect_unearned_receipt', 'cash_supplier_refund'}:
+            elif review_type in {'cash_collect_receipt', 'cash_collect_unearned_receipt', 'cash_collect_supplier_payment', 'cash_supplier_refund'}:
                 direction = 'IN'
             else:
                 direction = 'OUT'
@@ -1420,6 +1420,8 @@ def cashier_disburse_payment_review(review_id: int):
             action = 'cash_transfer'
         elif review_type in {'transporter_advance', 'transporter_payment'}:
             action = 'pay_transporter'
+        elif review_type == 'cash_collect_supplier_payment':
+            action = 'collect_supplier_payment'
 
     logger.info(f"DISBURSEMENT ACTION: final_action={action}, entry_kind={payload.get('entry_kind')}")
 
@@ -1436,7 +1438,7 @@ def cashier_disburse_payment_review(review_id: int):
             chosen_account_id = 0
 
         # Cash desk actions (cash account required)
-        if action in {'cash_transaction', 'collect_receipt', 'collect_unearned_receipt', 'supplier_refund', 'loan_disbursement', 'loan_repayment', 'cash_transfer', 'pay_transporter'}:
+        if action in {'cash_transaction', 'collect_receipt', 'collect_unearned_receipt', 'collect_supplier_payment', 'supplier_refund', 'loan_disbursement', 'loan_repayment', 'cash_transfer', 'pay_transporter'}:
             if action == 'cash_transfer':
                 try:
                     account_id = int(payload.get('from_account_id') or 0)
@@ -1753,42 +1755,37 @@ def cashier_disburse_payment_review(review_id: int):
 
                 logger.info(f"CashTransaction created: tx_id={tx.id}, amount_rwf={tx.amount_rwf}, new_balance={account.current_balance}")
 
-                # Only create TransporterLedger for ADVANCE; CASH_PAYMENT is just a normal business expense
-                if entry_kind == 'ADVANCE':
-                    try:
-                        ledger_amount = float(abs(amount_rwf or tx_amount))
-                        cash_ledger = TransporterLedger(
-                            transporter_name=transporter_name,
-                            supplier_name=None,
-                            entry_type='ADVANCE',
-                            amount_input=float(amount_input or tx_amount),
-                            currency=currency,
-                            exchange_rate=float(exchange_rate or 1.0),
-                            amount_rwf=float(ledger_amount),
-                            is_paid=True,
-                            paid_at=datetime.utcnow(),
-                            created_by_id=getattr(current_user, 'id', None),
-                            note=note or f'Transporter cash payment - {transporter_name}',
-                            payment_review_id=int(review.id),
-                            cash_transaction_id=int(tx.id),
-                        )
-                        db.session.add(cash_ledger)
-                        db.session.flush()
-                        logger.info(f"Created TransporterLedger for {transporter_name}: ledger_id={cash_ledger.id}, amount_rwf={ledger_amount}")
+                # Create TransporterLedger for both ADVANCE and CASH_PAYMENT
+                # Both should appear in ledger and reduce transporter's running balance
+                try:
+                    ledger_amount = float(abs(amount_rwf or tx_amount))
+                    entry_type_label = 'ADVANCE' if entry_kind == 'ADVANCE' else 'CASH_PAYMENT'
+                    cash_ledger = TransporterLedger(
+                        transporter_name=transporter_name,
+                        supplier_name=None,
+                        entry_type=entry_type_label,
+                        amount_input=float(amount_input or tx_amount),
+                        currency=currency,
+                        exchange_rate=float(exchange_rate or 1.0),
+                        amount_rwf=float(ledger_amount),
+                        is_paid=True,
+                        paid_at=datetime.utcnow(),
+                        created_by_id=getattr(current_user, 'id', None),
+                        note=note or f'Transporter {"advance" if entry_kind == "ADVANCE" else "fee payment"} - {transporter_name}',
+                        payment_review_id=int(review.id),
+                        cash_transaction_id=int(tx.id),
+                    )
+                    db.session.add(cash_ledger)
+                    db.session.flush()
+                    logger.info(f"Created TransporterLedger for {transporter_name}: ledger_id={cash_ledger.id}, entry_type={entry_type_label}, amount_rwf={ledger_amount}")
 
-                        review.cash_transaction_id = int(tx.id)
-                        review.cash_account_id = int(account.id)
-                        review.boss_comment = (review.boss_comment or '') + f" | transporter_advance_ledger_id={int(cash_ledger.id)}"
-                        receipt_redirect_url = url_for('core.transporter_advance_receipt_detail', ledger_id=int(cash_ledger.id))
-                    except Exception as ledger_err:
-                        logger.exception(f"Failed to create TransporterLedger for {transporter_name}: {ledger_err}")
-                        raise
-                else:
-                    # CASH_PAYMENT is normal business expense - generates cash transaction receipt
                     review.cash_transaction_id = int(tx.id)
                     review.cash_account_id = int(account.id)
-                    receipt_redirect_url = url_for('core.cash_transaction_detail', tx_id=int(tx.id))
-                    logger.info(f"Created CASH_PAYMENT for {transporter_name}: tx_id={tx.id}, amount_rwf={tx_amount}")
+                    review.boss_comment = (review.boss_comment or '') + f" | transporter_{entry_kind.lower()}_ledger_id={int(cash_ledger.id)}"
+                    receipt_redirect_url = url_for('core.transporter_payment_receipt_detail', ledger_id=int(cash_ledger.id))
+                except Exception as ledger_err:
+                    logger.exception(f"Failed to create TransporterLedger for {transporter_name}: {ledger_err}")
+                    raise
                 
                 db.session.add(review)
 
@@ -1800,6 +1797,90 @@ def cashier_disburse_payment_review(review_id: int):
                         message=(
                             f"Umubitsi {getattr(current_user, 'username', 'unknown')} yatanze amafaranga ku mutwara: {transporter_name} "
                             f"Amount: {tx_amount:,.2f} {currency}."
+                        ),
+                        related_type='payment_review',
+                        related_id=int(review.id),
+                    )
+
+            elif action == 'collect_supplier_payment':
+                from core.models import SupplierDeduction, TransporterLedger
+
+                supplier_name = (payload.get('supplier_name') or '').strip()
+                transporter_name = (payload.get('transporter_name') or '').strip()
+                if not supplier_name:
+                    raise ValueError('Missing supplier name.')
+                if not transporter_name:
+                    raise ValueError('Missing transporter name.')
+
+                # Create CashTransaction (IN direction - money coming in)
+                tx = CashTransaction(
+                    account_id=account.id,
+                    amount=tx_amount,
+                    currency=(account.currency or 'RWF').upper(),
+                    exchange_rate=float(exchange_rate or 1.0),
+                    amount_input=float(amount_input or tx_amount),
+                    amount_rwf=float(amount_rwf or tx_amount),
+                    direction='IN',
+                    reference=f"supplier_payment:{int(review.id)}",
+                    note=note or f"Supplier payment from {supplier_name} (transporter: {transporter_name})",
+                    created_by_id=getattr(current_user, 'id', None),
+                )
+                account_balance = float(account.current_balance or 0.0)
+                account.current_balance = float(account_balance + float(tx_amount or 0.0))
+                db.session.add(tx)
+                db.session.add(account)
+                db.session.flush()
+
+                # Create SupplierDeduction
+                sd = SupplierDeduction(
+                    supplier_name=supplier_name,
+                    deduction_type='SUPPLIER_PAYMENT',
+                    amount_input=float(amount_input or tx_amount),
+                    currency=currency,
+                    exchange_rate=float(exchange_rate or 1.0),
+                    amount_rwf=float(amount_rwf or tx_amount),
+                    created_by_id=getattr(current_user, 'id', None),
+                    note=note or f"Supplier payment for transporter {transporter_name}",
+                )
+                db.session.add(sd)
+                db.session.flush()
+
+                # Create TransporterLedger entry (negative to reduce transporter balance)
+                t = TransporterLedger(
+                    transporter_name=transporter_name,
+                    supplier_name=supplier_name,
+                    entry_type='SUPPLIER_PAYMENT_RECOVERY',
+                    amount_input=float(amount_input or tx_amount),
+                    currency=currency,
+                    exchange_rate=float(exchange_rate or 1.0),
+                    amount_rwf=float(-abs(amount_rwf or tx_amount)),
+                    is_paid=True,
+                    paid_at=datetime.utcnow(),
+                    created_by_id=getattr(current_user, 'id', None),
+                    note=f"Supplier payment from {supplier_name}: " + (note or ''),
+                    source_supplier_deduction_id=int(sd.id),
+                    payment_review_id=int(review.id),
+                    cash_transaction_id=int(tx.id),
+                )
+                db.session.add(t)
+                db.session.flush()
+
+                review.cash_transaction_id = int(tx.id)
+                review.cash_account_id = int(account.id)
+                review.disbursement_status = 'DISBURSED'
+                review.disbursed_by_id = getattr(current_user, 'id', None)
+                review.disbursed_at = datetime.utcnow()
+                review.boss_comment = (review.boss_comment or '') + f" | supplier_payment_ledger_id={int(t.id)} | supplier_deduction_id={int(sd.id)}"
+                db.session.add(review)
+
+                boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+                for (boss_id,) in boss_rows:
+                    create_notification(
+                        user_id=int(boss_id),
+                        type_='SUPPLIER_PAYMENT_COLLECTED',
+                        message=(
+                            f"Umubitsi {getattr(current_user, 'username', 'unknown')} yakiriye amafaranga ku mushinga: {supplier_name} "
+                            f"(transporter: {transporter_name}) Amount: {tx_amount:,.2f} {currency}."
                         ),
                         related_type='payment_review',
                         related_id=int(review.id),

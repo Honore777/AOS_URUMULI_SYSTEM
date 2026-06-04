@@ -22,8 +22,11 @@
                 <a href="{{ url_for('core.supplier_settlement_statement', supplier_norm=supplier_slug or supplier_norm) }}" target="_blank" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 shadow-sm">
                     Urutonde rw'ibyabaye mukwishyura
                 </a>
-                <a href="{{ url_for('core.supplier_charge_fee') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-rose-700 text-white font-semibold hover:bg-rose-800 shadow-md ring-1 ring-rose-900/20">
-                    Charge fee
+                <a href="{{ url_for('core.charge_business_retention') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-rose-700 text-white font-semibold hover:bg-rose-800 shadow-md ring-1 ring-rose-900/20">
+                    Charge business retention
+                </a>
+                <a href="{{ url_for('core.supplier_payment') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-orange-700 text-white font-semibold hover:bg-orange-800 shadow-md ring-1 ring-orange-900/20">
+                    Supplier payment
                 </a>
                 <a href="{{ url_for('core.transporter_ledger_index') }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-fuchsia-700 text-white font-semibold hover:bg-fuchsia-800 shadow-md ring-1 ring-fuchsia-900/20">
                     Transporter ledger

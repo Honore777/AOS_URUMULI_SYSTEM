@@ -15,14 +15,12 @@ class Config:
 
     # Database
     SQLALCHEMY_DATABASE_URI = os.environ.get(
-        'DATABASE_URL_CLONE'
-    )
+        'DATABASE_URL_CLONE')
+    
     
     SQLALCHEMY_TRACK_MODIFICATIONS = os.environ.get(
         'SQLALCHEMY_TRACK_MODIFICATIONS', 'False'
     ).lower() in ('1', 'true', 'yes')
-
-    SUPABASE_URL=os.environ.get('DATABASE_URL_TESTING')
 
     # Brevo (Transactional email) configuration
     BREVO_API_KEY = os.environ.get('BREVO_API_KEY')

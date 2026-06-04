@@ -1391,9 +1391,9 @@ def consolidated_supplier_ledger(supplier_norm: str):
 
 
 
-@core_bp.route('/accountant/suppliers/charge_fee', methods=['GET', 'POST'])
+@core_bp.route('/accountant/suppliers/charge_business_retention', methods=['GET', 'POST'])
 @role_required('accountant', 'boss', 'admin')
-def supplier_charge_fee():
+def charge_business_retention():
     if request.method == 'GET':
         from core.models import TransporterLedger
         transporters = [
@@ -1404,7 +1404,7 @@ def supplier_charge_fee():
                 .all()
             ) if name
         ]
-        return render_template('suppliers/charge_fee.html', transporters=transporters)
+        return render_template('suppliers/charge_business_retention.html', transporters=transporters)
 
     # POST: create SupplierDeduction and a linked transporter ledger recovery row.
     supplier_name = (request.form.get('supplier_name') or '').strip()
@@ -1417,13 +1417,13 @@ def supplier_charge_fee():
 
     if not supplier_name:
         flash('Supplier name is required.', 'danger')
-        return redirect(url_for('core.supplier_charge_fee'))
+        return redirect(url_for('core.charge_business_retention'))
     if not transporter_name:
         flash('Transporter is required.', 'danger')
-        return redirect(url_for('core.supplier_charge_fee'))
+        return redirect(url_for('core.charge_business_retention'))
     if total_weight <= 0 or rate <= 0:
         flash('Total weight and rate must be greater than zero.', 'danger')
-        return redirect(url_for('core.supplier_charge_fee'))
+        return redirect(url_for('core.charge_business_retention'))
 
     try:
         amount_input = float(total_weight) * float(rate)
@@ -1464,9 +1464,94 @@ def supplier_charge_fee():
         return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier_name))
     except Exception:
         db.session.rollback()
-        logger.exception('supplier_charge_fee: failed to record fee')
+        logger.exception('charge_business_retention: failed to record fee')
         flash('Failed to record fee, see logs.', 'danger')
-        return redirect(url_for('core.supplier_charge_fee'))
+        return redirect(url_for('core.charge_business_retention'))
+
+
+@core_bp.route('/accountant/suppliers/supplier_payment', methods=['GET', 'POST'])
+@role_required('accountant', 'boss', 'admin')
+def supplier_payment():
+    from core.models import PaymentReview, PaymentReviewStatus
+
+    if request.method == 'GET':
+        from core.models import TransporterLedger
+        transporters = [
+            name for (name,) in (
+                db.session.query(TransporterLedger.transporter_name)
+                .distinct()
+                .order_by(TransporterLedger.transporter_name.asc())
+                .all()
+            ) if name
+        ]
+        return render_template('suppliers/supplier_payment.html', transporters=transporters)
+
+    # POST: create PaymentReview for boss approval
+    supplier_name = (request.form.get('supplier_name') or '').strip()
+    transporter_name = (request.form.get('transporter_name') or '').strip()
+    total_weight = float(request.form.get('total_weight') or 0.0)
+    rate = float(request.form.get('rate') or 0.0)
+    currency = (request.form.get('currency') or 'RWF').strip().upper()
+    exchange_rate = float(request.form.get('exchange_rate') or 1.0)
+    note = (request.form.get('note') or '').strip() or None
+
+    if not supplier_name:
+        flash('Supplier name is required.', 'danger')
+        return redirect(url_for('core.supplier_payment'))
+    if not transporter_name:
+        flash('Transporter is required.', 'danger')
+        return redirect(url_for('core.supplier_payment'))
+    if total_weight <= 0 or rate <= 0:
+        flash('Total weight and rate must be greater than zero.', 'danger')
+        return redirect(url_for('core.supplier_payment'))
+
+    try:
+        amount_input = float(total_weight) * float(rate)
+        amount_rwf = float(amount_input) * (float(exchange_rate) if currency == 'USD' else 1.0)
+
+        payload = {
+            'action': 'collect_supplier_payment',
+            'supplier_name': supplier_name,
+            'transporter_name': transporter_name,
+            'total_weight': total_weight,
+            'rate': rate,
+            'amount_input': amount_input,
+            'currency': currency,
+            'exchange_rate': exchange_rate if currency == 'USD' else 1.0,
+            'amount_rwf': amount_rwf,
+            'note': 'UTANGA UMUSARURO ARATWISHYUYE AJYANYE UMUSARURO WE',
+        }
+
+        review = PaymentReview(
+            mineral_type=None,
+            type='cash_collect_supplier_payment',
+            customer=f"{supplier_name} (via {transporter_name})",
+            amount=amount_input,
+            currency=currency,
+            created_by_id=getattr(current_user, 'id', None),
+            status=PaymentReviewStatus.PENDING_REVIEW.value,
+            request_payload=json.dumps(payload),
+        )
+        db.session.add(review)
+        db.session.commit()
+
+        boss_rows = db.session.query(User.id).filter_by(role='boss', is_active=True).all()
+        for (boss_id,) in boss_rows:
+            create_notification(
+                user_id=int(boss_id),
+                type_='SUPPLIER_PAYMENT_REQUEST',
+                message=f'Supplier payment request created for {supplier_name} (transporter: {transporter_name}): {amount_input:,.2f} {currency}.',
+                related_type='payment_review',
+                related_id=int(review.id),
+            )
+
+        flash(f'Supplier payment request submitted for boss approval: {amount_input:,.2f} {currency} (~{amount_rwf:,.0f} RWF).', 'success')
+        return redirect(url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier_name))
+    except Exception:
+        db.session.rollback()
+        logger.exception('supplier_payment: failed to create payment request')
+        flash('Failed to create payment request, see logs.', 'danger')
+        return redirect(url_for('core.supplier_payment'))
 
 
 @core_bp.route('/accountant/transporter-ledger', methods=['GET'])
