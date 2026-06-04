@@ -886,7 +886,7 @@ def dashboard():
         latest_achieved_moyenne_nb = None
 
     # Compute aggregates in real-time (no caching)
-    total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).filter(CopperStock.is_deleted.is_(False)).scalar() or 0
+    total_input = 0
     total_output = 0
     total_debt = 0
     total_sales = 0
@@ -897,6 +897,17 @@ def dashboard():
     supplier_debt = 0
     customer_debt = 0
     cash_position = 0
+
+    # Calculate total input (all undeleted stock)
+    try:
+        total_input = db.session.query(func.coalesce(func.sum(CopperStock.input_kg), 0)).filter(CopperStock.is_deleted.is_(False)).scalar() or 0
+    except Exception:
+        logger.exception("dashboard: failed to compute total_input")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        total_input = 0
 
     user_notifications = []
     unread_count = 0

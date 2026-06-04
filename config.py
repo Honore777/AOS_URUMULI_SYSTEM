@@ -14,7 +14,7 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'urumulismartsystem')
 
     # Database
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or os.environ.get('DATABASE_URL_CLONE')
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
     
     
     SQLALCHEMY_TRACK_MODIFICATIONS = os.environ.get(
