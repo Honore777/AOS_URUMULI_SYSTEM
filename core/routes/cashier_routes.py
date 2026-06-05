@@ -211,6 +211,50 @@ def cashier_cash_accounts():
     return render_template('cashier/cash_accounts.html', accounts=accounts)
 
 
+@core_bp.route('/cash-accounts/update/<int:account_id>', methods=['GET', 'POST'])
+@role_required('boss', 'admin')
+def update_cash_account(account_id):
+    account = CashAccount.query.get_or_404(account_id)
+    
+    if request.method == 'POST':
+        try:
+            amount_to_add = float(request.form.get('amount_to_add') or 0.0)
+        except Exception:
+            amount_to_add = -1.0
+        
+        if amount_to_add < 0:
+            flash('Amafaranga ugomba kongerera aragomba kuba ari imibare >= 0.', 'danger')
+            return redirect(url_for('core.update_cash_account', account_id=account_id))
+        
+        note = (request.form.get('note') or '').strip()
+        
+        # Update the current balance
+        old_balance = float(account.current_balance or 0.0)
+        new_balance = old_balance + amount_to_add
+        account.current_balance = new_balance
+        
+        # Create a cash transaction record
+        from core.models import CashTransaction
+        transaction = CashTransaction(
+            account_id=account.id,
+            amount=amount_to_add,
+            currency=account.currency,
+            exchange_rate=1.0,
+            amount_input=amount_to_add,
+            amount_rwf=amount_to_add if account.currency == 'RWF' else None,
+            direction='IN',
+            note=note or f'Balance update - added {amount_to_add:,.2f} {account.currency}',
+            created_by_id=getattr(current_user, 'id', None),
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        
+        flash(f'Konti {account.name} yahinduwe. Old balance: {old_balance:,.2f} {account.currency}, New balance: {new_balance:,.2f} {account.currency}', 'success')
+        return redirect(url_for('core.cashier_cash_accounts'))
+    
+    return render_template('update_cash_account.html', account=account)
+
+
 @core_bp.route('/cashier/cash-accounts/request', methods=['GET', 'POST'])
 @role_required('cashier')
 def cashier_request_cash_account():
@@ -2292,12 +2336,6 @@ def cashier_disburse_payment_review(review_id: int):
                             ).first()
                             if not stock:
                                 raise ValueError('Stock not found for supplier settlement request.')
-                            # Use consolidated supplier balance instead of stock-level balance
-                            # This allows payments when supplier has advances (negative balance)
-                            from utils import calculate_consolidated_supplier_remaining_balance
-                            supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(stock.supplier) or 0.0)
-                            if float(amount_rwf) > abs(supplier_remaining):
-                                raise ValueError(f'Requested payment now exceeds remaining supplier debt ({supplier_remaining:,.2f} RWF).')
                             requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                             if supplier_id is None:
                                 supplier_id = _resolve_copper_supplier_id(stock.supplier)
@@ -2608,12 +2646,6 @@ def cashier_disburse_payment_review(review_id: int):
                             ).first()
                             if not stock:
                                 raise ValueError('Stock not found for supplier settlement request.')
-                            # Use consolidated supplier balance instead of stock-level balance
-                            # This allows payments when supplier has advances (negative balance)
-                            from utils import calculate_consolidated_supplier_remaining_balance
-                            supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(stock.supplier) or 0.0)
-                            if float(amount_rwf) > abs(supplier_remaining):
-                                raise ValueError(f'Requested payment now exceeds remaining supplier debt ({supplier_remaining:,.2f} RWF).')
                             requested_paid_at = _parse_request_datetime(payload.get('paid_at')) or datetime.utcnow()
                             if supplier_id is None:
                                 supplier_id = _resolve_cass_supplier_id(stock.supplier)

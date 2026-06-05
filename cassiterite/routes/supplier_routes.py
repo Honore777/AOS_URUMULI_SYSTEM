@@ -268,17 +268,6 @@ def pay_supplier():
 				payment_supplier = form.existing_supplier.data
 
 			supplier_id = _get_or_create_supplier_id(payment_supplier)
-			from utils import calculate_consolidated_supplier_remaining_balance
-			supplier_remaining = float(calculate_consolidated_supplier_remaining_balance(payment_supplier) or 0.0)
-			# Allow payments up to the absolute value of the balance
-			# Positive balance: system owes supplier, payment can't exceed what we owe
-			# Negative balance: supplier owes system (advance), payment can't exceed what they owe
-			if amount_rwf > abs(supplier_remaining):
-				flash(
-					f"Payment exceeds consolidated supplier balance ({supplier_remaining:,.2f} RWF).",
-					"danger",
-				)
-				return render_template('cassiterite/pay_supplier.html', form=form, selected_stock_label=selected_stock_label, supplier_summaries=supplier_summaries, pending_reviews=pending_reviews, recent_settlements=recent_settlements, recent_suppliers=recent_suppliers, suppliers_pagination=suppliers_pagination, supplier_query=supplier_query)
 
 			# --- create PaymentReview request; actual payment executes on boss approval ---
 			payload = {

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hindura Konti y'Amafaranga</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-gradient-to-br from-gray-900 to-slate-800 min-h-screen p-6">
+<div class="max-w-2xl mx-auto bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-slate-200 space-y-6">
+    <div class="flex items-center justify-between gap-3">
+        <div>
+            <h1 class="text-3xl font-extrabold text-gray-900 tracking-tight">Hindura Konti y'Amafaranga</h1>
+            <p class="mt-1 text-sm text-gray-600">Kongera amafaranga ku konti y'amafaranga.</p>
+        </div>
+        <div class="flex gap-2">
+            <a href="{{ url_for('core.cashier_cash_accounts') }}" class="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-slate-800 hover:bg-slate-900 rounded-lg shadow-sm">Subira</a>
+        </div>
+    </div>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 class="text-xl font-extrabold text-slate-900">Amakuru ya Konti</h2>
+        <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
+            <div>
+                <span class="block text-slate-500">ID:</span>
+                <span class="font-bold text-slate-900">{{ account.id }}</span>
+            </div>
+            <div>
+                <span class="block text-slate-500">Izina:</span>
+                <span class="font-bold text-slate-900">{{ account.name }}</span>
+            </div>
+            <div>
+                <span class="block text-slate-500">Ifaranga:</span>
+                <span class="font-bold text-slate-900">{{ account.currency or 'RWF' }}</span>
+            </div>
+            <div>
+                <span class="block text-slate-500">Balance y'ubu:</span>
+                <span class="font-bold text-emerald-600">{{ '{:,.2f}'.format(account.current_balance or 0) }} {{ account.currency or 'RWF' }}</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 class="text-xl font-extrabold text-slate-900">Kongera Amafaranga</h2>
+        <form method="post" class="mt-5 grid grid-cols-1 gap-4">
+            <div>
+                <label class="mb-1 block text-sm font-semibold text-slate-700">Amafaranga ugomba kongerera ({{ account.currency or 'RWF' }})</label>
+                <input name="amount_to_add" type="number" step="0.01" min="0" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="0.00" required>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-semibold text-slate-700">Impamvu (Uburyo)</label>
+                <input name="note" type="text" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" placeholder="Urugero: Cash deposit from bank">
+            </div>
+            <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700">Emeza Kongera Amafaranga</button>
+        </form>
+    </section>
+</div>
+</body>
+</html>

@@ -48,19 +48,25 @@
             <table class="min-w-full text-sm">
                 <thead class="bg-slate-100 text-slate-700">
                     <tr>
+                        <th class="px-4 py-3 text-left font-semibold">ID</th>
                         <th class="px-4 py-3 text-left font-semibold">Izina</th>
                         <th class="px-4 py-3 text-left font-semibold">Ifaranga</th>
                         <th class="px-4 py-3 text-right font-semibold">Atangiriraho</th>
                         <th class="px-4 py-3 text-right font-semibold">Asigaye</th>
+                        <th class="px-4 py-3 text-center font-semibold">Igikorwa</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-200 bg-white">
                     {% for a in accounts %}
                     <tr class="hover:bg-slate-50">
+                        <td class="px-4 py-3 text-slate-700">{{ a.id }}</td>
                         <td class="px-4 py-3 font-bold text-slate-900">{{ a.name }}</td>
                         <td class="px-4 py-3 text-slate-700">{{ a.currency or 'RWF' }}</td>
                         <td class="px-4 py-3 text-right text-slate-700">{{ '{:,.2f}'.format(a.opening_balance or 0) }}</td>
                         <td class="px-4 py-3 text-right font-extrabold text-slate-900">{{ '{:,.2f}'.format(a.current_balance or 0) }}</td>
+                        <td class="px-4 py-3 text-center">
+                            <a href="{{ url_for('core.update_cash_account', account_id=a.id) }}" class="inline-flex items-center px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm">Hindura</a>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
