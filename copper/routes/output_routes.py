@@ -54,8 +54,24 @@ def record_output():
                 return redirect(url_for("copper.record_output"))
             date = datetime.strptime(request.form.get("date"), "%Y-%m-%d").date() if request.form.get("date") else datetime.utcnow().date()
             output_kg = float(request.form.get("output_kg") or 0)
-            customer = request.form.get("customer")
+            customer = (request.form.get("customer") or '').strip()
             output_amount = float(request.form.get('output_amount') or 0)
+
+            # Guard: prevent accidental near-duplicate customer identities.
+            if customer:
+                try:
+                    existing_names = [r[0] for r in db.session.query(CopperOutput.customer).filter(CopperOutput.customer.isnot(None), CopperOutput.customer != '').distinct().all()]
+                except Exception:
+                    existing_names = []
+                norm_new = normalize_counterparty_name(customer)
+                exact_exists = any(normalize_counterparty_name(n) == norm_new for n in existing_names)
+                if not exact_exists:
+                    close = close_name_matches(customer, existing_names, limit=5, cutoff=0.86)
+                    if close:
+                        flash(
+                            f"Customer name looks similar to existing customer(s): {', '.join(close[:3])}. Consider using the existing name to avoid duplication.",
+                            'warning',
+                        )
             amount_paid = float(request.form.get('amount_paid') or 0)
             currency = (request.form.get('currency') or 'RWF').upper()
             exchange_rate_input = request.form.get('exchange_rate')

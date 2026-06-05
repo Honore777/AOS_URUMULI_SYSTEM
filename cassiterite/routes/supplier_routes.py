@@ -801,6 +801,27 @@ def pay_supplier_advance_historical():
 			flash('Please select an existing supplier or enter a new supplier name for advance payment.', 'danger')
 			return render_template('cassiterite/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
 
+		# Guard: prevent accidental near-duplicate supplier identities.
+		if typed_new:
+			confirm_new_supplier = (request.form.get('confirm_new_supplier') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+			try:
+				from copper.models import CopperSupplier
+				from cassiterite.models import CassiteriteSupplier
+				existing_names = [r[0] for r in db.session.query(CopperSupplier.name).filter(CopperSupplier.is_deleted.is_(False)).all()]
+				existing_names += [r[0] for r in db.session.query(CassiteriteSupplier.name).filter(CassiteriteSupplier.is_deleted.is_(False)).all()]
+			except Exception:
+				existing_names = []
+			norm_new = normalize_counterparty_name(supplier)
+			exact_exists = any(normalize_counterparty_name(n) == norm_new for n in existing_names)
+			if not exact_exists:
+				close = close_name_matches(supplier, existing_names, limit=5, cutoff=0.86)
+				if close and not confirm_new_supplier:
+					flash(
+						f"Supplier name looks similar to existing supplier(s): {', '.join(close[:3])}. Select the existing supplier or confirm you want to create a new one.",
+						'warning',
+					)
+					return render_template('cassiterite/pay_supplier_advance_historical.html', form=form, recent_advances=recent_advances)
+
 		supplier_id = _get_or_create_supplier_id(supplier)
 
 		payment = CassiteriteSupplierPayment(

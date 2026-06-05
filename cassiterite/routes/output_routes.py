@@ -65,6 +65,22 @@ def record_output():
         customer = (form.customer.data or '').strip() or None
         output_amount = form.output_amount.data or 0
         amount_paid = form.amount_paid.data or 0
+
+        # Guard: prevent accidental near-duplicate customer identities.
+        if customer:
+            try:
+                existing_names = [r[0] for r in db.session.query(CassiteriteOutput.customer).filter(CassiteriteOutput.customer.isnot(None), CassiteriteOutput.customer != '').distinct().all()]
+            except Exception:
+                existing_names = []
+            norm_new = normalize_counterparty_name(customer)
+            exact_exists = any(normalize_counterparty_name(n) == norm_new for n in existing_names)
+            if not exact_exists:
+                close = close_name_matches(customer, existing_names, limit=5, cutoff=0.86)
+                if close:
+                    flash(
+                        f"Customer name looks similar to existing customer(s): {', '.join(close[:3])}. Consider using the existing name to avoid duplication.",
+                        'warning',
+                    )
         
         try:
             output_amount_rwf, exchange_rate = _normalize_amount_to_rwf(output_amount, currency, exchange_rate_input)
@@ -643,8 +659,6 @@ def confirm_bulk_output():
             flash("No valid rows generated for this plan.", "error")
             return redirect(url_for('cassiterite.optimize'))
 
-        from datetime import datetime
-
         # Compute achieved quality deterministically from the quantities being submitted.
         # This avoids relying on session state and prevents zeros in negotiator views.
         total_unit = 0.0
@@ -711,7 +725,6 @@ def confirm_bulk_output():
         db.session.commit()
 
         try:
-            from flask_login import current_user
             from utils import send_brevo_email_async
             subject = f"Bulk Output Plan {plan.id} - Action Required"
             html_content = (
@@ -756,7 +769,6 @@ def list_outputs():
         q = q.filter(CassiteriteOutput.customer == customer_filter)
     if batch_filter:
         q = q.filter(CassiteriteOutput.batch_id == batch_filter)
-    from datetime import datetime
     try:
         if date_from:
             d1 = datetime.strptime(date_from, '%Y-%m-%d').date()

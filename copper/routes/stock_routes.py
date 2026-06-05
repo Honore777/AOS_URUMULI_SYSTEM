@@ -830,6 +830,7 @@ def add_stock():
 
 @copper_bp.route("/dashboard")
 @trace_time
+@role_required("accountant", "admin")
 def dashboard():
     """Copper dashboard"""
     # Pagination parameters
@@ -1161,7 +1162,6 @@ def export_filtered_stocks():
 def filter_stocks():
     """Filter stocks by date range (and optional voucher) and return JSON with all recalculated metrics"""
     from flask import request
-    from datetime import datetime
     try:
         data = request.get_json()
         logger.info("filter_stocks: start user=%s data=%s", getattr(current_user, 'username', None), data)
