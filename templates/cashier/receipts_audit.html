@@ -98,7 +98,18 @@
                             </td>
                             <td class="px-3 py-2">{{ row.counterparty }}</td>
                             <td class="px-3 py-2">{{ (row.mineral_type or '-')|capitalize }}</td>
-                            <td class="px-3 py-2 font-semibold">{{ '{:,.2f}'.format(row.amount or 0) }} {{ row.currency or 'RWF' }}</td>
+                            <td class="px-3 py-2 font-semibold">
+                                {% if row.kind == 'worker' and row.currency == 'USD' %}
+                                    {{ '{:,.2f}'.format(row.amount or 0) }} RWF
+                                    {% if row.amount_input and row.exchange_rate %}
+                                        <div class="text-xs text-gray-500">{{ '{:,.2f}'.format(row.amount_input or 0) }} USD @ {{ '{:,.2f}'.format(row.exchange_rate) }}</div>
+                                    {% elif row.amount_input %}
+                                        <div class="text-xs text-gray-500">{{ '{:,.2f}'.format(row.amount_input or 0) }} USD</div>
+                                    {% endif %}
+                                {% else %}
+                                    {{ '{:,.2f}'.format(row.amount or 0) }} {{ row.currency or 'RWF' }}
+                                {% endif %}
+                            </td>
                             <td class="px-3 py-2">{{ row.payment_id or '-' }}</td>
                             <td class="px-3 py-2">{{ row.generated_at.strftime('%Y-%m-%d %H:%M') if row.generated_at else '-' }}{% if row.generated_by %}<div class="text-xs text-slate-500">by {{ row.generated_by }}</div>{% endif %}</td>
                             <td class="px-3 py-2">

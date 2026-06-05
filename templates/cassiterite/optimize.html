@@ -478,6 +478,17 @@
                             </tr>
                         </tfoot>
                     </table>
+                    <div class="mt-3 flex items-center justify-between">
+                        <div>
+                            {% if page > 1 %}
+                                <a href="{{ url_for('cassiterite.optimize') }}?page={{ page-1 }}&per_page={{ per_page }}&mode={{ mode or '' }}&target_moyenne={{ target_moyenne_value }}&target_total_quantity={{ target_quantity_value }}" class="px-3 py-1 bg-gray-200 rounded">← Prev</a>
+                            {% endif %}
+                            {% if page < total_pages %}
+                                <a href="{{ url_for('cassiterite.optimize') }}?page={{ page+1 }}&per_page={{ per_page }}&mode={{ mode or '' }}&target_moyenne={{ target_moyenne_value }}&target_total_quantity={{ target_quantity_value }}" class="px-3 py-1 bg-gray-200 rounded ml-2">Next →</a>
+                            {% endif %}
+                        </div>
+                        <div class="text-sm text-gray-600">Showing {{ quantities|length }} results</div>
+                    </div>
                 </div>
 
 

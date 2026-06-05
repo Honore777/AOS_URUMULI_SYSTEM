@@ -218,6 +218,7 @@ def optimize_stocks():
         try:
             # Prefer using session-saved recommended quantities (from previous Edit action)
             sess_qty = session.get('optimization_quantities') or {}
+            sess_edits = session.get('optimization_edits', {}) or {}
             if sess_qty:
                 # Rehydrate ORM objects for selected stocks from session keys
                 try:
@@ -226,7 +227,16 @@ def optimize_stocks():
                         CopperStock.id.in_(ids),
                         CopperStock.is_deleted.is_(False),
                     ).all()
+                    # Start with recommended quantities
                     quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
+                    # Merge with user edits from session (edits override recommendations)
+                    for k, v in sess_edits.items():
+                        try:
+                            sid = int(k)
+                            qty = float(v)
+                            quantities[sid] = qty
+                        except Exception:
+                            continue
                     mode = 'edit'
                 except Exception:
                     selected_stocks = []
@@ -266,13 +276,23 @@ def optimize_stocks():
             # searches and pagination continue to show the editable table.
             if sess_mode == 'edit':
                 sess_qty = session.get('optimization_quantities') or {}
+                sess_edits = session.get('optimization_edits', {}) or {}
                 if sess_qty:
                     ids = [int(k) for k in sess_qty.keys()]
                     selected_stocks = CopperStock.query.filter(
                         CopperStock.id.in_(ids),
                         CopperStock.is_deleted.is_(False),
                     ).all()
+                    # Start with recommended quantities
                     quantities = {s.id: float(sess_qty.get(str(s.id), sess_qty.get(s.id, 0))) for s in selected_stocks}
+                    # Merge with user edits from session (edits override recommendations)
+                    for k, v in sess_edits.items():
+                        try:
+                            sid = int(k)
+                            qty = float(v)
+                            quantities[sid] = qty
+                        except Exception:
+                            continue
                     mode = 'edit'
             # If the last session mode was 'initial' (user previously filtered)
             # or there was no session mode, show the initial target-entry form

@@ -14,11 +14,12 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'urumulismartsystem')
 
     # Database
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') 
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')  
     # Debug: Log which database URL is being used
     print(f"DEBUG: DATABASE_URL_CLONE = {os.environ.get('DATABASE_URL_CLONE')}")
     print(f"DEBUG: DATABASE_URL = {os.environ.get('DATABASE_URL')}")
     print(f"DEBUG: Using SQLALCHEMY_DATABASE_URI = {SQLALCHEMY_DATABASE_URI}")
+
     # Force connection pool disposal to prevent caching
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,

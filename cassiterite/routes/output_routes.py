@@ -200,8 +200,18 @@ def optimize():
         # Rehydrate quantities from session for edit mode
         try:
             sess_qty = session.get('optimization_quantities') or {}
+            sess_edits = session.get('cassiterite_optimization_edits', {}) or {}
             if sess_qty:
+                # Start with recommended quantities
                 quantities = {int(k): float(v) for k, v in sess_qty.items()}
+                # Merge with user edits from session (edits override recommendations)
+                for k, v in sess_edits.items():
+                    try:
+                        sid = int(k)
+                        qty = float(v)
+                        quantities[sid] = qty
+                    except Exception:
+                        continue
                 # Restore achieved values from session
                 achieved_moyenne = float(session.get('optimization_achieved_moyenne', 0.0))
                 achieved_total_quantity = float(session.get('optimization_achieved_total_quantity', 0.0))
@@ -343,9 +353,15 @@ def optimize():
                     if min_qty > s.local_balance:
                         min_qty = float(s.local_balance)
 
-                    baseline = seeded_minima.get(s.id, s.local_balance)
+                    # Use 0 as baseline for stocks not in original recommendation
+                    baseline = seeded_minima.get(s.id, 0.0)
                     if abs(min_qty - baseline) > 0.01:
+                        # Apply override (including explicit zero to exclude)
                         minimum_quantities[s.id] = min_qty
+                    else:
+                        # No meaningful change from baseline; ensure seeded baseline remains
+                        if s.id in seeded_minima:
+                            minimum_quantities[s.id] = seeded_minima[s.id]
 
             # Persist merged edits back to session for continuity
             session['cassiterite_optimization_edits'] = {str(k): float(v) for k, v in merged_edits.items()}

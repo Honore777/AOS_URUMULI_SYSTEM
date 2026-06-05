@@ -691,6 +691,8 @@ class ExpenseTransaction(db.Model):
         description = db.Column(db.Text, nullable=True)
         amount = db.Column(db.Float, nullable=False)
         currency = db.Column(db.String(10), nullable=False, default="RWF")
+        amount_input = db.Column(db.Float, nullable=True)
+        exchange_rate = db.Column(db.Float, nullable=True)
         method = db.Column(db.String(20), nullable=True)  # CASH | BANK | MOMO
         reference = db.Column(db.String(100), nullable=True)
         note = db.Column(db.Text, nullable=True)
@@ -1075,7 +1077,9 @@ class WorkerPaymentReceipt(db.Model):
         worker_name = db.Column(db.String(120), nullable=False, index=True)
         amount = db.Column(db.Float, nullable=False)
         currency = db.Column(db.String(10), nullable=False, default='RWF')
-        
+        amount_input = db.Column(db.Float, nullable=True)
+        exchange_rate = db.Column(db.Float, nullable=True)
+
         # Which mineral (copper/cassiterite)
         mineral_type = db.Column(db.String(20), nullable=True, index=True)
 
@@ -1136,6 +1140,8 @@ class SupplierPaymentReceipt(db.Model):
         supplier_name = db.Column(db.String(120), nullable=False, index=True)
         amount = db.Column(db.Float, nullable=False)
         currency = db.Column(db.String(10), nullable=False, default='RWF')
+        amount_input = db.Column(db.Float, nullable=True)
+        exchange_rate = db.Column(db.Float, nullable=True)
         payment_type = db.Column(db.String(20), nullable=True)  # SETTLEMENT or ADVANCE
 
         # When the receipt was generated

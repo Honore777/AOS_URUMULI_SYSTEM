@@ -51,7 +51,18 @@
                 </tr>
                 <tr>
                     <th>Paid Amount</th>
-                    <td colspan="3">{{ '{:,.2f}'.format(payment.amount or 0) }} RWF</td>
+                    <td colspan="3">
+                        {% if payment.currency == 'USD' %}
+                            {{ '{:,.2f}'.format(payment.amount or 0) }} RWF
+                            {% if payment.amount_input and payment.exchange_rate %}
+                                <br><span class="text-xs text-gray-500">Original: {{ '{:,.2f}'.format(payment.amount_input or 0) }} USD @ {{ '{:,.2f}'.format(payment.exchange_rate) }}</span>
+                            {% elif payment.amount_input %}
+                                <br><span class="text-xs text-gray-500">Original: {{ '{:,.2f}'.format(payment.amount_input or 0) }} USD</span>
+                            {% endif %}
+                        {% else %}
+                            {{ '{:,.2f}'.format(payment.amount or 0) }} {{ payment.currency or 'RWF' }}
+                        {% endif %}
+                    </td>
                 </tr>
                 <tr>
                     <th>Note</th>

@@ -114,10 +114,10 @@ def run_migrations_online():
         # No Flask app context: create engine from sqlalchemy.url.
         url = config.get_main_option("sqlalchemy.url")
         if not url:
-            url = os.environ.get('DATABASE_URL_CLONE') or os.environ.get('DATABASE_URL')
+            url = os.environ.get('DATABASE_URL')
         if not url:
             raise RuntimeError(
-                "No database URL available. Set 'sqlalchemy.url' in alembic.ini or export DATABASE_URL or DATABASE_URL_CLONE."
+                "No database URL available. Set 'sqlalchemy.url' in alembic.ini or export DATABASE_URL."
             )
         connectable = sa.create_engine(url)
 

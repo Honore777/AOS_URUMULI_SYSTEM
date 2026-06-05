@@ -56,6 +56,16 @@ def pay_worker():
 
 	if form.validate_on_submit():
 		try:
+			# Normalize amount to RWF for internal calculations
+			input_amount = float(form.amount.data or 0)
+			currency = (form.currency.data or 'RWF').upper()
+			exchange_rate_input = form.exchange_rate.data
+			try:
+				amount_rwf, exchange_rate = _normalize_amount_to_rwf(input_amount, currency, exchange_rate_input)
+			except ValueError as exc:
+				flash(str(exc), 'danger')
+				return redirect(url_for('cassiterite.manage_expenses'))
+
 			# --- Create PaymentReview request; actual payment executes on boss approval ---
 			from core.models import PaymentReview
 			payload = {
@@ -65,13 +75,17 @@ def pay_worker():
 				"note": form.note.data,
 				"accountant_name": getattr(current_user, 'username', None),
 				"cashier_name": (form.cashier_name.data or '').strip(),
+				"currency": currency,
+				"exchange_rate": exchange_rate,
+				"amount_input": input_amount,
+				"amount_rwf": amount_rwf,
 			}
 			review = PaymentReview(
 				mineral_type='cassiterite',
 				type='Umukozi',
 				customer=form.worker_name.data,
-				amount=form.amount.data,
-				currency='RWF',
+				amount=amount_rwf,
+				currency=currency,
 				payment_id=None,
 				created_by_id=getattr(current_user, 'id', None),
 				boss_comment='kwishyura umukozi',
@@ -87,7 +101,7 @@ def pay_worker():
 				create_notification(
 					user_id=boss_user.id,
 					type_='depense zimbere',
-					message=f"Hasabwe kwemeza: Depense zimbere - {form.worker_name.data}, Amafaranga: {form.amount.data} RWF.",
+					message=f"Hasabwe kwemeza: Depense zimbere - {form.worker_name.data}, Amafaranga: {input_amount:,.2f} {currency} ({amount_rwf:,.2f} RWF).",
 					related_type='depense zimbere',
 					related_id=review.id
 				)
@@ -100,7 +114,7 @@ def pay_worker():
 			from utils import send_brevo_email_async
 			boss_email = [boss_user.email] if boss_user and boss_user.email else ["boss@example.com"]
 			payment_details = (
-				f"Umukozi: {form.worker_name.data}, Amafaranga: {form.amount.data} RWF, Uburyo: {form.method.data}, "
+				f"Umukozi: {form.worker_name.data}, Amafaranga: {input_amount:,.2f} {currency} ({amount_rwf:,.2f} RWF), Uburyo: {form.method.data}, "
 				f"Reference: {form.reference.data}, Impamvu: {form.note.data}"
 			)
 			subject = "Gusaba Kwemeza Igikorwa: Depense Zimbere"
@@ -118,7 +132,7 @@ def pay_worker():
 				logging.exception("Failed to enqueue worker payment email notification via Brevo")
 				flash("Email notification failed; in-app notification saved.", "warning")
 
-			flash(f"Expense request of {form.amount.data} RWF sent for boss approval ({form.worker_name.data}).", "success")
+			flash(f"Expense request of {input_amount:,.2f} {currency} ({amount_rwf:,.2f} RWF) sent for boss approval ({form.worker_name.data}).", "success")
 			return redirect(url_for('cassiterite.manage_expenses'))
 		except Exception as e:
 			db.session.rollback()

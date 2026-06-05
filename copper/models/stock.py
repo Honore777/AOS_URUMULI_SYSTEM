@@ -61,6 +61,11 @@ class CopperStock(db.Model):
     deleted_by_id = db.Column(db.Integer, nullable=True)
     delete_reason = db.Column(db.Text, nullable=True)
 
+    # Composite index for common query patterns (optimization, filtering)
+    __table_args__ = (
+        db.Index('idx_copper_stock_is_deleted_id', 'is_deleted', 'id'),
+    )
+
     # Relationships
     outputs = db.relationship('CopperOutput', 
                              back_populates='stock', 

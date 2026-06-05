@@ -225,11 +225,10 @@ def select_stocks_with_minimum_quantities_cassiterite(target_moyenne=None, minim
             if min_qty > max_qty:
                 # Clamp requested minimum to available quantity
                 min_qty = max_qty
-            # Allow continuous variable between the user-specified minimum and available quantity
             stock_vars[s.id] = LpVariable(
                 f"stock{s.id}",
                 lowBound=min_qty,
-                upBound=max_qty,  # FIX: was min(min_qty, s.local_balance) which could be less than lowBound
+                upBound=min_qty,
                 cat=LpContinuous,
             )
         else:
