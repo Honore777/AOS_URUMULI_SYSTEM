@@ -4460,7 +4460,7 @@ def customer_receipts():
     plans = (
         BulkOutputPlan.query
         .filter(BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
-                BulkOutputPlan.mineral_type.in_(_mineral_aliases('copper')))  # Coltan only for negotiator
+                BulkOutputPlan.mineral_type.in_(_mineral_aliases('copper') + _mineral_aliases('cassiterite')))
         .order_by(BulkOutputPlan.created_at.desc())
         .limit(100)
         .all()
@@ -5944,7 +5944,7 @@ def _batch_debt_options():
             BulkOutputPlan.customer.isnot(None),
             BulkOutputPlan.batch_id.isnot(None),
             BulkOutputPlan.status.in_([BulkPlanStatus.STOCK_CONFIRMED.value, BulkPlanStatus.EXECUTED.value]),
-            BulkOutputPlan.mineral_type.in_(_mineral_aliases('copper')),  # Copper only
+            BulkOutputPlan.mineral_type.in_(_mineral_aliases('copper') + _mineral_aliases('cassiterite')),
         )
         .all()
     )
