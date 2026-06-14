@@ -979,10 +979,8 @@ def dashboard():
             moyenne = (total_unit_percent / total_remaining_balance) if total_remaining_balance else 0
             moyenne_nb = (total_t_unity / total_remaining_balance) if total_remaining_balance else 0
 
-        if latest_achieved_moyenne is not None:
-            moyenne = latest_achieved_moyenne
-        if latest_achieved_moyenne_nb is not None:
-            moyenne_nb = latest_achieved_moyenne_nb
+        # NOTE: Dashboard card shows remaining stock moyenne, not batch moyenne
+        # Do not override with latest batch achieved_moyenne
 
         # Ensure server-rendered rows display the global moyenne values (don't rely
         # on per-row stored fields which we may avoid updating on every insert).

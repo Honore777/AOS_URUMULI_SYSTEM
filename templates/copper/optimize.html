@@ -92,7 +92,7 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
                     <div>
                         <p class="text-gray-600 text-sm">Achieved Percentage:</p>
-                        <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne) }}</p>
+                        <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne * 100) }}%</p>
                     </div>
                     <div>
                         <p class="text-gray-600 text-sm">Achieved Nobelium:</p>
@@ -433,7 +433,7 @@
                     </div>
                     <div>
                             <p class="text-gray-600 text-sm">Achieved Percentage:</p>
-                        <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne) }}</p>
+                        <p class="text-2xl font-bold text-green-600">{{ "%.2f"|format(achieved_moyenne * 100) }}%</p>
                     </div>
                 </div>
 
