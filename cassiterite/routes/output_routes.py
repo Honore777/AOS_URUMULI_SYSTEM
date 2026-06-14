@@ -37,11 +37,11 @@ def _normalize_amount_to_rwf(amount, currency, exchange_rate):
 @cassiterite_bp.route('/record_output', methods=['GET', 'POST'])
 @role_required("accountant")
 def record_output():
-    """Record cassiterite output (single)"""
+    """Record cassiterite output - matches copper layout with batch summaries"""
+    from cassiterite.forms import RecordCassiteriteOutputForm
     form = RecordCassiteriteOutputForm()
     
     # Populate stock choices
-    # Populate choices by selecting only required columns to avoid loading full ORM objects
     stock_rows = (
         db.session.query(CassiteriteStock.id, CassiteriteStock.voucher_no, CassiteriteStock.supplier, CassiteriteStock.percentage, CassiteriteStock.local_balance)
         .filter(CassiteriteStock.local_balance > 0, CassiteriteStock.is_deleted.is_(False))
@@ -49,22 +49,17 @@ def record_output():
         .all()
     )
     form.stock_id.choices = [(r.id, f"{r.voucher_no} - {r.supplier} - ({r.local_balance}kg)") for r in stock_rows]
-    
-    if form.validate_on_submit():
-        stock = CassiteriteStock.query.get(form.stock_id.data)
-        
-        if not stock or getattr(stock, "is_deleted", False):
-            flash("Stock not found!", "error")
-            return redirect(url_for('cassiterite.record_output'))
 
-        currency = (form.currency.data or 'RWF').upper()
-        exchange_rate_input = form.exchange_rate.data
-        payment_stage = (form.payment_stage.data or 'full_settlement').strip().lower()
-        
-        # Handle optional fields: customer, output_amount, amount_paid
-        customer = (form.customer.data or '').strip() or None
-        output_amount = form.output_amount.data or 0
-        amount_paid = form.amount_paid.data or 0
+    if request.method == "POST":
+        stock_id = int(request.form.get("stock_id"))
+        stock = CassiteriteStock.query.get_or_404(stock_id)
+        if getattr(stock, "is_deleted", False):
+            flash("Selected stock is deleted. Choose another voucher.", "danger")
+            return redirect(url_for("cassiterite.record_output"))
+        date = datetime.strptime(request.form.get("date"), "%Y-%m-%d").date() if request.form.get("date") else datetime.utcnow().date()
+        output_kg = float(request.form.get("output_kg") or 0)
+        customer = (request.form.get("customer") or '').strip()
+        output_amount = float(request.form.get('output_amount') or 0)
 
         # Guard: prevent accidental near-duplicate customer identities.
         if customer:
@@ -81,20 +76,30 @@ def record_output():
                         f"Customer name looks similar to existing customer(s): {', '.join(close[:3])}. Consider using the existing name to avoid duplication.",
                         'warning',
                     )
-        
+        amount_paid = float(request.form.get('amount_paid') or 0)
+        currency = (request.form.get('currency') or 'RWF').upper()
+        exchange_rate_input = request.form.get('exchange_rate')
+        payment_stage = (request.form.get('payment_stage') or 'full_settlement').strip().lower()
+        note = request.form.get("note")
+
         try:
             output_amount_rwf, exchange_rate = _normalize_amount_to_rwf(output_amount, currency, exchange_rate_input)
             amount_paid_rwf, _ = _normalize_amount_to_rwf(amount_paid, currency, exchange_rate_input)
         except ValueError as exc:
-            flash(str(exc), "error")
+            flash(str(exc), "danger")
             return redirect(url_for('cassiterite.record_output'))
-        
-        # Create output
-        output = CassiteriteOutput(
+
+        available_balance = stock.local_balance or 0
+
+        if output_kg > available_balance:
+            flash(f"❌ Error: You cannot output {output_kg} kg. Only {available_balance} kg available.", "danger")
+            return redirect(url_for('cassiterite.record_output'))
+
+        # Create new output record
+        out = CassiteriteOutput(
             stock_id=stock.id,
-            date=form.date.data,
-            output_kg=form.output_kg.data,
-            customer=customer,
+            date=date,
+            output_kg=output_kg,
             output_amount=output_amount,
             output_amount_rwf=output_amount_rwf,
             amount_paid=amount_paid,
@@ -102,24 +107,25 @@ def record_output():
             currency=currency,
             exchange_rate=exchange_rate,
             payment_stage=payment_stage,
-            note=form.note.data,
+            customer=customer,
+            note=note,
             voucher_no=stock.voucher_no
         )
 
-        # Ensure debt_remaining is correctly calculated
-        output.update_debt()
+        out.update_debt()
+        db.session.add(out)
+        db.session.flush()
 
-        # Compute old contribution before mutation
+        # Recalculate the related stock's remaining local balance and apply delta to aggregate
         try:
             old_q, old_wp, old_t = CassiteriteStock.contribution(stock)
         except Exception:
             old_q = old_wp = old_t = 0.0
 
-        db.session.add(output)
-        db.session.flush()
-
-        # Recalculate stock and apply aggregate delta
+        stock.local_balance = stock.remaining_stock()
+        stock.unit_percent = calculate_unit_percentage(stock.local_balance, stock.percentage)
         stock.update_calculations()
+
         try:
             new_q, new_wp, new_t = CassiteriteStock.contribution(stock)
             CassiteriteStock.apply_aggregate_delta(new_q - old_q, new_wp - old_wp, new_t - old_t)
@@ -137,28 +143,27 @@ def record_output():
             create_notification(
                 user_id=sk.id,
                 type_='OUTPUT_CREATED',
-                message=f"Cassiterite stock output of {form.output_kg.data} kg for {stock.voucher_no} requires your processing.",
+                message=f"Cassiterite stock output of {output_kg} kg for {stock.voucher_no} requires your processing.",
                 related_type='cassiterite_output',
-                related_id=output.id
+                related_id=out.id
             )
             if getattr(sk, 'email', None):
                 emails.append(sk.email)
 
-        # Persist notifications before attempting email
         db.session.commit()
 
         # --- EMAIL NOTIFICATION TO STOREKEEPERS (Brevo) ---
         from flask import current_app
         from flask_login import current_user
         from utils import send_brevo_email_async
-        output_details = f"Stock: {stock.voucher_no}, Supplier: {stock.supplier}, Output: {form.output_kg.data} kg, Note: {form.note.data}"
+        output_details = f"Stock: {stock.voucher_no}, Supplier: {stock.supplier}, Output: {output_kg} kg, Note: {note}"
         subject = "Cassiterite Stock Output Request"
         html_content = (
             "<p>Dear Storekeeper,</p>"
-            f"<p>Accountant {getattr(current_user, 'name', 'Unknown')} ({getattr(current_user, 'email', 'Unknown')})Yasabye gusohora iyi stock ikurikira ya Gasegereti:</p>"
+            f"<p>Accountant {getattr(current_user, 'name', 'Unknown')} ({getattr(current_user, 'email', 'Unknown')}) yasabye gusohora izi stock zikurikira za Gasegereti:</p>"
             f"<p>{output_details}</p>"
-            "<p>Jya muri sisitemu kureba neza stock uribuze gusohora.</p>"
-            "<p>Regards,<br> Urumuli Smart System</p>"
+            "<p>Jya muri sisiteme urebe neza stock uribuze gusohora.</p>"
+            "<p>Regards,<br>Urumuli Smart System</p>"
         )
         try:
             recipient_list = emails if emails else ["storekeeper@example.com"]
@@ -168,10 +173,199 @@ def record_output():
             logging.exception("Failed to enqueue cassiterite output email via Brevo")
             flash("Email notification failed; in-app notification(s) saved.", "warning")
 
-        flash(f"Output of {form.output_kg.data}kg recorded. Customer and amount will be added later by the negotiator.", "success")
-        return redirect(url_for('cassiterite.list_outputs'))
-    
-    return render_template('cassiterite/record_output.html', form=form)
+        flash(f"Output recorded ({output_kg} kg) for {stock.voucher_no}. Customer and amount will be added later by the negotiator.", "success")
+        return redirect(url_for("cassiterite.record_output"))
+
+    customer_filter = request.args.get('customer') or ''
+    batch_filter = (request.args.get('batch_id') or '').strip()
+    date_from = request.args.get('from') or ''
+    date_to = request.args.get('to') or ''
+
+    q = CassiteriteOutput.query.filter(CassiteriteOutput.is_deleted.is_(False))
+    if customer_filter:
+        q = q.filter(CassiteriteOutput.customer == customer_filter)
+    if batch_filter:
+        q = q.filter(CassiteriteOutput.batch_id == batch_filter)
+    # parse dates (YYYY-MM-DD) defensively
+    try:
+        if date_from:
+            d1 = datetime.strptime(date_from, '%Y-%m-%d').date()
+            q = q.filter(CassiteriteOutput.date >= d1)
+        if date_to:
+            d2 = datetime.strptime(date_to, '%Y-%m-%d').date()
+            q = q.filter(CassiteriteOutput.date <= d2)
+    except Exception:
+        # ignore parse errors and show unfiltered results
+        pass
+
+    outputs = q.order_by(CassiteriteOutput.date.desc()).limit(200).all()
+
+    # Fetch BulkOutputPlan data for batches to get weight and profit/loss info
+    from core.models import BulkOutputPlan, BatchDeduction
+    batch_plans = {}
+    if not batch_filter:
+        # Get all unique batch_ids from outputs
+        batch_ids = set(out.batch_id for out in outputs if out.batch_id)
+        if batch_ids:
+            plans = BulkOutputPlan.query.filter(
+                BulkOutputPlan.batch_id.in_(batch_ids),
+                BulkOutputPlan.mineral_type.in_(['cassiterite'])
+            ).all()
+            for plan in plans:
+                batch_plans[plan.batch_id] = plan
+
+    batch_summaries = []
+    single_outputs = []
+    if not batch_filter:
+        batches = {}
+        for out in outputs:
+            bid = (out.batch_id or '').strip()
+            if not bid:
+                single_outputs.append(out)
+                continue
+            if bid not in batches:
+                plan = batch_plans.get(bid)
+                batches[bid] = {
+                    'batch_id': bid,
+                    'customer': out.customer,
+                    'first_date': out.date,
+                    'last_date': out.date,
+                    'total_kg': 0.0,
+                    'total_paid': 0.0,
+                    'total_debt': 0.0,
+                    'count': 0,
+                    'gross_weight': float(plan.gross_weight or 0) if plan else 0,
+                    'tare_weight': float(plan.tare_weight or 0) if plan else 0,
+                    'moisture_percent': float(plan.moisture_percent or 0) if plan else 0,
+                    'moisture_weight': float(plan.moisture_weight or 0) if plan else 0,
+                    'net_weight': float(plan.net_weight or 0) if plan else 0,
+                    'sample_weight': float(plan.sample_weight or 0) if plan else 0,
+                    'final_weight': float(plan.final_weight or 0) if plan else 0,
+                    'agreed_amount': float(plan.total_expected_amount or 0) if plan else 0,
+                    'agreed_amount_rwf': float(plan.total_expected_amount or 0) * (float(plan.exchange_rate or 1.0) if plan and plan.currency == 'USD' else 1.0) if plan else 0,
+                    'currency': plan.currency if plan else 'RWF',
+                    'exchange_rate': float(plan.exchange_rate or 1.0) if plan else 1.0,
+                }
+            b = batches[bid]
+            if out.date and (not b['first_date'] or out.date < b['first_date']):
+                b['first_date'] = out.date
+            if out.date and (not b['last_date'] or out.date > b['last_date']):
+                b['last_date'] = out.date
+            b['customer'] = b['customer'] or out.customer
+            b['total_kg'] += float(out.output_kg or 0.0)
+            b['total_paid'] += float(out.amount_paid_rwf or out.amount_paid or 0.0)
+            b['total_debt'] += float(out.debt_remaining or 0.0)
+            b['count'] += 1
+
+        # Calculate COGS and profit/loss for each batch
+        for batch_id, b in batches.items():
+            plan = batch_plans.get(batch_id)
+            if plan and plan.plan_json:
+                # Calculate COGS using proportional allocation
+                cogs_rwf = 0.0
+                for item in plan.plan_json:
+                    stock_id = item.get('stock_id')
+                    planned_kg = float(item.get('planned_output_kg') or 0)
+                    if stock_id and planned_kg > 0:
+                        stock = CassiteriteStock.query.get(stock_id)
+                        if stock and stock.input_kg and stock.input_kg > 0:
+                            # Proportional COGS: (planned_kg / input_kg) * balance_to_pay
+                            proportion = planned_kg / stock.input_kg
+                            cogs_rwf += proportion * float(getattr(stock, 'balance_to_pay', getattr(stock, 'net_balance', 0)) or 0)
+                b['cogs_rwf'] = cogs_rwf
+
+                # Calculate deductions (BatchDeduction.batch_id is Integer FK to plan.id)
+                deductions = BatchDeduction.query.filter(
+                    BatchDeduction.batch_id == plan.id
+                ).all()
+                total_deductions = float(sum(d.amount_rwf or 0 for d in deductions))
+                b['total_deductions'] = total_deductions
+
+                # Convert agreed amount to RWF for calculation
+                agreed_rwf = b['agreed_amount']
+                if b['currency'] == 'USD' and b['exchange_rate'] > 0:
+                    agreed_rwf = b['agreed_amount'] * b['exchange_rate']
+
+                # Net Sales = Agreed - Deductions (what we actually received)
+                b['net_sales_rwf'] = agreed_rwf - total_deductions
+
+                # Profit/Loss = Net Sales - COGS
+                b['profit_loss_rwf'] = b['net_sales_rwf'] - cogs_rwf
+            else:
+                b['cogs_rwf'] = 0.0
+                b['total_deductions'] = 0.0
+                b['net_sales_rwf'] = 0.0
+                b['profit_loss_rwf'] = 0.0
+
+        batch_summaries = sorted(
+            list(batches.values()),
+            key=lambda r: (r.get('last_date') or datetime.utcnow().date()),
+            reverse=True,
+        )
+
+    # Build stock composition for batch detail view
+    batch_plan_details = None
+    if batch_filter:
+        plan = BulkOutputPlan.query.filter(
+            BulkOutputPlan.batch_id == batch_filter,
+            BulkOutputPlan.mineral_type.in_(['cassiterite'])
+        ).first()
+        if plan and plan.plan_json:
+            stock_items = []
+            total_planned_kg = 0.0
+            weighted_percentage = 0.0
+            for item in plan.plan_json:
+                stock_id = item.get('stock_id')
+                planned_kg = float(item.get('planned_output_kg') or 0)
+                stock = CassiteriteStock.query.get(stock_id) if stock_id else None
+                if stock:
+                    stock_items.append({
+                        'stock_id': stock_id,
+                        'voucher_no': stock.voucher_no,
+                        'supplier': stock.supplier,
+                        'percentage': float(stock.percentage or 0),
+                        'input_kg': float(stock.input_kg or 0),
+                        'planned_output_kg': planned_kg,
+                    })
+                    total_planned_kg += planned_kg
+                    weighted_percentage += planned_kg * float(stock.percentage or 0)
+            batch_moyenne = (weighted_percentage / total_planned_kg) if total_planned_kg > 0 else 0
+
+            # Fetch individual deduction line items for this batch
+            deduction_rows = BatchDeduction.query.filter(
+                BatchDeduction.batch_id == plan.id
+            ).order_by(BatchDeduction.created_at.asc()).all()
+            deductions_list = []
+            for d in deduction_rows:
+                deductions_list.append({
+                    'deduction_type': d.deduction_type,
+                    'amount_input': float(d.amount_input or 0),
+                    'currency': d.currency or 'RWF',
+                    'exchange_rate': float(d.exchange_rate or 1.0),
+                    'amount_rwf': float(d.amount_rwf or 0),
+                })
+
+            batch_plan_details = {
+                'plan': plan,
+                'stock_items': stock_items,
+                'batch_moyenne': round(batch_moyenne, 2),
+                'batch_moyenne_nb': None,
+                'total_planned_kg': round(total_planned_kg, 2),
+                'deductions': deductions_list,
+            }
+
+    return render_template(
+        "cassiterite/outputs.html",
+        outputs=outputs,
+        form=form,
+        customer_filter=customer_filter,
+        batch_filter=batch_filter,
+        batch_summaries=batch_summaries,
+        single_outputs=single_outputs,
+        batch_plan_details=batch_plan_details,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 @cassiterite_bp.route('/optimize', methods=['GET', 'POST'])
@@ -648,7 +842,9 @@ def confirm_bulk_output():
                 "stock_id": stock.id,
                 "voucher_no": stock.voucher_no,
                 "supplier": stock.supplier,
+                "date": stock.date.isoformat() if stock.date else None,
                 "planned_output_kg": float(qty_float),
+                "percentage": float(stock.percentage or 0),
                 "quoted_amount_input": 0.0,
                 "quoted_amount_rwf": 0.0,
                 "currency": "RWF",
@@ -781,6 +977,20 @@ def list_outputs():
 
     outputs = q.order_by(CassiteriteOutput.date.desc()).limit(200).all()
 
+    # Fetch BulkOutputPlan data for batches to get weight and profit/loss info
+    from core.models import BatchDeduction
+    batch_plans = {}
+    if not batch_filter:
+        # Get all unique batch_ids from outputs
+        batch_ids = set(out.batch_id for out in outputs if out.batch_id)
+        if batch_ids:
+            plans = BulkOutputPlan.query.filter(
+                BulkOutputPlan.batch_id.in_(batch_ids),
+                BulkOutputPlan.mineral_type == 'cassiterite'
+            ).all()
+            for plan in plans:
+                batch_plans[plan.batch_id] = plan
+
     batch_summaries = []
     single_outputs = []
     if not batch_filter:
@@ -791,6 +1001,7 @@ def list_outputs():
                 single_outputs.append(out)
                 continue
             if bid not in batches:
+                plan = batch_plans.get(bid)
                 batches[bid] = {
                     'batch_id': bid,
                     'customer': out.customer,
@@ -800,6 +1011,17 @@ def list_outputs():
                     'total_paid': 0.0,
                     'total_debt': 0.0,
                     'count': 0,
+                    'gross_weight': float(plan.gross_weight or 0) if plan else 0,
+                    'tare_weight': float(plan.tare_weight or 0) if plan else 0,
+                    'moisture_percent': float(plan.moisture_percent or 0) if plan else 0,
+                    'moisture_weight': float(plan.moisture_weight or 0) if plan else 0,
+                    'net_weight': float(plan.net_weight or 0) if plan else 0,
+                    'sample_weight': float(plan.sample_weight or 0) if plan else 0,
+                    'final_weight': float(plan.final_weight or 0) if plan else 0,
+                    'agreed_amount': float(plan.total_expected_amount or 0) if plan else 0,
+                    'agreed_amount_rwf': float(plan.total_expected_amount or 0) * (float(plan.exchange_rate or 1.0) if plan and plan.currency == 'USD' else 1.0) if plan else 0,
+                    'currency': plan.currency if plan else 'RWF',
+                    'exchange_rate': float(plan.exchange_rate or 1.0) if plan else 1.0,
                 }
             b = batches[bid]
             if out.date and (not b['first_date'] or out.date < b['first_date']):
@@ -812,11 +1034,101 @@ def list_outputs():
             b['total_debt'] += float(out.debt_remaining or 0.0)
             b['count'] += 1
 
+        # Calculate COGS and profit/loss for each batch
+        for batch_id, b in batches.items():
+            plan = batch_plans.get(batch_id)
+            if plan and plan.plan_json:
+                # Calculate COGS using proportional allocation
+                cogs_rwf = 0.0
+                for item in plan.plan_json:
+                    stock_id = item.get('stock_id')
+                    planned_kg = float(item.get('planned_output_kg') or 0)
+                    if stock_id and planned_kg > 0:
+                        stock = CassiteriteStock.query.get(stock_id)
+                        if stock and stock.input_kg and stock.input_kg > 0:
+                            # Proportional COGS: (planned_kg / input_kg) * net_balance
+                            proportion = planned_kg / stock.input_kg
+                            cogs_rwf += proportion * float(stock.net_balance or 0)
+                b['cogs_rwf'] = cogs_rwf
+
+                # Calculate deductions (BatchDeduction.batch_id is Integer FK to plan.id)
+                deductions = BatchDeduction.query.filter(
+                    BatchDeduction.batch_id == plan.id
+                ).all()
+                total_deductions = float(sum(d.amount_rwf or 0 for d in deductions))
+                b['total_deductions'] = total_deductions
+
+                # Convert agreed amount to RWF for calculation
+                agreed_rwf = b['agreed_amount']
+                if b['currency'] == 'USD' and b['exchange_rate'] > 0:
+                    agreed_rwf = b['agreed_amount'] * b['exchange_rate']
+
+                # Net Sales = Agreed - Deductions (what we actually received)
+                b['net_sales_rwf'] = agreed_rwf - total_deductions
+
+                # Profit/Loss = Net Sales - COGS
+                b['profit_loss_rwf'] = b['net_sales_rwf'] - cogs_rwf
+            else:
+                b['cogs_rwf'] = 0.0
+                b['total_deductions'] = 0.0
+                b['net_sales_rwf'] = 0.0
+                b['profit_loss_rwf'] = 0.0
+
         batch_summaries = sorted(
             list(batches.values()),
             key=lambda r: (r.get('last_date') or datetime.utcnow().date()),
             reverse=True,
         )
+
+    # Build stock composition for batch detail view
+    batch_plan_details = None
+    if batch_filter:
+        plan = BulkOutputPlan.query.filter(
+            BulkOutputPlan.batch_id == batch_filter,
+            BulkOutputPlan.mineral_type.in_(['cassiterite'])
+        ).first()
+        if plan and plan.plan_json:
+            stock_items = []
+            total_planned_kg = 0.0
+            weighted_percentage = 0.0
+            for item in plan.plan_json:
+                stock_id = item.get('stock_id')
+                planned_kg = float(item.get('planned_output_kg') or 0)
+                stock = CassiteriteStock.query.get(stock_id) if stock_id else None
+                if stock:
+                    stock_items.append({
+                        'stock_id': stock_id,
+                        'voucher_no': stock.voucher_no,
+                        'supplier': stock.supplier,
+                        'percentage': float(stock.percentage or 0),
+                        'input_kg': float(stock.input_kg or 0),
+                        'planned_output_kg': planned_kg,
+                    })
+                    total_planned_kg += planned_kg
+                    weighted_percentage += planned_kg * float(stock.percentage or 0)
+            batch_moyenne = (weighted_percentage / total_planned_kg) if total_planned_kg > 0 else 0
+
+            # Fetch individual deduction line items for this batch
+            deduction_rows = BatchDeduction.query.filter(
+                BatchDeduction.batch_id == plan.id
+            ).order_by(BatchDeduction.created_at.asc()).all()
+            deductions_list = []
+            for d in deduction_rows:
+                deductions_list.append({
+                    'deduction_type': d.deduction_type,
+                    'amount_input': float(d.amount_input or 0),
+                    'currency': d.currency or 'RWF',
+                    'exchange_rate': float(d.exchange_rate or 1.0),
+                    'amount_rwf': float(d.amount_rwf or 0),
+                })
+
+            batch_plan_details = {
+                'plan': plan,
+                'stock_items': stock_items,
+                'batch_moyenne': round(batch_moyenne, 2),
+                'total_planned_kg': round(total_planned_kg, 2),
+                'deductions': deductions_list,
+            }
 
     return render_template(
         'cassiterite/outputs.html',
@@ -825,6 +1137,7 @@ def list_outputs():
         batch_filter=batch_filter,
         batch_summaries=batch_summaries,
         single_outputs=single_outputs,
+        batch_plan_details=batch_plan_details,
         date_from=date_from,
         date_to=date_to,
     )

@@ -10,7 +10,10 @@
     <div class="max-w-6xl mx-auto space-y-6">
         <div class="flex items-center justify-between">
             <h1 class="text-2xl font-bold text-slate-800">Track Debts — Batch {{ plan.batch_id }}</h1>
-            <a href="{{ url_for('core.customer_receipts') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Back</a>
+            <div class="flex items-center gap-2">
+                {% include '_notifications_bell.html' %}
+                <a href="{{ url_for('core.customer_receipts') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Back</a>
+            </div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -4,27 +4,37 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cassiterite Ledgers - Boss View</title>
-   
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <style>
+        .suggest-dropdown { position: absolute; z-index: 50; background: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); width: 100%; max-height: 200px; overflow-y: auto; }
+        .suggest-dropdown div { padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.875rem; }
+        .suggest-dropdown div:hover { background-color: #f1f5f9; }
+        .suggest-wrapper { position: relative; }
+    </style>
 </head>
 <body class="bg-slate-100 min-h-screen">
     <div class="max-w-6xl mx-auto px-4 py-6">
         <header class="mb-6 flex items-center justify-between">
             <div>
                 <h1 class="text-2xl font-bold text-gray-900">Imbonerahamwe za Kasiterite</h1>
-                <p class="text-sm text-gray-600 mt-1">Urubuga rw’Umuyobozi (gusoma gusa). Hitamo umukiriya cyangwa umutanga kugira ngo ubone imbonerahamwe yihariye.</p>
+                <p class="text-sm text-gray-600 mt-1">Urubuga rw&rsquo;Umuyobozi (gusoma gusa). Hitamo umukiriya cyangwa umutanga kugira ngo ubone imbonerahamwe yihariye.</p>
             </div>
             <a href="{{ url_for('core.boss_dashboard') }}" class="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-white hover:bg-slate-900 shadow-sm">
-                Garuka ku Rubuga rw’Umuyobozi
+                Garuka ku Rubuga rw&rsquo;Umuyobozi
             </a>
         </header>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Customer ledgers -->
             <section class="bg-white rounded-2xl shadow-md border border-gray-200 p-5">
-                <h2 class="text-lg font-semibold text-gray-800 mb-3">Imbonerahamwe z’Abakiriya</h2>
+                <h2 class="text-lg font-semibold text-gray-800 mb-3">Imbonerahamwe z&rsquo;Abakiriya</h2>
+                <div class="suggest-wrapper mb-3">
+                    <input type="text" id="customer-search" placeholder="Shakisha umukiriya..." autocomplete="off"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <div id="customer-suggestions" class="suggest-dropdown hidden"></div>
+                </div>
                 {% if customers %}
-                    <p class="text-xs text-gray-500 mb-3">Kanda izina ry’umukiriya urebe imbonerahamwe ye ya kasiterite.</p>
+                    <p class="text-xs text-gray-500 mb-2">Kanda izina ry&rsquo;umukiriya urebe imbonerahamwe ye ya kasiterite.</p>
                     <div class="space-y-2 max-h-96 overflow-y-auto pr-1">
                         {% for customer in customers %}
                             <a href="{{ url_for('core.boss_cassiterite_customer_ledger', customer=customer) }}" class="block px-3 py-2 text-sm font-medium rounded-lg bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-100">
@@ -39,9 +49,14 @@
 
             <!-- Supplier ledgers -->
             <section class="bg-white rounded-2xl shadow-md border border-gray-200 p-5">
-                <h2 class="text-lg font-semibold text-gray-800 mb-3">Imbonerahamwe z’Abatanga</h2>
+                <h2 class="text-lg font-semibold text-gray-800 mb-3">Imbonerahamwe z&rsquo;Abatanga</h2>
+                <div class="suggest-wrapper mb-3">
+                    <input type="text" id="supplier-search" placeholder="Shakisha umutanga..." autocomplete="off"
+                        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    <div id="supplier-suggestions" class="suggest-dropdown hidden"></div>
+                </div>
                 {% if suppliers %}
-                    <p class="text-xs text-gray-500 mb-3">Kanda izina ry’utanga amabuye urebe imbonerahamwe ye ya kasiterite.</p>
+                    <p class="text-xs text-gray-500 mb-2">Kanda izina ry&rsquo;utanga amabuye urebe imbonerahamwe ye ya kasiterite.</p>
                     <div class="space-y-2 max-h-96 overflow-y-auto pr-1">
                         {% for supplier in suppliers %}
                             <a href="{{ url_for('core.consolidated_supplier_ledger_lookup', supplier=supplier) }}" class="block px-3 py-2 text-sm font-medium rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-100">
@@ -55,5 +70,55 @@
             </section>
         </div>
     </div>
+
+    <script>
+    function setupAutosuggest(inputId, dropdownId, apiUrl, redirectUrlFn) {
+        const input = document.getElementById(inputId);
+        const dropdown = document.getElementById(dropdownId);
+        let debounceTimer;
+
+        input.addEventListener('input', function() {
+            clearTimeout(debounceTimer);
+            const q = this.value.trim();
+            if (!q) { dropdown.classList.add('hidden'); return; }
+            debounceTimer = setTimeout(() => {
+                fetch(apiUrl + '?q=' + encodeURIComponent(q))
+                    .then(r => r.json())
+                    .then(data => {
+                        dropdown.innerHTML = '';
+                        const results = data.results || [];
+                        if (!results.length) { dropdown.classList.add('hidden'); return; }
+                        results.forEach(item => {
+                            const div = document.createElement('div');
+                            div.textContent = item.name;
+                            div.addEventListener('click', () => {
+                                window.location.href = redirectUrlFn(item.name);
+                            });
+                            dropdown.appendChild(div);
+                        });
+                        dropdown.classList.remove('hidden');
+                    })
+                    .catch(() => dropdown.classList.add('hidden'));
+            }, 250);
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                dropdown.classList.add('hidden');
+            }
+        });
+    }
+
+    setupAutosuggest(
+        'customer-search', 'customer-suggestions',
+        '{{ url_for("core.customer_name_suggest") }}',
+        name => '{{ url_for("core.boss_cassiterite_customer_ledger", customer="") }}' + encodeURIComponent(name)
+    );
+    setupAutosuggest(
+        'supplier-search', 'supplier-suggestions',
+        '{{ url_for("core.supplier_name_suggest") }}',
+        name => '{{ url_for("core.consolidated_supplier_ledger_lookup") }}?supplier=' + encodeURIComponent(name)
+    );
+    </script>
 </body>
 </html>

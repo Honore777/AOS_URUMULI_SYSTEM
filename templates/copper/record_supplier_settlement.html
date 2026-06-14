@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>Record Supplier Settlement - Copper</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
 <div class="container mx-auto p-6">
@@ -24,7 +25,10 @@
     {% endwith %}
 
     <div class="bg-white p-6 rounded shadow mb-8">
-        <h2 class="text-xl font-semibold mb-6">📋 Create Settlement Payment</h2>
+        <h2 class="text-xl font-semibold mb-6 flex items-center gap-2">
+            <i data-lucide="clipboard-list" class="w-5 h-5"></i>
+            Create Settlement Payment
+        </h2>
         <form method="POST" action="{{ url_for('copper.record_supplier_settlement') }}" class="space-y-4">
             
             <!-- Supplier Selection -->
@@ -290,6 +294,9 @@ document.querySelector('form').addEventListener('submit', (e) => {
 document.addEventListener('DOMContentLoaded', () => {
     loadAllSuppliers();
 });
+
+// Initialize Lucide icons
+lucide.createIcons();
 </script>
 </body>
 </html>

@@ -200,6 +200,20 @@ def record_output():
 
         outputs = q.order_by(CopperOutput.date.desc()).limit(200).all()
 
+        # Fetch BulkOutputPlan data for batches to get weight and profit/loss info
+        from core.models import BulkOutputPlan, BatchDeduction
+        batch_plans = {}
+        if not batch_filter:
+            # Get all unique batch_ids from outputs
+            batch_ids = set(out.batch_id for out in outputs if out.batch_id)
+            if batch_ids:
+                plans = BulkOutputPlan.query.filter(
+                    BulkOutputPlan.batch_id.in_(batch_ids),
+                    BulkOutputPlan.mineral_type.in_(['copper', 'coltan'])
+                ).all()
+                for plan in plans:
+                    batch_plans[plan.batch_id] = plan
+
         batch_summaries = []
         single_outputs = []
         if not batch_filter:
@@ -210,6 +224,7 @@ def record_output():
                     single_outputs.append(out)
                     continue
                 if bid not in batches:
+                    plan = batch_plans.get(bid)
                     batches[bid] = {
                         'batch_id': bid,
                         'customer': out.customer,
@@ -219,6 +234,17 @@ def record_output():
                         'total_paid': 0.0,
                         'total_debt': 0.0,
                         'count': 0,
+                        'gross_weight': float(plan.gross_weight or 0) if plan else 0,
+                        'tare_weight': float(plan.tare_weight or 0) if plan else 0,
+                        'moisture_percent': float(plan.moisture_percent or 0) if plan else 0,
+                        'moisture_weight': float(plan.moisture_weight or 0) if plan else 0,
+                        'net_weight': float(plan.net_weight or 0) if plan else 0,
+                        'sample_weight': float(plan.sample_weight or 0) if plan else 0,
+                        'final_weight': float(plan.final_weight or 0) if plan else 0,
+                        'agreed_amount': float(plan.total_expected_amount or 0) if plan else 0,
+                        'agreed_amount_rwf': float(plan.total_expected_amount or 0) * (float(plan.exchange_rate or 1.0) if plan and plan.currency == 'USD' else 1.0) if plan else 0,
+                        'currency': plan.currency if plan else 'RWF',
+                        'exchange_rate': float(plan.exchange_rate or 1.0) if plan else 1.0,
                     }
                 b = batches[bid]
                 if out.date and (not b['first_date'] or out.date < b['first_date']):
@@ -231,11 +257,107 @@ def record_output():
                 b['total_debt'] += float(out.debt_remaining or 0.0)
                 b['count'] += 1
 
+            # Calculate COGS and profit/loss for each batch
+            for batch_id, b in batches.items():
+                plan = batch_plans.get(batch_id)
+                if plan and plan.plan_json:
+                    # Calculate COGS using proportional allocation
+                    cogs_rwf = 0.0
+                    for item in plan.plan_json:
+                        stock_id = item.get('stock_id')
+                        planned_kg = float(item.get('planned_output_kg') or 0)
+                        if stock_id and planned_kg > 0:
+                            stock = CopperStock.query.get(stock_id)
+                            if stock and stock.input_kg and stock.input_kg > 0:
+                                # Proportional COGS: (planned_kg / input_kg) * net_balance
+                                proportion = planned_kg / stock.input_kg
+                                cogs_rwf += proportion * float(stock.net_balance or 0)
+                    b['cogs_rwf'] = cogs_rwf
+
+                    # Calculate deductions (BatchDeduction.batch_id is Integer FK to plan.id)
+                    deductions = BatchDeduction.query.filter(
+                        BatchDeduction.batch_id == plan.id
+                    ).all()
+                    total_deductions = float(sum(d.amount_rwf or 0 for d in deductions))
+                    b['total_deductions'] = total_deductions
+
+                    # Convert agreed amount to RWF for calculation
+                    agreed_rwf = b['agreed_amount']
+                    if b['currency'] == 'USD' and b['exchange_rate'] > 0:
+                        agreed_rwf = b['agreed_amount'] * b['exchange_rate']
+
+                    # Net Sales = Agreed - Deductions (what we actually received)
+                    b['net_sales_rwf'] = agreed_rwf - total_deductions
+
+                    # Profit/Loss = Net Sales - COGS
+                    b['profit_loss_rwf'] = b['net_sales_rwf'] - cogs_rwf
+                else:
+                    b['cogs_rwf'] = 0.0
+                    b['total_deductions'] = 0.0
+                    b['net_sales_rwf'] = 0.0
+                    b['profit_loss_rwf'] = 0.0
+
             batch_summaries = sorted(
                 list(batches.values()),
                 key=lambda r: (r.get('last_date') or datetime.utcnow().date()),
                 reverse=True,
             )
+
+        # Build stock composition for batch detail view
+        batch_plan_details = None
+        if batch_filter:
+            plan = BulkOutputPlan.query.filter(
+                BulkOutputPlan.batch_id == batch_filter,
+                BulkOutputPlan.mineral_type.in_(['copper', 'coltan'])
+            ).first()
+            if plan and plan.plan_json:
+                stock_items = []
+                total_planned_kg = 0.0
+                weighted_percentage = 0.0
+                weighted_nb = 0.0
+                for item in plan.plan_json:
+                    stock_id = item.get('stock_id')
+                    planned_kg = float(item.get('planned_output_kg') or 0)
+                    stock = CopperStock.query.get(stock_id) if stock_id else None
+                    if stock:
+                        stock_items.append({
+                            'stock_id': stock_id,
+                            'voucher_no': stock.voucher_no,
+                            'supplier': stock.supplier,
+                            'percentage': float(stock.percentage or 0),
+                            'nobelium': float(stock.nb or 0) if stock.nb is not None else None,
+                            'input_kg': float(stock.input_kg or 0),
+                            'planned_output_kg': planned_kg,
+                        })
+                        total_planned_kg += planned_kg
+                        weighted_percentage += planned_kg * float(stock.percentage or 0)
+                        if stock.nb is not None:
+                            weighted_nb += planned_kg * float(stock.nb)
+                batch_moyenne = (weighted_percentage / total_planned_kg) if total_planned_kg > 0 else 0
+                batch_moyenne_nb = (weighted_nb / total_planned_kg) if total_planned_kg > 0 else 0
+
+                # Fetch individual deduction line items for this batch
+                deduction_rows = BatchDeduction.query.filter(
+                    BatchDeduction.batch_id == plan.id
+                ).order_by(BatchDeduction.created_at.asc()).all()
+                deductions_list = []
+                for d in deduction_rows:
+                    deductions_list.append({
+                        'deduction_type': d.deduction_type,
+                        'amount_input': float(d.amount_input or 0),
+                        'currency': d.currency or 'RWF',
+                        'exchange_rate': float(d.exchange_rate or 1.0),
+                        'amount_rwf': float(d.amount_rwf or 0),
+                    })
+
+                batch_plan_details = {
+                    'plan': plan,
+                    'stock_items': stock_items,
+                    'batch_moyenne': round(batch_moyenne, 2),
+                    'batch_moyenne_nb': round(batch_moyenne_nb, 2) if batch_moyenne_nb > 0 else None,
+                    'total_planned_kg': round(total_planned_kg, 2),
+                    'deductions': deductions_list,
+                }
 
         return render_template(
             "copper/outputs.html",
@@ -245,6 +367,7 @@ def record_output():
             batch_filter=batch_filter,
             batch_summaries=batch_summaries,
             single_outputs=single_outputs,
+            batch_plan_details=batch_plan_details,
             date_from=date_from,
             date_to=date_to,
         )

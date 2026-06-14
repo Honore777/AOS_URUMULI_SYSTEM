@@ -476,29 +476,48 @@
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Umukiriya</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Batch</th>
                                 <th class="px-4 py-3 text-left text-sm font-semibold">Imiterere</th>
-                                <th class="px-4 py-3 text-right text-sm font-semibold">Ibiro Byashohotse (kg)</th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Gross(kg)</th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Tale(kg)</th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Moisture(kg)</th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Net(kg)</th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Amafaranga yemejwe</th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Ayo badukase</th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">COGS<br><span class="text-[10px] font-normal">(Ayo twishyuye iyi misaruro yose)</span></th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Net Sales<br><span class="text-[10px] font-normal">(Ayo twakiriye)</span></th>
+                                <th class="px-4 py-3 text-right text-sm font-semibold">Inyungu / Igihombo</th>
                             </tr>
                         </thead>
-                            <tbody id="recent-plans-body" class="divide-y divide-gray-200">
-                                {% for p in recent_plans %}
-                                <tr class="hover:bg-gray-50 text-sm">
-                                    <td class="px-4 py-3 text-gray-700">{{ p.created_at.strftime('%Y-%m-%d %H:%M') if p.created_at else 'N/A' }}</td>
-                                    <td class="px-4 py-3 text-gray-700 uppercase">{{ p.mineral_type }}</td>
-                                    <td class="px-4 py-3 text-gray-700">{{ p.customer or 'N/A' }}</td>
-                                    <td class="px-4 py-3 text-gray-700">{{ p.batch_id or 'N/A' }}</td>
-                                    <td class="px-4 py-3 text-gray-700">{{ p.status }}</td>
-                                    <td class="px-4 py-3 text-right text-gray-700">
-                                        {% if p.plan_json %}
-                                            {% set ns = namespace(total_kg=0) %}
-                                            {% for row in p.plan_json %}
-                                                {% set ns.total_kg = ns.total_kg + (row.planned_output_kg or 0) %}
-                                            {% endfor %}
-                                            {{ "%.2f"|format(ns.total_kg) }}
-                                        {% else %}
-                                            N/A
-                                        {% endif %}
-                                    </td>
-                                </tr>
+                        <tbody id="recent-plans-body" class="divide-y divide-gray-200">
+                            {% for p in recent_plans %}
+                            {% set total_kg = 0.0 %}
+                            {% if p.plan_json %}
+                                {% for row in p.plan_json %}
+                                    {% set total_kg = total_kg + (row.planned_output_kg or 0) %}
+                                {% endfor %}
+                            {% endif %}
+                            <tr class="hover:bg-gray-50 text-sm">
+                                <td class="px-4 py-3 text-gray-700">{{ p.created_at.strftime('%Y-%m-%d %H:%M') if p.created_at else 'N/A' }}</td>
+                                <td class="px-4 py-3 text-gray-700 uppercase">{{ p.mineral_type }}</td>
+                                <td class="px-4 py-3 text-gray-700">{{ p.customer or 'N/A' }}</td>
+                                <td class="px-4 py-3 text-gray-700">{{ p.batch_id or 'N/A' }}</td>
+                                <td class="px-4 py-3 text-gray-700">{{ p.status }}</td>
+                                <td class="px-4 py-3 text-right text-gray-700 tabular-nums">{{ "%.2f"|format(p.gross_weight or 0) }}</td>
+                                <td class="px-4 py-3 text-right text-gray-700 tabular-nums">{{ "%.2f"|format(p.tare_weight or 0) }}</td>
+                                <td class="px-4 py-3 text-right text-gray-700 tabular-nums">{{ "%.2f"|format(p.moisture_weight or 0) }}</td>
+                                <td class="px-4 py-3 text-right text-gray-700 tabular-nums">{{ "%.2f"|format(p.final_weight or 0) }}</td>
+                                <td class="px-4 py-3 text-right text-gray-700 tabular-nums">
+                                    <div class="font-semibold">{{ '{:,.0f}'.format(p.agreed_amount_rwf or 0) }} RWF</div>
+                                    {% if p.currency == 'USD' %}
+                                    <div class="text-[10px] text-gray-500">{{ '{:,.2f}'.format(p.total_expected_amount or 0) }} USD</div>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-right text-red-600 tabular-nums">{{ '{:,.0f}'.format(p.deductions_rwf or 0) }}</td>
+                                <td class="px-4 py-3 text-right text-amber-700 tabular-nums">{{ '{:,.0f}'.format(p.cogs_rwf or 0) }}</td>
+                                <td class="px-4 py-3 text-right text-indigo-700 tabular-nums">{{ '{:,.0f}'.format(p.net_sales_rwf or 0) }}</td>
+                                <td class="px-4 py-3 text-right tabular-nums font-semibold {% if (p.profit_loss_rwf or 0) > 0 %}text-emerald-700{% elif (p.profit_loss_rwf or 0) < 0 %}text-red-700{% else %}text-gray-600{% endif %}">
+                                    {{ '{:,.0f}'.format(p.profit_loss_rwf or 0) }}
+                                </td>
+                            </tr>
                             {% endfor %}
                         </tbody>
                     </table>

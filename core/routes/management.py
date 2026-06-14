@@ -196,6 +196,21 @@ def _customer_ledger_filter_context():
     return preset, filter_from, filter_to
 
 
+def _get_plan_deductions_rwf(plan):
+    """Get total deduction amount in RWF for a BulkOutputPlan.
+
+    BatchDeduction.batch_id is an Integer FK to BulkOutputPlan.id,
+    so we query only by plan.id.
+    """
+    total = (
+        db.session.query(func.coalesce(func.sum(BatchDeduction.amount_rwf), 0))
+        .filter(BatchDeduction.batch_id == plan.id)
+        .scalar()
+        or 0.0
+    )
+    return float(total)
+
+
 def _create_customer_unearned_receipt(
     customer: str,
     mineral_type: str | None,
@@ -587,6 +602,61 @@ def supplier_name_suggest():
                 enriched.append(out)
             results = enriched
 
+        return safe_jsonify({"results": results})
+    except Exception:
+        return safe_jsonify({"results": []})
+
+
+@core_bp.route("/customers/suggest", methods=["GET"])
+@role_required("accountant", "boss", "admin", "negotiator")
+def customer_name_suggest():
+    """AJAX endpoint: search customer names for autosuggestion in ledgers."""
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 1:
+        return safe_jsonify({"results": []})
+
+    try:
+        pattern = f"%{q}%"
+        from core.models import BulkOutputPlan, CustomerReceipt, CustomerUnearnedReceipt
+
+        # Union distinct customer names from all relevant tables
+        plan_customers = (
+            db.session.query(BulkOutputPlan.customer)
+            .filter(BulkOutputPlan.customer.isnot(None))
+            .filter(BulkOutputPlan.customer.ilike(pattern))
+            .distinct()
+            .limit(10)
+            .all()
+        )
+        receipt_customers = (
+            db.session.query(CustomerReceipt.customer)
+            .filter(CustomerReceipt.customer.isnot(None))
+            .filter(CustomerReceipt.customer.ilike(pattern))
+            .distinct()
+            .limit(10)
+            .all()
+        )
+        unearned_customers = (
+            db.session.query(CustomerUnearnedReceipt.customer)
+            .filter(CustomerUnearnedReceipt.customer.isnot(None))
+            .filter(CustomerUnearnedReceipt.customer.ilike(pattern))
+            .distinct()
+            .limit(10)
+            .all()
+        )
+
+        seen = set()
+        results = []
+        for (name,) in (plan_customers or []) + (receipt_customers or []) + (unearned_customers or []):
+            if not name:
+                continue
+            key = name.strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({"name": name.strip()})
+
+        results = results[:10]
         return safe_jsonify({"results": results})
     except Exception:
         return safe_jsonify({"results": []})
@@ -2544,30 +2614,30 @@ def _mineral_aliases(mineral_type: str | None) -> tuple[str, ...]:
 
 def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
     """Calculate outstanding amount for a batch using SINGLE SOURCE OF TRUTH.
-    
+
     ╔════════════════════════════════════════════════════════════════════╗
     ║ SOURCE: BulkOutputPlan.total_expected_amount - sum(receipts)      ║
     ║         - sum(allocations) - sum(deductions)                      ║
     ║ NO Output rows, NO debt_remaining tracking                         ║
     ╚════════════════════════════════════════════════════════════════════╝
-    
+
     Formula:
         outstanding = total_expected_amount - sum(receipts.amount_rwf)
                       - sum(allocations.applied_amount_rwf)
                       - sum(deductions.amount_rwf)
-    
+
     Args:
         mineral_type: 'copper'|'coltan'|'cassiterite'
         batch_id: Batch identifier
-    
+
     Returns:
         float: Outstanding amount (>= 0)
-    
+
     Used by:
         - _batch_debt_options() - Populate dropdown options
         - update_debts() - Show remaining for selected batch
         - Payment form validation - Check if payment fits
-    
+
     Data Queries:
         1. BulkOutputPlan WHERE batch_id + mineral_type
         2. SUM(CustomerReceipt) WHERE batch_id + mineral_type
@@ -2589,9 +2659,17 @@ def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
     if not plans:
         return 0.0
 
-    # Total agreed amount (in RWF)
-    total_expected = float(sum(float(p.total_expected_amount or 0) for p in plans))
-    
+    # Total agreed amount - convert to RWF for consistent calculation
+    total_expected_rwf = 0.0
+    for p in plans:
+        plan_amount = float(p.total_expected_amount or 0.0)
+        plan_currency = (getattr(p, 'currency', None) or 'RWF').upper()
+        plan_rate = float(getattr(p, 'exchange_rate', 1.0) or 1.0)
+        if plan_currency == 'USD' and plan_rate > 0:
+            total_expected_rwf += plan_amount * plan_rate
+        else:
+            total_expected_rwf += plan_amount
+
     # Total paid so far - sum of all CustomerReceipt.amount_rwf (already normalized)
     total_paid = (
         db.session.query(func.coalesce(func.sum(CustomerReceipt.amount_rwf), 0))
@@ -2620,23 +2698,19 @@ def _batch_outstanding_rwf(mineral_type: str, batch_id: str) -> float:
     total_allocated = float(total_allocated or 0)
 
     # Total deducted (expenses, RMA, transport, etc. - all in RWF)
-    # Note: BatchDeduction.batch_id is a FK to BulkOutputPlan.id (integer),
-    # not the string batch_id. Get the plan IDs first.
+    # BatchDeduction.batch_id is an Integer FK to BulkOutputPlan.id
     plan_ids = [p.id for p in plans]
+    total_deducted = 0.0
     if plan_ids:
         total_deducted = (
             db.session.query(func.coalesce(func.sum(BatchDeduction.amount_rwf), 0))
-            .filter(
-                BatchDeduction.batch_id.in_(plan_ids),
-            )
+            .filter(BatchDeduction.batch_id.in_(plan_ids))
             .scalar()
             or 0.0
         )
-    else:
-        total_deducted = 0.0
-    total_deducted = float(total_deducted or 0)
+        total_deducted = float(total_deducted)
 
-    return float(max(total_expected - total_paid - total_allocated - total_deducted, 0.0))
+    return float(max(total_expected_rwf - total_paid - total_allocated - total_deducted, 0.0))
 
 
 def _apply_receipt_to_batch(mineral_type: str, batch_id: str, amount_rwf: float, stage: str) -> float:
@@ -2702,8 +2776,17 @@ def _apply_receipt_to_batch(mineral_type: str, batch_id: str, amount_rwf: float,
         logger.warning(f"_apply_receipt_to_batch: no plans found for batch={batch_id} mineral={mineral_type}")
         return 0.0
 
-    # Calculate total plan amount and what's already paid (all in RWF)
-    total_plan_amount = float(sum(float(p.total_expected_amount or 0) for p in plans))
+    # Calculate total plan amount and convert to RWF for consistent comparison
+    total_plan_amount_rwf = 0.0
+    for p in plans:
+        plan_amount = float(p.total_expected_amount or 0.0)
+        plan_currency = (getattr(p, 'currency', None) or 'RWF').upper()
+        plan_rate = float(getattr(p, 'exchange_rate', 1.0) or 1.0)
+        if plan_currency == 'USD' and plan_rate > 0:
+            total_plan_amount_rwf += plan_amount * plan_rate
+        else:
+            total_plan_amount_rwf += plan_amount
+
     total_paid = (
         db.session.query(func.coalesce(func.sum(CustomerReceipt.amount_rwf), 0))
         .filter(
@@ -2730,9 +2813,9 @@ def _apply_receipt_to_batch(mineral_type: str, batch_id: str, amount_rwf: float,
     total_allocated = float(total_allocated or 0)
 
     # Check if payment would exceed total plan (tolerance: 0.01 RWF rounding)
-    if total_paid + total_allocated + amount > total_plan_amount + 0.01:
+    if total_paid + total_allocated + amount > total_plan_amount_rwf + 0.01:
         logger.warning(
-            f"_apply_receipt_to_batch: payment {amount} would exceed plan {total_plan_amount} "
+            f"_apply_receipt_to_batch: payment {amount} would exceed plan {total_plan_amount_rwf} "
             f"(already paid {total_paid}, allocated {total_allocated})"
         )
         return 0.0
@@ -3023,6 +3106,44 @@ def boss_dashboard():
         r.display_amount_details = amount_breakdown["details"]
 
     recent_plans = BulkOutputPlan.query.order_by(BulkOutputPlan.created_at.desc()).limit(20).all()
+
+    # Enrich each recent plan with per-plan COGS, deductions, and profit/loss
+    for plan in recent_plans:
+        plan_cogs = 0.0
+        if plan.plan_json:
+            for item in plan.plan_json:
+                stock_id = item.get('stock_id')
+                planned_kg = float(item.get('planned_output_kg') or 0)
+                if stock_id and planned_kg > 0:
+                    if plan.mineral_type in _mineral_aliases('copper'):
+                        stock = CopperStock.query.get(stock_id)
+                    else:
+                        stock = CassiteriteStock.query.get(stock_id)
+                    if stock and stock.input_kg and stock.input_kg > 0:
+                        # For cassiterite, use balance_to_pay as the cost basis
+                        if plan.mineral_type in _mineral_aliases('copper'):
+                            net_balance = float(getattr(stock, 'net_balance', 0) or 0)
+                        else:
+                            net_balance = float(getattr(stock, 'balance_to_pay', getattr(stock, 'net_balance', 0)) or 0)
+                        proportion = planned_kg / stock.input_kg
+                        plan_cogs += proportion * net_balance
+        plan.cogs_rwf = plan_cogs
+
+        # Deductions (use robust helper to handle string/integer batch_id mismatch)
+        plan.deductions_rwf = _get_plan_deductions_rwf(plan)
+
+        # Agreed amount in RWF
+        plan_agreed = float(plan.total_expected_amount or 0)
+        plan_rate = float(plan.exchange_rate or 1.0)
+        if (plan.currency or 'RWF').upper() == 'USD' and plan_rate > 0:
+            plan.agreed_amount_rwf = plan_agreed * plan_rate
+        else:
+            plan.agreed_amount_rwf = plan_agreed
+
+        # Net Sales and Profit/Loss
+        plan.net_sales_rwf = plan.agreed_amount_rwf - plan.deductions_rwf
+        plan.profit_loss_rwf = plan.net_sales_rwf - plan.cogs_rwf
+
     show_payment_reviews = getattr(current_user, "role", None) in {"boss", "admin"}
 
     return render_template(
@@ -3356,6 +3477,18 @@ def boss_dashboard_data():
             'batch_id': p.batch_id,
             'status': p.status,
             'total_kg': total_kg,
+            'gross_weight': float(p.gross_weight or 0),
+            'tare_weight': float(p.tare_weight or 0),
+            'moisture_weight': float(p.moisture_weight or 0),
+            'final_weight': float(p.final_weight or 0),
+            'agreed_amount_rwf': float(p.agreed_amount_rwf or 0),
+            'total_expected_amount': float(p.total_expected_amount or 0),
+            'currency': p.currency or 'RWF',
+            'exchange_rate': float(p.exchange_rate or 1.0),
+            'deductions_rwf': float(p.deductions_rwf or 0),
+            'cogs_rwf': float(p.cogs_rwf or 0),
+            'net_sales_rwf': float(p.net_sales_rwf or 0),
+            'profit_loss_rwf': float(p.profit_loss_rwf or 0),
         })
 
     kpis = {
@@ -3610,6 +3743,19 @@ def boss_approve_payment(review_id: int):
                 plan.exchange_rate = float(payload.get('exchange_rate') or 1.0)
             except Exception:
                 plan.exchange_rate = 1.0
+
+            # Save weight tracking fields
+            try:
+                plan.gross_weight = float(payload.get('gross_weight') or 0.0) if payload.get('gross_weight') else None
+                plan.tare_weight = float(payload.get('tare_weight') or 0.0) if payload.get('tare_weight') else None
+                plan.net_weight = float(payload.get('net_weight') or 0.0) if payload.get('net_weight') else None
+                plan.moisture_percent = float(payload.get('moisture_percent') or 0.0) if payload.get('moisture_percent') else None
+                plan.moisture_weight = float(payload.get('moisture_weight') or 0.0) if payload.get('moisture_weight') else None
+                plan.net_dry_weight = float(payload.get('net_dry_weight') or 0.0) if payload.get('net_dry_weight') else None
+                plan.sample_weight = float(payload.get('sample_weight') or 0.0) if payload.get('sample_weight') else None
+                plan.final_weight = float(payload.get('final_weight') or 0.0) if payload.get('final_weight') else None
+            except Exception:
+                logger.exception('boss_approve_payment: failed to save weight tracking fields')
 
             # Create BatchDeduction rows only when an agreed total exists.
             if total_expected_amount > 0:
@@ -4042,6 +4188,46 @@ def store_dashboard():
         BulkOutputPlan.created_at.desc()
     ).limit(50).all()
 
+    # Enrich plan_json with stock data for display (handles legacy plans missing date/percentage/nobelium)
+    from copper.models import CopperStock
+    from cassiterite.models import CassiteriteStock
+    for plan in plans:
+        if not plan.plan_json:
+            plan.display_rows = []
+            continue
+        enriched = []
+        for idx, row in enumerate(plan.plan_json):
+            if not isinstance(row, dict):
+                enriched.append(row)
+                continue
+            if "stock_id" not in row:
+                enriched.append(dict(row))
+                continue
+            try:
+                sid = int(row["stock_id"])
+            except (ValueError, TypeError):
+                enriched.append(dict(row))
+                continue
+            stock = None
+            if plan.mineral_type in ("copper", "coltan"):
+                stock = CopperStock.query.get(sid)
+            elif plan.mineral_type == "cassiterite":
+                stock = CassiteriteStock.query.get(sid)
+            new_row = dict(row)
+            if stock:
+                new_row["voucher_no"] = stock.voucher_no
+                new_row["supplier"] = stock.supplier
+                if stock.date:
+                    new_row["date"] = stock.date.isoformat()
+                if stock.percentage is not None:
+                    new_row["percentage"] = float(stock.percentage)
+                if plan.mineral_type in ("copper", "coltan"):
+                    nb = getattr(stock, "nb", None)
+                    if nb is not None:
+                        new_row["nobelium"] = float(nb)
+            enriched.append(new_row)
+        plan.display_rows = enriched
+
     user_notifications = []
     unread = []
     read = []
@@ -4150,6 +4336,10 @@ def store_execute_bulk_plan(plan_id: int):
             return redirect(url_for("core.store_dashboard"))
 
     try:
+        # Set gross_weight to total confirmed quantity (storekeeper's confirmation)
+        total_confirmed_qty = sum(row.get("planned_output_kg", 0) for row in valid_rows)
+        plan.gross_weight = total_confirmed_qty
+
         for row in valid_rows:
             try:
                 sid = int(row.get("stock_id"))
@@ -4411,10 +4601,27 @@ def customer_receipts():
                 return 0.0
 
         deductions = []
-        for key, dtype in (('rma_amount', 'RMA'), ('transport_amount', 'TRANSPORT'), ('alex_fee_amount', 'ALEX_FEE'), ('percentage_amount', 'PERCENTAGE')):
+        for key, dtype in (
+            ('rma_amount', 'RMA'),
+            ('transport_amount', 'TRANSPORT'),
+            ('alex_fee_amount', 'ALEX_FEE'),
+            ('percentage_amount', 'PERCENTAGE'),
+            ('rra_3_percent_amount', 'RRA_3_PERCENT'),
+            ('inkomane_amount', 'INKOMANE'),
+        ):
             val = _floatf(key)
             if val and val > 0:
                 deductions.append({'type': dtype, 'amount': float(val)})
+
+        # Handle weight tracking fields
+        gross_weight = _floatf('gross_weight')
+        tare_weight = _floatf('tare_weight')
+        moisture_percent = _floatf('moisture_percent')
+        sample_weight = _floatf('sample_weight')
+        net_weight = _floatf('net_weight')
+        moisture_weight = _floatf('moisture_weight')
+        net_dry_weight = _floatf('net_dry_weight')
+        final_weight = _floatf('final_weight')
 
         payload = {
             'action': 'batch_agreement',
@@ -4426,6 +4633,14 @@ def customer_receipts():
             'currency': currency,
             'exchange_rate': float(exchange_rate),
             'deductions': deductions,
+            'gross_weight': gross_weight,
+            'tare_weight': tare_weight,
+            'moisture_percent': moisture_percent,
+            'sample_weight': sample_weight,
+            'net_weight': net_weight,
+            'moisture_weight': moisture_weight,
+            'net_dry_weight': net_dry_weight,
+            'final_weight': final_weight,
         }
         review = PaymentReview(
             mineral_type=(plan.mineral_type or None),
@@ -5341,6 +5556,7 @@ def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None
     if to_dt:
         plans_stmt = plans_stmt.where(BulkOutputPlan.created_at <= to_dt)
 
+    # Deduction join: BatchDeduction.batch_id is an Integer FK to BulkOutputPlan.id
     deductions_stmt = (
         select(
             BatchDeduction.created_at.label('date'),
@@ -5359,7 +5575,12 @@ def _customer_ledger_data(mineral_type: str, customer: str, batch_id: str | None
             typed_text_null.label('proof_path'),
             BatchDeduction.deduction_type.label('detail'),
         )
-        .select_from(BatchDeduction.__table__.join(BulkOutputPlan, BatchDeduction.batch_id == BulkOutputPlan.id))
+        .select_from(
+            BatchDeduction.__table__.join(
+                BulkOutputPlan,
+                BatchDeduction.batch_id == BulkOutputPlan.id,
+            )
+        )
         .where(
             BulkOutputPlan.customer == customer_name,
             BulkOutputPlan.mineral_type.in_(aliases),
@@ -5931,11 +6152,11 @@ def cassiterite_customer_ledger_batch(customer: str, batch_id: str):
 
 def _batch_debt_options():
     """Return customer/batch outstanding options for debt update page.
-    
+
     Single source of truth: Use ONLY BulkOutputPlan + CustomerReceipt (all in RWF).
     Outstanding = plan.total_expected_amount - sum(receipts.amount_rwf) - sum(allocations) - sum(deductions)
-    
-    NEGOTIATOR WORKFLOW: Only copper/cassiterite mineral type (not coltan).
+
+    NEGOTIATOR WORKFLOW: copper (including coltan alias) and cassiterite mineral types.
     """
     # Query all active agreements for COPPER/CASSITERITE ONLY.
     plans = (
@@ -5980,11 +6201,21 @@ def _batch_debt_options():
         # Sum all RWF amounts directly (no currency conversion)
         total_paid = float(sum(r.amount_rwf or 0 for r in receipts if r.batch_id == p.batch_id and r.mineral_type in aliases))
         total_allocated = float(sum(a.applied_amount_rwf or 0 for a in allocations if a.batch_id == p.batch_id))
-        total_deducted = float(sum(d.amount_rwf or 0 for d in deductions if d.batch_id == p.batch_id))
+        # Match deductions by integer plan.id or string plan.batch_id
+        total_deducted = float(sum(
+            d.amount_rwf or 0 for d in deductions
+            if d.batch_id == p.id or d.batch_id == p.batch_id
+        ))
 
-        planned_total = float(p.total_expected_amount or 0.0)
-        remaining_rwf = float(max(planned_total - total_paid - total_allocated - total_deducted, 0.0))
-        
+        # Convert planned_total to RWF for consistent calculation
+        planned_total_input = float(p.total_expected_amount or 0.0)
+        if base_currency == 'USD' and base_rate > 0:
+            planned_total_rwf = planned_total_input * base_rate
+        else:
+            planned_total_rwf = planned_total_input
+
+        remaining_rwf = float(max(planned_total_rwf - total_paid - total_allocated - total_deducted, 0.0))
+
         # For display: convert RWF to USD if needed
         remaining_display = remaining_rwf
         if base_currency == 'USD' and base_rate > 0:

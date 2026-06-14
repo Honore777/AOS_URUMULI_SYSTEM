@@ -10,7 +10,10 @@
     <div class="max-w-6xl mx-auto space-y-6">
         <div class="flex items-center justify-between">
             <h1 class="text-2xl font-bold text-slate-800">Loans</h1>
-            <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
+            <div class="flex items-center gap-2">
+                {% include '_notifications_bell.html' %}
+                <a href="{{ url_for('entry_point') }}" class="rounded bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">Main Menu</a>
+            </div>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}

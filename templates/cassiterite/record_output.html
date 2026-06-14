@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Record Cassiterite Output</title>
-  
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body class="bg-gray-50 min-h-screen p-6">
     <div class="max-w-2xl mx-auto">
@@ -83,7 +83,10 @@
         </div>
 
         <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-6">
-            <h3 class="font-semibold text-blue-900 mb-2">📝 Help</h3>
+            <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">
+                <i data-lucide="help-circle" class="w-4 h-4"></i>
+                Help
+            </h3>
             <ul class="text-sm text-blue-800 space-y-1">
                 <li><strong>Stock:</strong> Select the cassiterite stock to deduct from</li>
                 <li><strong>Output (kg):</strong> Quantity in kilograms extracted or processed</li>
@@ -91,5 +94,9 @@
             </ul>
         </div>
     </div>
+
+    <script>
+        lucide.createIcons();
+    </script>
 </body>
 </html>

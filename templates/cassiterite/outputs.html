@@ -3,188 +3,451 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Cassiterite Outputs</title>
-
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">  
+    <title>Cassiterite Outputs - Profit Tracking</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .suggest-dropdown { position: absolute; z-index: 50; background: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); width: 100%; max-height: 200px; overflow-y: auto; }
+        .suggest-dropdown div { padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.875rem; }
+        .suggest-dropdown div:hover { background-color: #f1f5f9; }
+        .suggest-wrapper { position: relative; }
+    </style>
 </head>
 <body class="bg-gray-100 font-sans">
-    <!-- Flash Messages -->
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            <div class="space-y-2 mb-4 p-4">
-                {% for category, message in messages %}
-                    <div class="
-                        p-3 rounded-lg text-sm font-medium
-                        {% if category == 'success' %}
-                            bg-green-100 text-green-800 border border-green-300
-                        {% elif category == 'danger' %}
-                            bg-red-100 text-red-800 border border-red-300
-                        {% elif category == 'warning' %}
-                            bg-yellow-100 text-yellow-800 border border-yellow-300
-                        {% else %}
-                            bg-gray-100 text-gray-800 border border-gray-300
-                        {% endif %}
-                    ">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            </div>
-        {% endif %}
-    {% endwith %}
+    <div class="container mx-auto p-6 max-w-[1600px]">
 
-    <div class="container mx-auto p-6">
         <!-- Header -->
-        <div class="flex justify-between items-center mb-8">
+        <div class="flex justify-between items-center mb-6">
             <div>
-                <h1 class="text-3xl font-bold text-gray-900">📦 Cassiterite Outputs</h1>
-                <p class="text-gray-600 mt-1">View all recorded outputs and sales</p>
+                <h1 class="text-2xl font-bold text-gray-900">Cassiterite Outputs</h1>
+                <p class="text-gray-600 text-sm mt-1">Track profits per batch. COGS = proportional cost from stock balance_to_pay.</p>
             </div>
-            <a href="{{ url_for('cassiterite.dashboard') }}" 
-               class="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg transition font-semibold">
+            <a href="{{ url_for('cassiterite.dashboard') }}" class="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">
                 ← Back to Dashboard
             </a>
         </div>
 
-        <!-- Filters for outputs (GET) -->
-        <form method="get" class="mb-6 bg-white p-4 rounded shadow flex gap-3 items-end">
-            <div>
-                <label class="block text-sm font-semibold">Customer</label>
-                <input name="customer" type="text" value="{{ customer_filter or '' }}" class="border px-2 py-1 rounded">
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="space-y-2 mb-4">
+            {% for category, message in messages %}
+            <div class="p-3 rounded-lg text-sm font-medium
+                {% if category == 'success' %}bg-green-100 text-green-800 border border-green-300
+                {% elif category == 'danger' %}bg-red-100 text-red-800 border border-red-300
+                {% elif category == 'warning' %}bg-yellow-100 text-yellow-800 border border-yellow-300
+                {% else %}bg-gray-100 text-gray-800 border border-gray-300{% endif %}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <!-- Filters -->
+        <form method="get" class="bg-white p-4 rounded-xl shadow-md flex flex-wrap gap-3 items-end mb-6">
+            <div class="suggest-wrapper">
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Customer</label>
+                <input id="customer-search" name="customer" type="text" value="{{ customer_filter or '' }}" autocomplete="off" class="border px-2 py-1.5 rounded text-sm w-40">
+                <div id="customer-suggestions" class="suggest-dropdown hidden"></div>
             </div>
             <div>
-                <label class="block text-sm font-semibold">Batch</label>
-                <input name="batch_id" type="text" value="{{ batch_filter or '' }}" class="border px-2 py-1 rounded" placeholder="e.g. SSM/TA/2496">
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Batch</label>
+                <input id="batch-filter" name="batch_id" type="text" value="{{ batch_filter or '' }}" class="border px-2 py-1.5 rounded text-sm w-40" placeholder="e.g. batch_20260115">
             </div>
             <div>
-                <label class="block text-sm font-semibold">From</label>
-                <input name="from" type="date" value="{{ date_from or '' }}" class="border px-2 py-1 rounded">
+                <label class="block text-xs font-semibold text-gray-600 mb-1">From</label>
+                <input id="date-from" name="from" type="date" value="{{ date_from or '' }}" class="border px-2 py-1.5 rounded text-sm">
             </div>
             <div>
-                <label class="block text-sm font-semibold">To</label>
-                <input name="to" type="date" value="{{ date_to or '' }}" class="border px-2 py-1 rounded">
+                <label class="block text-xs font-semibold text-gray-600 mb-1">To</label>
+                <input id="date-to" name="to" type="date" value="{{ date_to or '' }}" class="border px-2 py-1.5 rounded text-sm">
             </div>
             <div>
-                <button type="submit" class="bg-blue-600 text-white px-3 py-1 rounded">Apply</button>
+                <button type="submit" class="bg-blue-600 text-white px-4 py-1.5 rounded text-sm font-semibold hover:bg-blue-700">Apply</button>
             </div>
             <div>
-                <a href="{{ url_for('cassiterite.list_outputs') }}" class="text-sm text-red-600">Reset</a>
+                <a href="{{ url_for('cassiterite.record_output') }}" class="text-sm text-red-600 hover:text-red-700 font-medium">Reset</a>
             </div>
         </form>
 
-        <!-- Outputs Table -->
-        {% if outputs %}
-            <div class="bg-white rounded-lg shadow-md overflow-hidden">
-                {% if batch_filter %}
-                    <div class="border-b border-slate-200 px-6 py-4 text-sm text-slate-700">
-                        Showing details for batch <span class="font-bold">{{ batch_filter }}</span>
-                        <a href="{{ url_for('cassiterite.list_outputs') }}" class="ml-2 text-blue-600 hover:underline">Back to batches</a>
+        <!-- AJAX Loading Indicator -->
+        <div id="ajax-loading" class="hidden mb-4 text-center text-sm text-blue-600 font-medium">Loading...</div>
+
+        <!-- Dynamic Content -->
+        <div id="ajax-dynamic-content">
+            <!-- Record Output Form (always visible) -->
+            <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+                <h2 class="font-bold text-lg mb-4 text-gray-800">Record Cassiterite Output</h2>
+                <form method="POST" action="{{ url_for('cassiterite.record_output') }}" class="space-y-4">
+                    {{ form.hidden_tag() }}
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-1">{{ form.date.label }}</label>
+                            {{ form.date(class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-teal-500 focus:border-teal-500 p-2") }}
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-1">{{ form.stock_id.label }}</label>
+                            {{ form.stock_id(class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-teal-500 focus:border-teal-500 p-2") }}
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-1">{{ form.output_kg.label }}</label>
+                            {{ form.output_kg(placeholder="Enter quantity in kg", class="w-full border border-gray-300 rounded-md shadow-sm focus:ring-teal-500 focus:border-teal-500 p-2") }}
+                        </div>
                     </div>
-                    <table class="w-full border-collapse">
-                        <thead class="bg-teal-600 text-white">
-                            <tr>
-                                <th class="px-6 py-4 text-left font-semibold">Date</th>
-                                <th class="px-6 py-4 text-left font-semibold">Batch ID</th>
-                                <th class="px-6 py-4 text-left font-semibold">Voucher</th>
-                                <th class="px-6 py-4 text-left font-semibold">Customer</th>
-                                <th class="px-6 py-4 text-left font-semibold">Output (kg)</th>
-                                <th class="px-6 py-4 text-left font-semibold">Output Amount</th>
-                                <th class="px-6 py-4 text-left font-semibold">Amount Paid</th>
-                                <th class="px-6 py-4 text-left font-semibold">Debt Remaining</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-200">
-                            {% for output in outputs %}
-                                <tr class="hover:bg-gray-50 transition">
-                                    <td class="px-6 py-4 text-gray-700">{{ output.date.strftime('%Y-%m-%d') if output.date else '-' }}</td>
-                                    <td class="px-6 py-4 text-gray-700 font-mono text-sm">{{ output.batch_id or '-' }}</td>
-                                    <td class="px-6 py-4 text-gray-700 font-semibold">{{ output.voucher_no }}</td>
-                                    <td class="px-6 py-4 text-gray-700">{{ output.customer }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_kg or 0) }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_amount_rwf or output.output_amount or 0) }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold text-green-600">{{ "%.2f"|format(output.amount_paid_rwf or output.amount_paid or 0) }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold {% if output.debt_remaining > 0 %}text-red-600{% else %}text-green-600{% endif %}">
-                                        {{ "%.2f"|format(output.debt_remaining or 0) }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                {% else %}
-                    <table class="w-full border-collapse">
-                        <thead class="bg-teal-600 text-white">
-                            <tr>
-                                <th class="px-6 py-4 text-left font-semibold">Last Date</th>
-                                <th class="px-6 py-4 text-left font-semibold">Batch</th>
-                                <th class="px-6 py-4 text-left font-semibold">Customer</th>
-                                <th class="px-6 py-4 text-right font-semibold">Total Output (kg)</th>
-                                <th class="px-6 py-4 text-right font-semibold">Amount Paid</th>
-                                <th class="px-6 py-4 text-right font-semibold">Debt Remaining</th>
-                                <th class="px-6 py-4 text-right font-semibold">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-200">
-                            {% for b in (batch_summaries or []) %}
-                                <tr class="hover:bg-gray-50 transition">
-                                    <td class="px-6 py-4 text-gray-700">{{ b.last_date.strftime('%Y-%m-%d') if b.last_date else '-' }}</td>
-                                    <td class="px-6 py-4 text-gray-700 font-mono text-sm">{{ b.batch_id }}</td>
-                                    <td class="px-6 py-4 text-gray-700">{{ b.customer or '-' }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(b.total_kg or 0) }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold text-green-600">{{ "%.2f"|format(b.total_paid or 0) }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold {% if (b.total_debt or 0) > 0 %}text-red-600{% else %}text-green-600{% endif %}">
-                                        {{ "%.2f"|format(b.total_debt or 0) }}
-                                    </td>
-                                    <td class="px-6 py-4 text-right">
-                                        <a href="{{ url_for('cassiterite.list_outputs', batch_id=b.batch_id) }}" class="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white shadow hover:bg-blue-700">View Details</a>
-                                    </td>
-                                </tr>
-                            {% endfor %}
+                    <div class="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        Accountant records only the output quantity. Customer details and negotiated money fields are captured later by the negotiator.
+                    </div>
+                    <div>
+                        {{ form.submit(class="w-full bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition font-medium") }}
+                    </div>
+                </form>
+            </div>
 
-                            {% for output in (single_outputs or []) %}
-                                <tr class="hover:bg-gray-50 transition bg-slate-50">
-                                    <td class="px-6 py-4 text-gray-700">{{ output.date.strftime('%Y-%m-%d') if output.date else '-' }}</td>
-                                    <td class="px-6 py-4 text-gray-700 font-mono text-sm">-</td>
-                                    <td class="px-6 py-4 text-gray-700">{{ output.customer or '-' }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right">{{ "%.2f"|format(output.output_kg or 0) }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold text-green-600">{{ "%.2f"|format(output.amount_paid_rwf or output.amount_paid or 0) }}</td>
-                                    <td class="px-6 py-4 text-gray-700 text-right font-semibold {% if (output.debt_remaining or 0) > 0 %}text-red-600{% else %}text-green-600{% endif %}">
-                                        {{ "%.2f"|format(output.debt_remaining or 0) }}
-                                    </td>
-                                    <td class="px-6 py-4 text-right text-xs text-slate-500">No batch</td>
-                                </tr>
+            <!-- Summary Cards (only when viewing batch list) -->
+            {% if not batch_filter %}
+            {% set total_agreed = batch_summaries|map(attribute='agreed_amount_rwf')|sum %}
+            {% set total_cogs = batch_summaries|map(attribute='cogs_rwf')|sum %}
+            {% set total_deductions = batch_summaries|map(attribute='total_deductions')|sum %}
+            {% set total_net_sales = batch_summaries|map(attribute='net_sales_rwf')|sum %}
+            {% set total_profit = batch_summaries|map(attribute='profit_loss_rwf')|sum %}
+            {% set total_paid = batch_summaries|map(attribute='total_paid')|sum %}
+            {% set total_debt = batch_summaries|map(attribute='total_debt')|sum %}
+
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+                <div class="bg-white rounded-xl shadow-md p-4 border border-blue-200">
+                    <div class="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-1">Total Agreed</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_agreed) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Amafaranga yose yemejwe</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-4 border border-amber-200">
+                    <div class="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">COGS</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_cogs) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Ayo twishyuye kuruyu musaruro</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-4 border border-red-200">
+                    <div class="text-xs font-semibold text-red-600 uppercase tracking-wide mb-1">Deductions</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_deductions) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Ayo badukase</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-4 border border-indigo-200">
+                    <div class="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-1">Net Sales</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_net_sales) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Ayo twakiriye mu ntoki</div>
+                </div>
+                <div class="rounded-xl shadow-md p-4 border {% if total_profit >= 0 %}bg-emerald-50 border-emerald-300{% else %}bg-red-50 border-red-300{% endif %}">
+                    <div class="text-xs font-semibold {% if total_profit >= 0 %}text-emerald-600{% else %}text-red-600{% endif %} uppercase tracking-wide mb-1">Profit / Loss</div>
+                    <div class="text-xl font-bold tabular-nums {% if total_profit >= 0 %}text-emerald-700{% else %}text-red-700{% endif %}">{{ '{:,.0f}'.format(total_profit) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Inyungu cg igihombo</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-4 border border-green-200">
+                    <div class="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1">Cash Collected</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_paid) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Yishyuwe: {{ '{:,.0f}'.format(total_debt) }} RWF remaining</div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Outputs Table -->
+            {% if outputs %}
+            <div class="bg-white rounded-lg shadow-md overflow-hidden">
+            {% if batch_filter %}
+            <!-- Batch Detail View -->
+            <div class="bg-white rounded-xl shadow-md overflow-x-auto">
+                <div class="p-4 border-b border-gray-200">
+                    <div class="flex justify-between items-center">
+                        <h2 class="font-bold text-lg">Batch Details: <span class="font-mono text-teal-700">{{ batch_filter }}</span></h2>
+                        <a href="{{ url_for('cassiterite.record_output') }}" class="text-sm text-blue-600 hover:underline font-medium">← Back to all batches</a>
+                    </div>
+                </div>
+
+                <!-- Stock Composition -->
+                {% if batch_plan_details and batch_plan_details.stock_items %}
+                <div class="p-4 bg-slate-50 border-b border-gray-200">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-semibold text-sm text-slate-700 flex items-center gap-2">
+                            <i data-lucide="clipboard-list" class="w-4 h-4"></i>
+                            Stock Composition (Vouchers in Batch)
+                        </h3>
+                        <div class="flex gap-4 text-xs">
+                            <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded font-semibold">Batch Moyenne: {{ batch_plan_details.batch_moyenne }}%</span>
+                            <span class="bg-emerald-100 text-emerald-800 px-2 py-1 rounded font-semibold">Total Planned: {{ batch_plan_details.total_planned_kg }} kg</span>
+                        </div>
+                    </div>
+                    <table class="min-w-full table-auto bg-white rounded-lg shadow-sm border border-slate-200">
+                        <thead class="bg-slate-100">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600">Voucher</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600">Supplier</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-gray-600">Input (kg)</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-gray-600">Planned Out (kg)</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-gray-600">Percentage (%)</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            {% for item in batch_plan_details.stock_items %}
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-3 py-2 text-sm font-mono text-teal-700">{{ item.voucher_no }}</td>
+                                <td class="px-3 py-2 text-sm">{{ item.supplier or '-' }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums">{{ '%.2f'|format(item.input_kg) }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums font-semibold">{{ '%.2f'|format(item.planned_output_kg) }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums text-amber-700">{{ '%.2f'|format(item.percentage) }}</td>
+                            </tr>
                             {% endfor %}
                         </tbody>
                     </table>
+                </div>
                 {% endif %}
-            </div>
 
-            <!-- Summary Stats -->
-            <div class="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div class="bg-white p-6 rounded-lg shadow">
-                    <h3 class="text-sm font-semibold text-gray-600 uppercase mb-2">Total Outputs</h3>
-                    <p class="text-3xl font-bold text-teal-600">{{ outputs|length }}</p>
+                <!-- Deductions Breakdown -->
+                {% if batch_plan_details and batch_plan_details.deductions %}
+                <div class="p-4 bg-red-50 border-b border-red-200">
+                    <h3 class="font-semibold text-sm text-red-800 mb-3 flex items-center gap-2">
+                        <i data-lucide="trending-down" class="w-4 h-4"></i>
+                        Deductions Breakdown
+                    </h3>
+                    <table class="min-w-full table-auto bg-white rounded-lg shadow-sm border border-red-100">
+                        <thead class="bg-red-100">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-red-800">Deduction Type</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-red-800">Amount</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-red-800">Rate</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-red-800">RWF</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-red-50">
+                            {% for d in batch_plan_details.deductions %}
+                            <tr class="hover:bg-red-50">
+                                <td class="px-3 py-2 text-sm font-medium text-red-700">{{ d.deduction_type or 'Adjustment' }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums">{{ '{:,.2f}'.format(d.amount_input or 0) }} {{ d.currency }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums text-gray-500">{{ d.exchange_rate }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums font-semibold text-red-700">{{ '{:,.0f}'.format(d.amount_rwf or 0) }} RWF</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
-                <div class="bg-white p-6 rounded-lg shadow">
-                    <h3 class="text-sm font-semibold text-gray-600 uppercase mb-2">Total Amount Paid</h3>
-                    <p class="text-3xl font-bold text-green-600">{{ "%.2f"|format(outputs|map(attribute='amount_paid')|sum) }}</p>
-                </div>
-                <div class="bg-white p-6 rounded-lg shadow">
-                    <h3 class="text-sm font-semibold text-gray-600 uppercase mb-2">Outstanding Debt</h3>
-                    <p class="text-3xl font-bold text-red-600">{{ "%.2f"|format(outputs|map(attribute='debt_remaining')|sum) }}</p>
-                </div>
-            </div>
+                {% endif %}
 
-        {% else %}
-            <!-- Empty State -->
-            <div class="bg-white rounded-lg shadow-md p-12 text-center">
-                <div class="text-6xl mb-4">📭</div>
-                <h2 class="text-2xl font-bold text-gray-900 mb-2">No Outputs Yet</h2>
-                <p class="text-gray-600 mb-6">There are no cassiterite outputs recorded. Start by recording your first output.</p>
-                <a href="{{ url_for('cassiterite.record_output') }}" 
-                   class="inline-block bg-teal-600 hover:bg-teal-700 text-white px-6 py-3 rounded-lg font-semibold transition">
-                    ✏️ Record First Output
-                </a>
+                <table class="min-w-full table-auto">
+                    <thead class="bg-slate-100">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Date</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Stock</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Customer</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Output(kg)</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Output Amount</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Amount Paid</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Currency</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Stage</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Debt Remaining</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Note</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        {% for out in outputs %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-4 py-3 text-sm">{{ out.date.strftime("%Y-%m-%d") if out.date else '-' }}</td>
+                            <td class="px-4 py-3 text-sm font-mono">{{ out.stock.voucher_no if out.stock else '-' }}</td>
+                            <td class="px-4 py-3 text-sm">{{ out.customer or '-' }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(out.output_kg or 0) }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums">{{ '{:,.0f}'.format(out.output_amount_rwf or out.output_amount or 0) }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums text-green-700">{{ '{:,.0f}'.format(out.amount_paid_rwf or out.amount_paid or 0) }}</td>
+                            <td class="px-4 py-3 text-sm">{{ out.currency or 'RWF' }}</td>
+                            <td class="px-4 py-3 text-sm">{{ out.payment_stage or '-' }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums font-semibold {% if (out.debt_remaining or 0) > 0 %}text-red-600{% else %}text-green-600{% endif %}">{{ '{:,.0f}'.format(out.debt_remaining or 0) }}</td>
+                            <td class="px-4 py-3 text-sm text-gray-500">{{ out.note or '-' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
+            {% else %}
+            <!-- Batch Summary View -->
+            <div class="bg-white rounded-xl shadow-md overflow-x-auto">
+                <div class="p-4 border-b border-gray-200">
+                    <h2 class="font-bold text-lg">Recent Batch Outputs</h2>
+                    <p class="text-sm text-gray-500">Click "View Details" to see vouchers in each batch</p>
+                </div>
+                <table class="min-w-full table-auto">
+                    <thead class="bg-slate-100">
+                        <tr>
+                            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-600">Last Date</th>
+                            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-600">Batch</th>
+                            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-600">Customer</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Gross(kg)</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Tale(kg)</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Moisture(kg)</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Net(kg)</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Agreed (RWF)</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Deductions</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">COGS</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Net Sales</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Profit/Loss</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Paid</th>
+                            <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Remaining</th>
+                            <th class="px-3 py-3 text-center text-xs font-semibold text-gray-600">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        {% for b in (batch_summaries or []) %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-3 py-3 text-sm">{{ b.last_date.strftime('%Y-%m-%d') if b.last_date else '-' }}</td>
+                            <td class="px-3 py-3 text-sm font-mono text-teal-700">{{ b.batch_id }}</td>
+                            <td class="px-3 py-3 text-sm">{{ b.customer or '-' }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.gross_weight or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.tare_weight or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.moisture_weight or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.final_weight or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">
+                                <div class="font-semibold">{{ '{:,.0f}'.format(b.agreed_amount_rwf or 0) }}</div>
+                                {% if b.currency == 'USD' %}
+                                <div class="text-[10px] text-gray-500">{{ '{:,.2f}'.format(b.agreed_amount or 0) }} USD @ {{ b.exchange_rate }}</div>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums text-red-600">{{ '{:,.0f}'.format(b.total_deductions or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums text-amber-700">{{ '{:,.0f}'.format(b.cogs_rwf or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums text-indigo-700">{{ '{:,.0f}'.format(b.net_sales_rwf or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums font-bold {% if (b.profit_loss_rwf or 0) > 0 %}text-emerald-700{% elif (b.profit_loss_rwf or 0) < 0 %}text-red-700{% else %}text-gray-600{% endif %}">
+                                {{ '{:,.0f}'.format(b.profit_loss_rwf or 0) }}
+                            </td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums text-green-700">{{ '{:,.0f}'.format(b.total_paid or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums font-semibold {% if (b.total_debt or 0) > 0 %}text-red-600{% else %}text-slate-600{% endif %}">{{ '{:,.0f}'.format(b.total_debt or 0) }}</td>
+                            <td class="px-3 py-3 text-center">
+                                <a class="inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-white text-xs font-semibold hover:bg-blue-700"
+                                   href="{{ url_for('cassiterite.record_output', batch_id=b.batch_id) }}">
+                                    View Details
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+
+                        {% for output in (single_outputs or []) %}
+                        <tr class="hover:bg-gray-50 bg-slate-50">
+                            <td class="px-3 py-3 text-sm">{{ output.date.strftime('%Y-%m-%d') if output.date else '-' }}</td>
+                            <td class="px-3 py-3 text-sm font-mono text-gray-400">-</td>
+                            <td class="px-3 py-3 text-sm">{{ output.customer or '-' }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(output.output_kg or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums text-green-700">{{ '{:,.0f}'.format(output.amount_paid_rwf or output.amount_paid or 0) }}</td>
+                            <td class="px-3 py-3 text-sm text-right tabular-nums font-semibold {% if (output.debt_remaining or 0) > 0 %}text-red-600{% else %}text-slate-600{% endif %}">{{ '{:,.0f}'.format(output.debt_remaining or 0) }}</td>
+                            <td class="px-3 py-3 text-center text-xs text-gray-400">No batch</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
         {% endif %}
+        </div>
+
+        <!-- Legend / Help -->
+        <div class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+            <strong>How profit is calculated:</strong><br>
+            <span class="text-xs">COGS = sum of (planned_output_kg / input_kg) × net_balance for each stock in the batch<br>
+            Net Sales = Agreed Amount − Deductions<br>
+            Profit/Loss = Net Sales − COGS</span>
+        </div>
+
     </div>
+
+    <script>
+    (function() {
+        const form = document.querySelector('form[method="get"]');
+        const loading = document.getElementById('ajax-loading');
+        const dynamicContent = document.getElementById('ajax-dynamic-content');
+        let ajaxDebounce;
+
+        function fetchFilteredData() {
+            if (!dynamicContent) return;
+            const params = new URLSearchParams(new FormData(form));
+            const url = window.location.pathname + '?' + params.toString();
+            loading.classList.remove('hidden');
+            fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(r => {
+                    if (!r.ok) throw new Error('Fetch failed');
+                    return r.text();
+                })
+                .then(html => {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const newContent = doc.getElementById('ajax-dynamic-content');
+                    if (newContent && dynamicContent) {
+                        dynamicContent.innerHTML = newContent.innerHTML;
+                    }
+                    history.replaceState(null, '', url);
+                })
+                .catch(function(err) {
+                    console.error('AJAX filter error:', err);
+                })
+                .finally(() => loading.classList.add('hidden'));
+        }
+
+        function submitFilterForm() {
+            clearTimeout(ajaxDebounce);
+            ajaxDebounce = setTimeout(fetchFilteredData, 400);
+        }
+
+        form.querySelectorAll('input, select').forEach(el => {
+            el.addEventListener('input', submitFilterForm);
+            el.addEventListener('change', submitFilterForm);
+        });
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            fetchFilteredData();
+        });
+
+        // Customer autocomplete
+        const input = document.getElementById('customer-search');
+        const dropdown = document.getElementById('customer-suggestions');
+        let suggestDebounce;
+
+        if (input && dropdown) {
+            input.addEventListener('input', function() {
+                clearTimeout(suggestDebounce);
+                const q = this.value.trim();
+                if (!q) { dropdown.classList.add('hidden'); return; }
+                suggestDebounce = setTimeout(() => {
+                    fetch('{{ url_for("core.customer_name_suggest") }}?q=' + encodeURIComponent(q))
+                        .then(r => r.json())
+                        .then(data => {
+                            dropdown.innerHTML = '';
+                            const results = data.results || [];
+                            if (!results.length) { dropdown.classList.add('hidden'); return; }
+                            results.forEach(item => {
+                                const div = document.createElement('div');
+                                div.textContent = item.name;
+                                div.addEventListener('click', () => {
+                                    input.value = item.name;
+                                    dropdown.classList.add('hidden');
+                                    submitFilterForm();
+                                });
+                                dropdown.appendChild(div);
+                            });
+                            dropdown.classList.remove('hidden');
+                        })
+                        .catch(() => dropdown.classList.add('hidden'));
+                }, 250);
+            });
+
+            document.addEventListener('click', function(e) {
+                if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.add('hidden');
+                }
+            });
+        }
+
+        // Initialize Lucide icons
+        lucide.createIcons();
+    })();
+    </script>
 </body>
 </html>

@@ -408,6 +408,17 @@ class BulkOutputPlan(db.Model):
         currency = db.Column(db.String(10), nullable=False, default='RWF', index=True)
         exchange_rate = db.Column(db.Float, nullable=False, default=1.0)
 
+        # Weight tracking for audit and payment calculations
+        # Storekeeper confirms gross weight, negotiator updates with deductions
+        gross_weight = db.Column(db.Float, nullable=True)  # Weight confirmed by storekeeper
+        tare_weight = db.Column(db.Float, nullable=True)  # Container weight deducted
+        net_weight = db.Column(db.Float, nullable=True)  # gross_weight - tare_weight
+        moisture_percent = db.Column(db.Float, nullable=True)  # Moisture percentage to deduct
+        moisture_weight = db.Column(db.Float, nullable=True)  # Actual moisture weight deducted
+        net_dry_weight = db.Column(db.Float, nullable=True)  # net_weight - moisture_weight
+        sample_weight = db.Column(db.Float, nullable=True)  # Sample weight deducted
+        final_weight = db.Column(db.Float, nullable=True)  # net_dry_weight - sample_weight (used for payment)
+
         # The optimal table from the optimization step as JSON.
         # Typical structure (Python side before JSON):
         # [

@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cassiterite Optimization</title>
-
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body class="bg-gray-50 min-h-screen p-6">
 
@@ -318,8 +318,9 @@
                     <p class="text-2xl font-bold text-amber-600">{{ target_moyenne_value }}{% if target_moyenne_value %}%{% endif %}</p>
                 </div>
 
-                <p class="bg-yellow-100 text-yellow-800 p-3 rounded mb-4 text-sm">
-                    📝 Edit quantities below. Leave empty or 0 to exclude a stock. Then click "Recalculate" to re-optimize while keeping your adjustments.
+                <p class="bg-yellow-100 text-yellow-800 p-3 rounded mb-4 text-sm flex items-center gap-2">
+                    <i data-lucide="edit-3" class="w-4 h-4"></i>
+                    Edit quantities below. Leave empty or 0 to exclude a stock. Then click "Recalculate" to re-optimize while keeping your adjustments.
                 </p>
 
                 <!-- EDITABLE FORM -->
@@ -704,6 +705,9 @@
             }
         });
     })();
+
+    // Initialize Lucide icons
+    lucide.createIcons();
     </script>
 </body>
 </html>

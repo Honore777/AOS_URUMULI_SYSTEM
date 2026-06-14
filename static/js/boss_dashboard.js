@@ -102,20 +102,39 @@ function renderRecentPlansTable(plans) {
     if (!tbody) return;
     tbody.innerHTML = '';
     if (!plans || plans.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4">No results</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="14" class="text-center py-4">Nta stock irasohorwa.</td></tr>';
         return;
     }
     for (const p of plans) {
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-gray-50 text-sm';
+        
+        const agreedRwf = p.agreed_amount_rwf != null ? Number(p.agreed_amount_rwf).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '0';
+        const agreedUsd = p.currency === 'USD' && p.total_expected_amount != null 
+            ? `<div class="text-[10px] text-gray-500">${Number(p.total_expected_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD @ ${p.exchange_rate || 1}</div>` 
+            : '';
+        
+        const profitClass = (p.profit_loss_rwf || 0) > 0 ? 'text-emerald-700' : (p.profit_loss_rwf || 0) < 0 ? 'text-red-700' : 'text-gray-600';
+        
         tr.innerHTML = `
-      <td class="px-4 py-3 text-gray-700">${p.created_at || 'N/A'}</td>
-      <td class="px-4 py-3 text-gray-700 uppercase">${p.mineral_type || ''}</td>
-      <td class="px-4 py-3 text-gray-700">${p.customer || 'N/A'}</td>
-      <td class="px-4 py-3 text-gray-700">${p.batch_id || 'N/A'}</td>
-      <td class="px-4 py-3 text-gray-700">${p.status || ''}</td>
-      <td class="px-4 py-3 text-right text-gray-700">${p.total_kg != null ? Number(p.total_kg).toFixed(2) : 'N/A'}</td>
-    `;
+            <td class="px-4 py-3 text-gray-700">${p.created_at || 'N/A'}</td>
+            <td class="px-4 py-3 text-gray-700 uppercase">${p.mineral_type || ''}</td>
+            <td class="px-4 py-3 text-gray-700">${p.customer || 'N/A'}</td>
+            <td class="px-4 py-3 text-gray-700">${p.batch_id || 'N/A'}</td>
+            <td class="px-4 py-3 text-gray-700">${p.status || ''}</td>
+            <td class="px-4 py-3 text-right text-gray-700 tabular-nums">${p.gross_weight != null ? Number(p.gross_weight).toFixed(2) : '0.00'}</td>
+            <td class="px-4 py-3 text-right text-gray-700 tabular-nums">${p.tare_weight != null ? Number(p.tare_weight).toFixed(2) : '0.00'}</td>
+            <td class="px-4 py-3 text-right text-gray-700 tabular-nums">${p.moisture_weight != null ? Number(p.moisture_weight).toFixed(2) : '0.00'}</td>
+            <td class="px-4 py-3 text-right text-gray-700 tabular-nums">${p.final_weight != null ? Number(p.final_weight).toFixed(2) : '0.00'}</td>
+            <td class="px-4 py-3 text-right text-gray-700 tabular-nums">
+                <div class="font-semibold">${agreedRwf} RWF</div>
+                ${agreedUsd}
+            </td>
+            <td class="px-4 py-3 text-right text-red-600 tabular-nums">${p.deductions_rwf != null ? Number(p.deductions_rwf).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '0'}</td>
+            <td class="px-4 py-3 text-right text-amber-700 tabular-nums">${p.cogs_rwf != null ? Number(p.cogs_rwf).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '0'}</td>
+            <td class="px-4 py-3 text-right text-indigo-700 tabular-nums">${p.net_sales_rwf != null ? Number(p.net_sales_rwf).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '0'}</td>
+            <td class="px-4 py-3 text-right tabular-nums font-semibold ${profitClass}">${p.profit_loss_rwf != null ? Number(p.profit_loss_rwf).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '0'}</td>
+        `;
         tbody.appendChild(tr);
     }
 }

@@ -17,6 +17,7 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')  
     
     
+    
 
     # Debug: Log which database URL is being used
     print(f"DEBUG: DATABASE_URL_CLONE = {os.environ.get('DATABASE_URL_CLONE')}")

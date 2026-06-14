@@ -3,165 +3,430 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Record Output</title>
-
+    <title>Coltan Outputs - Profit Tracking</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .suggest-dropdown { position: absolute; z-index: 50; background: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); width: 100%; max-height: 200px; overflow-y: auto; }
+        .suggest-dropdown div { padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.875rem; }
+        .suggest-dropdown div:hover { background-color: #f1f5f9; }
+        .suggest-wrapper { position: relative; }
+    </style>
 </head>
 <body class="bg-gray-100 font-sans">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-  {% if messages %}
-    <div class="space-y-2 mb-4">
-      {% for category, message in messages %}
-        <div
-          class="
-            p-3 rounded-lg text-sm font-medium
-            {% if category == 'success' %}
-              bg-green-100 text-green-800 border border-green-300
-            {% elif category == 'danger' %}
-              bg-red-100 text-red-800 border border-red-300
-            {% elif category == 'warning' %}
-              bg-yellow-100 text-yellow-800 border border-yellow-300
-            {% else %}
-              bg-gray-100 text-gray-800 border border-gray-300
-            {% endif %}
-          "
-        >
-          {{ message }}
-        </div>
-      {% endfor %}
-    </div>
-  {% endif %}
-{% endwith %}
-        <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-          Customer, amount, currency, and settlement stage are recorded later by the negotiator after store confirmation.
-        </div>
-        </div>
-        <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Accountant records quantity only. Customer, negotiated amount, and payment stage are completed later by the negotiator.
-        </div>
-        
-        <div>
-            {{ form.note.label(class_="block mb-1 font-semibold") }}
-            {{ form.note(class_="w-full border px-3 py-2 rounded") }}
-        </div>
-        <div>
-            {{ form.submit(class_="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600") }}
-        </div>
-    </form>
+    <div class="container mx-auto p-6 max-w-[1600px]">
 
-      <!-- Filters for outputs (GET) -->
-      <form method="get" class="mt-6 bg-white p-4 rounded shadow flex gap-3 items-end">
-        <div>
-          <label class="block text-sm font-semibold">Customer</label>
-          <input name="customer" type="text" value="{{ customer_filter or '' }}" class="border px-2 py-1 rounded">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">Coltan Outputs</h1>
+                <p class="text-gray-600 text-sm mt-1">Track profits per batch. COGS = proportional cost from stock net_balance.</p>
+            </div>
+            <a href="{{ url_for('copper.dashboard') }}" class="bg-slate-600 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">
+                ← Back to Dashboard
+            </a>
         </div>
-        <div>
-          <label class="block text-sm font-semibold">Batch</label>
-          <input name="batch_id" type="text" value="{{ batch_filter or '' }}" class="border px-2 py-1 rounded" placeholder="e.g. SSM/TA/2496">
-        </div>
-        <div>
-          <label class="block text-sm font-semibold">From</label>
-          <input name="from" type="date" value="{{ date_from or '' }}" class="border px-2 py-1 rounded">
-        </div>
-        <div>
-          <label class="block text-sm font-semibold">To</label>
-          <input name="to" type="date" value="{{ date_to or '' }}" class="border px-2 py-1 rounded">
-        </div>
-        <div>
-          <button type="submit" class="bg-blue-600 text-white px-3 py-1 rounded">Apply</button>
-        </div>
-        <div>
-          <a href="{{ url_for('copper.record_output') }}" class="text-sm text-red-600">Reset</a>
-        </div>
-      </form>
 
-    <!-- Existing outputs table -->
-    <div class="mt-6 bg-white p-4 rounded shadow overflow-x-auto">
-        <h2 class="font-bold mb-2">Recent Outputs</h2>
-        {% if batch_filter %}
-          <div class="mb-3 text-sm text-slate-700">
-            Showing details for batch <span class="font-bold">{{ batch_filter }}</span>
-            <a href="{{ url_for('copper.record_output') }}" class="ml-2 text-blue-600 hover:underline">Back to batches</a>
-          </div>
-          <table class="min-w-full table-auto border">
-              <thead>
-              <tr class="bg-gray-200">
-                  <th class="px-4 py-2">Date</th>
-                  <th class="px-4 py-2">Stock</th>
-                  <th class="px-4 py-2">Customer</th>
-                  <th class="px-4 py-2">Output(kg)</th>
-                  <th class="px-4 py-2">output_amount</th>
-                  <th class="px-4 py-2">amount_paid</th>
-                  <th class="px-4 py-2">currency</th>
-                  <th class="px-4 py-2">payment_stage</th>
-                  <th class="px-4 py-2">debt_remaining</th>
-                  <th class="px-4 py-2">Note</th>
-              </tr>
-              </thead>
-              <tbody>
-              {% for out in outputs %}
-                  <tr class="border-b">
-                      <td class="px-4 py-2">{{ out.date.strftime("%Y-%m-%d") if out.date else '-' }}</td>
-                      <td class="px-4 py-2">{{ out.stock.voucher_no if out.stock else '-' }}</td>
-                      <td class="px-4 py-2">{{ out.customer }}</td>
-                      <td class="px-4 py-2">{{ out.output_kg }}</td>
-                      <td class="px-4 py-2">{{ out.output_amount_rwf or out.output_amount }}</td>
-                      <td class="px-4 py-2">{{ out.amount_paid_rwf or out.amount_paid }}</td>
-                      <td class="px-4 py-2">{{ out.currency }}</td>
-                      <td class="px-4 py-2">{{ out.payment_stage }}</td>
-                      <td class="px-4 py-2">{{ out.debt_remaining }}</td>
-                      <td class="px-4 py-2">{{ out.note }}</td>
-                  </tr>
-              {% endfor %}
-              </tbody>
-          </table>
-        {% else %}
-          <table class="min-w-full table-auto border">
-              <thead>
-              <tr class="bg-gray-200">
-                  <th class="px-4 py-2">Last Date</th>
-                  <th class="px-4 py-2">Batch</th>
-                  <th class="px-4 py-2">Customer</th>
-                  <th class="px-4 py-2 text-right">Total Output(kg)</th>
-                  <th class="px-4 py-2 text-right">Paid</th>
-                  <th class="px-4 py-2 text-right">Remaining</th>
-                  <th class="px-4 py-2 text-right">Action</th>
-              </tr>
-              </thead>
-              <tbody>
-              {% for b in (batch_summaries or []) %}
-                  <tr class="border-b">
-                      <td class="px-4 py-2">{{ b.last_date.strftime('%Y-%m-%d') if b.last_date else '-' }}</td>
-                      <td class="px-4 py-2 font-mono text-sm">{{ b.batch_id }}</td>
-                      <td class="px-4 py-2">{{ b.customer or '-' }}</td>
-                      <td class="px-4 py-2 text-right">{{ '%.2f'|format(b.total_kg or 0) }}</td>
-                      <td class="px-4 py-2 text-right text-green-700">{{ '{:,.0f}'.format(b.total_paid or 0) }}</td>
-                      <td class="px-4 py-2 text-right font-semibold {{ 'text-red-700' if (b.total_debt or 0) > 0 else 'text-slate-700' }}">{{ '{:,.0f}'.format(b.total_debt or 0) }}</td>
-                      <td class="px-4 py-2 text-right">
-                        <a class="inline-flex items-center rounded bg-blue-600 px-3 py-1 text-white text-xs font-semibold hover:bg-blue-700"
-                           href="{{ url_for('copper.record_output', batch_id=b.batch_id) }}">
-                          View Details
-                        </a>
-                      </td>
-                  </tr>
-              {% endfor %}
-
-              {% for out in (single_outputs or []) %}
-                  <tr class="border-b bg-slate-50">
-                      <td class="px-4 py-2">{{ out.date.strftime("%Y-%m-%d") if out.date else '-' }}</td>
-                      <td class="px-4 py-2 font-mono text-sm">-</td>
-                      <td class="px-4 py-2">{{ out.customer or '-' }}</td>
-                      <td class="px-4 py-2 text-right">{{ out.output_kg or 0 }}</td>
-                      <td class="px-4 py-2 text-right text-green-700">{{ '{:,.0f}'.format(out.amount_paid_rwf or out.amount_paid or 0) }}</td>
-                      <td class="px-4 py-2 text-right font-semibold {{ 'text-red-700' if (out.debt_remaining or 0) > 0 else 'text-slate-700' }}">{{ '{:,.0f}'.format(out.debt_remaining or 0) }}</td>
-                      <td class="px-4 py-2 text-right text-xs text-slate-500">No batch</td>
-                  </tr>
-              {% endfor %}
-              </tbody>
-          </table>
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="space-y-2 mb-4">
+            {% for category, message in messages %}
+            <div class="p-3 rounded-lg text-sm font-medium
+                {% if category == 'success' %}bg-green-100 text-green-800 border border-green-300
+                {% elif category == 'danger' %}bg-red-100 text-red-800 border border-red-300
+                {% elif category == 'warning' %}bg-yellow-100 text-yellow-800 border border-yellow-300
+                {% else %}bg-gray-100 text-gray-800 border border-gray-300{% endif %}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
         {% endif %}
-    </div>
-</div>
+        {% endwith %}
 
+        <!-- Filters -->
+        <form method="get" class="bg-white p-4 rounded-xl shadow-md flex flex-wrap gap-3 items-end mb-6">
+            <div class="suggest-wrapper">
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Customer</label>
+                <input id="customer-search" name="customer" type="text" value="{{ customer_filter or '' }}" autocomplete="off" class="border px-2 py-1.5 rounded text-sm w-40">
+                <div id="customer-suggestions" class="suggest-dropdown hidden"></div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Batch</label>
+                <input id="batch-filter" name="batch_id" type="text" value="{{ batch_filter or '' }}" class="border px-2 py-1.5 rounded text-sm w-40" placeholder="e.g. batch_20260115">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">From</label>
+                <input id="date-from" name="from" type="date" value="{{ date_from or '' }}" class="border px-2 py-1.5 rounded text-sm">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">To</label>
+                <input id="date-to" name="to" type="date" value="{{ date_to or '' }}" class="border px-2 py-1.5 rounded text-sm">
+            </div>
+            <div>
+                <button type="submit" class="bg-blue-600 text-white px-4 py-1.5 rounded text-sm font-semibold hover:bg-blue-700">Apply</button>
+            </div>
+            <div>
+                <a href="{{ url_for('copper.record_output') }}" class="text-sm text-red-600 hover:text-red-700 font-medium">Reset</a>
+            </div>
+        </form>
+
+        <!-- AJAX Loading Indicator -->
+        <div id="ajax-loading" class="hidden mb-4 text-center text-sm text-blue-600 font-medium">Loading...</div>
+
+        <!-- Dynamic Content -->
+        <div id="ajax-dynamic-content">
+            <!-- Summary Cards (only when viewing batch list) -->
+            {% if not batch_filter %}
+            {% set total_agreed = batch_summaries|map(attribute='agreed_amount_rwf')|sum %}
+            {% set total_cogs = batch_summaries|map(attribute='cogs_rwf')|sum %}
+            {% set total_deductions = batch_summaries|map(attribute='total_deductions')|sum %}
+            {% set total_net_sales = batch_summaries|map(attribute='net_sales_rwf')|sum %}
+            {% set total_profit = batch_summaries|map(attribute='profit_loss_rwf')|sum %}
+            {% set total_paid = batch_summaries|map(attribute='total_paid')|sum %}
+            {% set total_debt = batch_summaries|map(attribute='total_debt')|sum %}
+
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+                <!-- Agreed Amount -->
+                <div class="bg-white rounded-xl shadow-md p-4 border border-blue-200">
+                    <div class="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-1">Total Agreed</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_agreed) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Amafaranga yose yemejwe</div>
+                </div>
+                <!-- COGS -->
+                <div class="bg-white rounded-xl shadow-md p-4 border border-amber-200">
+                    <div class="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">COGS</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_cogs) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Ayo twishyuye kuruyu musaruro</div>
+                </div>
+                <!-- Deductions -->
+                <div class="bg-white rounded-xl shadow-md p-4 border border-red-200">
+                    <div class="text-xs font-semibold text-red-600 uppercase tracking-wide mb-1">Deductions</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_deductions) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Ayo badukase</div>
+                </div>
+                <!-- Net Sales -->
+                <div class="bg-white rounded-xl shadow-md p-4 border border-indigo-200">
+                    <div class="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-1">Net Sales</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_net_sales) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Ayo twakiriye mu ntoki</div>
+                </div>
+                <!-- Profit/Loss -->
+                <div class="rounded-xl shadow-md p-4 border {% if total_profit >= 0 %}bg-emerald-50 border-emerald-300{% else %}bg-red-50 border-red-300{% endif %}">
+                    <div class="text-xs font-semibold {% if total_profit >= 0 %}text-emerald-600{% else %}text-red-600{% endif %} uppercase tracking-wide mb-1">Profit / Loss</div>
+                    <div class="text-xl font-bold tabular-nums {% if total_profit >= 0 %}text-emerald-700{% else %}text-red-700{% endif %}">{{ '{:,.0f}'.format(total_profit) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Inyungu cg igihombo</div>
+                </div>
+                <!-- Cash Collected -->
+                <div class="bg-white rounded-xl shadow-md p-4 border border-green-200">
+                    <div class="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1">Cash Collected</div>
+                    <div class="text-xl font-bold text-gray-900 tabular-nums">{{ '{:,.0f}'.format(total_paid) }} RWF</div>
+                    <div class="text-[11px] text-gray-500 mt-1">Yishyuwe: {{ '{:,.0f}'.format(total_debt) }} RWF remaining</div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Outputs Table -->
+            <div class="bg-white rounded-xl shadow-md overflow-x-auto">
+                {% if batch_filter %}
+                <!-- Batch Detail View -->
+                <div class="p-4 border-b border-gray-200">
+                    <div class="flex justify-between items-center">
+                        <h2 class="font-bold text-lg">Batch Details: <span class="font-mono text-blue-700">{{ batch_filter }}</span></h2>
+                        <a href="{{ url_for('copper.record_output') }}" class="text-sm text-blue-600 hover:underline font-medium">← Back to all batches</a>
+                    </div>
+                </div>
+
+                <!-- Stock Composition -->
+                {% if batch_plan_details and batch_plan_details.stock_items %}
+                <div class="p-4 bg-slate-50 border-b border-gray-200">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-semibold text-sm text-slate-700 flex items-center gap-2">
+                            <i data-lucide="clipboard-list" class="w-4 h-4"></i>
+                            Stock Composition (Vouchers in Batch)
+                        </h3>
+                        <div class="flex gap-4 text-xs">
+                            <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded font-semibold">Batch Moyenne: {{ batch_plan_details.batch_moyenne }}%</span>
+                            {% if batch_plan_details.batch_moyenne_nb %}
+                            <span class="bg-purple-100 text-purple-800 px-2 py-1 rounded font-semibold">Moyenne Nb: {{ batch_plan_details.batch_moyenne_nb }}</span>
+                            {% endif %}
+                            <span class="bg-emerald-100 text-emerald-800 px-2 py-1 rounded font-semibold">Total Planned: {{ batch_plan_details.total_planned_kg }} kg</span>
+                        </div>
+                    </div>
+                    <table class="min-w-full table-auto bg-white rounded-lg shadow-sm border border-slate-200">
+                        <thead class="bg-slate-100">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600">Voucher</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600">Supplier</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-gray-600">Input (kg)</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-gray-600">Planned Out (kg)</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-gray-600">Percentage (%)</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-gray-600">Nobelium</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            {% for item in batch_plan_details.stock_items %}
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-3 py-2 text-sm font-mono text-blue-700">{{ item.voucher_no }}</td>
+                                <td class="px-3 py-2 text-sm">{{ item.supplier or '-' }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums">{{ '%.2f'|format(item.input_kg) }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums font-semibold">{{ '%.2f'|format(item.planned_output_kg) }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums text-amber-700">{{ '%.2f'|format(item.percentage) }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{{ '%.2f'|format(item.nobelium) if item.nobelium is not none else '-' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+
+                <!-- Deductions Breakdown -->
+                {% if batch_plan_details and batch_plan_details.deductions %}
+                <div class="p-4 bg-red-50 border-b border-red-200">
+                    <h3 class="font-semibold text-sm text-red-800 mb-3 flex items-center gap-2">
+                        <i data-lucide="trending-down" class="w-4 h-4"></i>
+                        Deductions Breakdown
+                    </h3>
+                    <table class="min-w-full table-auto bg-white rounded-lg shadow-sm border border-red-100">
+                        <thead class="bg-red-100">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-red-800">Deduction Type</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-red-800">Amount</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-red-800">Rate</th>
+                                <th class="px-3 py-2 text-right text-xs font-semibold text-red-800">RWF</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-red-50">
+                            {% for d in batch_plan_details.deductions %}
+                            <tr class="hover:bg-red-50">
+                                <td class="px-3 py-2 text-sm font-medium text-red-700">{{ d.deduction_type or 'Adjustment' }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums">{{ '{:,.2f}'.format(d.amount_input or 0) }} {{ d.currency }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums text-gray-500">{{ d.exchange_rate }}</td>
+                                <td class="px-3 py-2 text-sm text-right tabular-nums font-semibold text-red-700">{{ '{:,.0f}'.format(d.amount_rwf or 0) }} RWF</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+
+                <table class="min-w-full table-auto">
+                    <thead class="bg-slate-100">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Date</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Stock</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Customer</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Output(kg)</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Output Amount</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Amount Paid</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Currency</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Stage</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Debt Remaining</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Note</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        {% for out in outputs %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-4 py-3 text-sm">{{ out.date.strftime("%Y-%m-%d") if out.date else '-' }}</td>
+                            <td class="px-4 py-3 text-sm font-mono">{{ out.stock.voucher_no if out.stock else '-' }}</td>
+                            <td class="px-4 py-3 text-sm">{{ out.customer or '-' }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(out.output_kg or 0) }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums">{{ '{:,.0f}'.format(out.output_amount_rwf or out.output_amount or 0) }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums text-green-700">{{ '{:,.0f}'.format(out.amount_paid_rwf or out.amount_paid or 0) }}</td>
+                            <td class="px-4 py-3 text-sm">{{ out.currency or 'RWF' }}</td>
+                            <td class="px-4 py-3 text-sm">{{ out.payment_stage or '-' }}</td>
+                            <td class="px-4 py-3 text-sm text-right tabular-nums font-semibold {% if (out.debt_remaining or 0) > 0 %}text-red-600{% else %}text-green-600{% endif %}">{{ '{:,.0f}'.format(out.debt_remaining or 0) }}</td>
+                            <td class="px-4 py-3 text-sm text-gray-500">{{ out.note or '-' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+
+                {% else %}
+                <!-- Batch Summary View -->
+            <div class="p-4 border-b border-gray-200">
+                <h2 class="font-bold text-lg">Recent Batch Outputs</h2>
+                <p class="text-sm text-gray-500">Click "View Details" to see vouchers in each batch</p>
+            </div>
+            <table class="min-w-full table-auto">
+                <thead class="bg-slate-100">
+                    <tr>
+                        <th class="px-3 py-3 text-left text-xs font-semibold text-gray-600">Last Date</th>
+                        <th class="px-3 py-3 text-left text-xs font-semibold text-gray-600">Batch</th>
+                        <th class="px-3 py-3 text-left text-xs font-semibold text-gray-600">Customer</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Gross(kg)</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Tale(kg)</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Moisture(kg)</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Net(kg)</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Agreed (RWF)</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Deductions</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">COGS</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Net Sales</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Profit/Loss</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Paid</th>
+                        <th class="px-3 py-3 text-right text-xs font-semibold text-gray-600">Remaining</th>
+                        <th class="px-3 py-3 text-center text-xs font-semibold text-gray-600">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for b in (batch_summaries or []) %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-3 text-sm">{{ b.last_date.strftime('%Y-%m-%d') if b.last_date else '-' }}</td>
+                        <td class="px-3 py-3 text-sm font-mono text-blue-700">{{ b.batch_id }}</td>
+                        <td class="px-3 py-3 text-sm">{{ b.customer or '-' }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.gross_weight or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.tare_weight or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.moisture_weight or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(b.final_weight or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">
+                            <div class="font-semibold">{{ '{:,.0f}'.format(b.agreed_amount_rwf or 0) }}</div>
+                            {% if b.currency == 'USD' %}
+                            <div class="text-[10px] text-gray-500">{{ '{:,.2f}'.format(b.agreed_amount or 0) }} USD @ {{ b.exchange_rate }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums text-red-600">{{ '{:,.0f}'.format(b.total_deductions or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums text-amber-700">{{ '{:,.0f}'.format(b.cogs_rwf or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums text-indigo-700">{{ '{:,.0f}'.format(b.net_sales_rwf or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums font-bold {% if (b.profit_loss_rwf or 0) > 0 %}text-emerald-700{% elif (b.profit_loss_rwf or 0) < 0 %}text-red-700{% else %}text-gray-600{% endif %}">
+                            {{ '{:,.0f}'.format(b.profit_loss_rwf or 0) }}
+                        </td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums text-green-700">{{ '{:,.0f}'.format(b.total_paid or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums font-semibold {% if (b.total_debt or 0) > 0 %}text-red-600{% else %}text-slate-600{% endif %}">{{ '{:,.0f}'.format(b.total_debt or 0) }}</td>
+                        <td class="px-3 py-3 text-center">
+                            <a class="inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-white text-xs font-semibold hover:bg-blue-700"
+                               href="{{ url_for('copper.record_output', batch_id=b.batch_id) }}">
+                                View Details
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+
+                    {% for out in (single_outputs or []) %}
+                    <tr class="hover:bg-gray-50 bg-slate-50">
+                        <td class="px-3 py-3 text-sm">{{ out.date.strftime("%Y-%m-%d") if out.date else '-' }}</td>
+                        <td class="px-3 py-3 text-sm font-mono text-gray-400">-</td>
+                        <td class="px-3 py-3 text-sm">{{ out.customer or '-' }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">{{ '%.2f'|format(out.output_kg or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums">-</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums text-green-700">{{ '{:,.0f}'.format(out.amount_paid_rwf or out.amount_paid or 0) }}</td>
+                        <td class="px-3 py-3 text-sm text-right tabular-nums font-semibold {% if (out.debt_remaining or 0) > 0 %}text-red-600{% else %}text-slate-600{% endif %}">{{ '{:,.0f}'.format(out.debt_remaining or 0) }}</td>
+                        <td class="px-3 py-3 text-center text-xs text-gray-400">No batch</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+            </div>
+        </div>
+
+        <!-- Legend / Help -->
+        <div class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+            <strong>How profit is calculated:</strong><br>
+            <span class="text-xs">COGS = sum of (planned_output_kg / input_kg) × net_balance for each stock in the batch<br>
+            Net Sales = Agreed Amount − Deductions<br>
+            Profit/Loss = Net Sales − COGS</span>
+        </div>
+
+    </div>
+
+    <script>
+    (function() {
+        const form = document.querySelector('form[method="get"]');
+        const loading = document.getElementById('ajax-loading');
+        const dynamicContent = document.getElementById('ajax-dynamic-content');
+        let ajaxDebounce;
+
+        function fetchFilteredData() {
+            if (!dynamicContent) return;
+            const params = new URLSearchParams(new FormData(form));
+            const url = window.location.pathname + '?' + params.toString();
+            loading.classList.remove('hidden');
+            fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(r => {
+                    if (!r.ok) throw new Error('Fetch failed');
+                    return r.text();
+                })
+                .then(html => {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const newContent = doc.getElementById('ajax-dynamic-content');
+                    if (newContent && dynamicContent) {
+                        dynamicContent.innerHTML = newContent.innerHTML;
+                    }
+                    history.replaceState(null, '', url);
+                })
+                .catch(function(err) {
+                    console.error('AJAX filter error:', err);
+                })
+                .finally(() => loading.classList.add('hidden'));
+        }
+
+        function submitFilterForm() {
+            clearTimeout(ajaxDebounce);
+            ajaxDebounce = setTimeout(fetchFilteredData, 400);
+        }
+
+        form.querySelectorAll('input, select').forEach(el => {
+            el.addEventListener('input', submitFilterForm);
+            el.addEventListener('change', submitFilterForm);
+        });
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            fetchFilteredData();
+        });
+
+        // Customer autocomplete
+        const input = document.getElementById('customer-search');
+        const dropdown = document.getElementById('customer-suggestions');
+        let suggestDebounce;
+
+        if (input && dropdown) {
+            input.addEventListener('input', function() {
+                clearTimeout(suggestDebounce);
+                const q = this.value.trim();
+                if (!q) { dropdown.classList.add('hidden'); return; }
+                suggestDebounce = setTimeout(() => {
+                    fetch('{{ url_for("core.customer_name_suggest") }}?q=' + encodeURIComponent(q))
+                        .then(r => r.json())
+                        .then(data => {
+                            dropdown.innerHTML = '';
+                            const results = data.results || [];
+                            if (!results.length) { dropdown.classList.add('hidden'); return; }
+                            results.forEach(item => {
+                                const div = document.createElement('div');
+                                div.textContent = item.name;
+                                div.addEventListener('click', () => {
+                                    input.value = item.name;
+                                    dropdown.classList.add('hidden');
+                                    submitFilterForm();
+                                });
+                                dropdown.appendChild(div);
+                            });
+                            dropdown.classList.remove('hidden');
+                        })
+                        .catch(() => dropdown.classList.add('hidden'));
+                }, 250);
+            });
+
+            document.addEventListener('click', function(e) {
+                if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.add('hidden');
+                }
+            });
+        }
+
+        // Initialize Lucide icons
+        lucide.createIcons();
+    })();
+    </script>
 </body>
 </html>
