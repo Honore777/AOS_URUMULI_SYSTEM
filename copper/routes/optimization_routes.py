@@ -582,15 +582,12 @@ def confirm_bulk_output():
         stock = stocks_map.get(sid)
         if not stock:
             continue
-        # `unit_percent` and `t_unity` store per-row totals (already multiplied by remaining qty).
-        # Convert them to per-kg by dividing by the stock's local_balance.
-        lb = float(getattr(stock, 'local_balance', 0) or 0)
-        if lb <= 0:
-            continue
-        unit_per_kg = float(getattr(stock, 'unit_percent', 0) or 0) / lb
-        tunity_per_kg = float(getattr(stock, 't_unity', 0) or 0) / lb
-        total_unit += unit_per_kg * qty_f
-        total_tunity += tunity_per_kg * qty_f
+        # Use percentage and nb directly to avoid dependency on potentially stale
+        # unit_percent / t_unity values.
+        pct = float(getattr(stock, 'percentage', 0) or 0)
+        nb_val = float(getattr(stock, 'nb', 0) or 0)
+        total_unit += (pct / 100.0) * qty_f
+        total_tunity += nb_val * qty_f
 
     achieved_moyenne_val = float(total_unit / total_qty) if total_qty else 0.0
     achieved_moyenne_nb_val = float(total_tunity / total_qty) if total_qty else 0.0

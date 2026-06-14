@@ -856,9 +856,9 @@ def confirm_bulk_output():
             return redirect(url_for('cassiterite.optimize'))
 
         # Compute achieved quality deterministically from the quantities being submitted.
-        # This avoids relying on session state and prevents zeros in negotiator views.
-        total_unit = 0.0
-        total_tunity = 0.0
+        # Use stock.percentage directly to avoid dependency on potentially stale unit_percent.
+        total_weighted_pct = 0.0
+        total_weighted_nb = 0.0
         for item in plan_items:
             try:
                 sid = int(item.get('stock_id'))
@@ -870,16 +870,12 @@ def confirm_bulk_output():
             stock = all_stocks.get(sid)
             if not stock:
                 continue
-            lb = float(getattr(stock, 'local_balance', 0) or 0)
-            if lb <= 0:
-                continue
-            unit_per_kg = float(getattr(stock, 'unit_percent', 0) or 0) / lb
-            tunity_per_kg = float(getattr(stock, 't_unity', 0) or 0) / lb
-            total_unit += unit_per_kg * qty_f
-            total_tunity += tunity_per_kg * qty_f
+            pct = float(getattr(stock, 'percentage', 0) or 0)
+            total_weighted_pct += pct * qty_f
+            total_weighted_nb += pct * qty_f
 
-        achieved_moyenne_val = float((total_unit / total_qty) * 100) if total_qty else 0.0
-        achieved_moyenne_nb_val = float((total_tunity / total_qty) * 100) if total_qty else 0.0
+        achieved_moyenne_val = float(total_weighted_pct / total_qty) if total_qty else 0.0
+        achieved_moyenne_nb_val = float(total_weighted_nb / total_qty) if total_qty else 0.0
         
         # Store metadata at top level of plan_json for quick retrieval
         plan_metadata = {

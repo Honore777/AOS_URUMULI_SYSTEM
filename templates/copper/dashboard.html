@@ -562,7 +562,7 @@
             document.getElementById('card-remaining-stock').textContent = formatNumber((Number(totalInput || 0) - Number(totalOutput || 0)), 2);
             document.getElementById('card-total-debt').textContent = formatNumber(totalDebt, 2);
             document.getElementById('card-total-stocks').textContent = formatNumber(totalStocks, 0);
-            document.getElementById('card-moyenne').textContent = formatNumber(moyenneValue * 100, 2) + '%';
+            document.getElementById('card-moyenne').textContent = formatNumber(moyenneValue, 2) + '%';
             document.getElementById('card-moyenne-nb').textContent = formatNumber(moyenneNbValue, 4);
             
             // Fetch initial page without heavy aggregates; cards are already
@@ -709,7 +709,7 @@
                 document.getElementById('card-remaining-stock').textContent = formatNumber((Number(data.total_input || 0) - Number(data.total_output || 0)), 2);
                 document.getElementById('card-total-debt').textContent = formatNumber(data.total_debt, 2);
                 // NOTE: card-total-stocks is NOT updated by AJAX filter; shows all stocks regardless of pagination
-                document.getElementById('card-moyenne').textContent = formatNumber(data.moyenne * 100, 2) + '%';
+                document.getElementById('card-moyenne').textContent = formatNumber(data.moyenne, 2) + '%';
                 document.getElementById('card-moyenne-nb').textContent = formatNumber(data.moyenne_nb, 4);
             } catch (err) {
                 console.warn('updateAllCards partial update failed', err);
