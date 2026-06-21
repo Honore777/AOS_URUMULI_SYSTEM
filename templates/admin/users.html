@@ -30,7 +30,7 @@
         <div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6">
             <h2 class="text-lg font-bold text-slate-800 mb-3">Stock Aggregate Management</h2>
             <p class="text-sm text-slate-600 mb-3">Rebuild stock aggregates to fix stale data (e.g., incorrect moyenne on dashboard).</p>
-            <div class="flex flex-wrap gap-2">
+            <div class="flex flex-wrap gap-2 mb-3">
                 <form method="post" action="{{ url_for('core.admin_rebuild_aggregate', mineral_type='cassiterite') }}" onsubmit="return confirm('Rebuild cassiterite stock aggregate? This will recalculate from current stock data.');">
                     <button type="submit" class="inline-flex items-center rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
                         🔄 Rebuild Cassiterite Aggregate
@@ -41,6 +41,14 @@
                         🔄 Rebuild Copper Aggregate
                     </button>
                 </form>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <a href="{{ url_for('copper.admin_sold_stocks') }}" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                    ✏️ Edit Sold Copper Stocks
+                </a>
+                <a href="{{ url_for('cassiterite.admin_sold_stocks') }}" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                    ✏️ Edit Sold Cassiterite Stocks
+                </a>
             </div>
         </div>
 

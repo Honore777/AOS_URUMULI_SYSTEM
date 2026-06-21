@@ -1385,3 +1385,203 @@ FROM (
             pass
         from utils import safe_jsonify
         return safe_jsonify({'error': 'internal server error'}), 500
+
+
+@cassiterite_bp.route('/edit_sold_stock/<int:stock_id>', methods=['GET', 'POST'])
+@role_required('admin')
+def edit_sold_stock(stock_id):
+    """Admin edit for sold cassiterite stocks"""
+    from cassiterite.forms.edit_sold_stock_form import CassiteriteEditSoldStockForm
+    from flask_login import current_user
+    
+    stock = CassiteriteStock.query.get_or_404(stock_id)
+    
+    if stock.is_deleted:
+        flash("Cannot edit deleted stock.", "danger")
+        return redirect(url_for('cassiterite.admin_sold_stocks'))
+    
+    form = CassiteriteEditSoldStockForm()
+    
+    if form.validate_on_submit():
+        try:
+            # Store old values for audit
+            old_values = {
+                'net_balance': stock.net_balance,
+                'amount': stock.amount,
+                'amount_with_taxes': stock.amount_with_taxes,
+                'percentage': stock.percentage,
+                'u': stock.u,
+                'lme': stock.lme,
+                'm_lme': stock.m_lme,
+                'sec': stock.sec,
+                'tc': stock.tc,
+                'u_price': stock.u_price,
+                'exchange': stock.exchange,
+                'transport_tag': stock.transport_tag,
+            }
+            
+            # Parse form values
+            percentage = float(form.percentage.data or 0)
+            u = float(form.u.data or 0)
+            u_price = float(form.u_price.data or 0)
+            exchange = float(form.exchange.data or 0)
+            transport_tag = float(form.transport_tag.data or 0)
+            lme = float(form.lme.data or 0)
+            m_lme = float(form.m_lme.data or 0)
+            sec = float(form.sec.data or 0)
+            tc = float(form.tc.data or 0)
+            rma_default = float(form.rma_default.data or 150)
+            inkomane_default = float(form.inkomane_default.data or 40)
+            rra_3_percent_default = float(form.rra_3_percent_default.data or 50)
+            input_kg = float(stock.input_kg or 0)
+            
+            # Update stock fields
+            stock.percentage = percentage
+            stock.u = u
+            stock.lme = lme
+            stock.m_lme = m_lme
+            stock.sec = sec
+            stock.tc = tc
+            stock.u_price = u_price
+            stock.exchange = exchange
+            stock.transport_tag = transport_tag
+            
+            # Recalculate using per-unit defaults (same formula as add_stock and normal edit)
+            stock.rma = rma_default * input_kg
+            stock.inkomane = inkomane_default * input_kg
+            stock.tot_amount_tag = transport_tag * input_kg
+            
+            # Recalculate derived fields (including amount, amount_with_taxes, net_balance)
+            stock.update_calculations()
+            
+            # Update related output records
+            outputs_updated = 0
+            for output in stock.outputs:
+                if not output.is_deleted:
+                    output.output_amount = stock.amount
+                    outputs_updated += 1
+            
+            # Rebuild stock aggregate
+            CassiteriteStock.rebuild_stock_aggregate()
+            
+            # Log the change
+            logger.info(
+                "Admin %s edited cassiterite stock %s (voucher: %s). Reason: %s. "
+                "Old values: %s. Outputs updated: %d",
+                current_user.username if hasattr(current_user, 'username') else current_user.id,
+                stock.id,
+                stock.voucher_no,
+                form.reason.data,
+                old_values,
+                outputs_updated
+            )
+            
+            db.session.commit()
+            
+            flash(
+                f"Stock {stock.voucher_no} updated successfully. "
+                f"{outputs_updated} output record(s) updated. "
+                f"Stock aggregate rebuilt.",
+                "success"
+            )
+            return redirect(url_for('cassiterite.admin_sold_stocks'))
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.exception("Failed to edit sold cassiterite stock %s", stock_id)
+            flash(f"Error updating stock: {str(e)}", "danger")
+    
+    # Pre-fill form with current stock values
+    form.voucher_no.data = stock.voucher_no
+    form.supplier.data = stock.supplier
+    form.input_kg.data = stock.input_kg
+    form.percentage.data = stock.percentage
+    form.u.data = stock.u
+    form.lme.data = stock.lme
+    form.m_lme.data = stock.m_lme
+    form.sec.data = stock.sec
+    form.tc.data = stock.tc
+    form.u_price.data = stock.u_price
+    form.exchange.data = stock.exchange
+    form.transport_tag.data = stock.transport_tag
+    
+    # Derive per-unit defaults from existing stock
+    input_kg = float(stock.input_kg or 0)
+    form.rma_default.data = (stock.rma / input_kg) if input_kg and stock.rma else 150
+    form.inkomane_default.data = (stock.inkomane / input_kg) if input_kg and stock.inkomane else 40
+    if stock.exchange and stock.percentage and input_kg and stock.rra_3_percent:
+        try:
+            form.rra_3_percent_default.data = (stock.rra_3_percent * 100) / (stock.exchange * stock.percentage * input_kg * 3)
+        except Exception:
+            form.rra_3_percent_default.data = 50
+    else:
+        form.rra_3_percent_default.data = 50
+    
+    # Calculated fields (read-only)
+    form.amount.data = stock.amount
+    form.amount_with_taxes.data = stock.amount_with_taxes
+    form.net_balance.data = stock.net_balance
+    
+    return render_template('cassiterite/edit_sold_stock.html', form=form, stock=stock)
+
+
+@cassiterite_bp.route('/admin/sold_stocks', methods=['GET'])
+@role_required('admin')
+def admin_sold_stocks():
+    """Admin view of sold cassiterite stocks (stocks with outputs) for editing"""
+    
+    # Get filter parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+    voucher_filter = (request.args.get('voucher') or '').strip()
+    supplier_filter = (request.args.get('supplier') or '').strip()
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+    
+    # Build query for stocks that have outputs
+    stocks_with_outputs = db.session.query(CassiteriteOutput.stock_id).filter(
+        CassiteriteOutput.is_deleted.is_(False)
+    ).distinct().subquery()
+    
+    query = CassiteriteStock.query.filter(
+        CassiteriteStock.id.in_(stocks_with_outputs),
+        CassiteriteStock.is_deleted.is_(False)
+    )
+    
+    # Apply filters
+    if voucher_filter:
+        query = query.filter(CassiteriteStock.voucher_no.ilike(f'%{voucher_filter}%'))
+    
+    if supplier_filter:
+        query = query.filter(CassiteriteStock.supplier.ilike(f'%{supplier_filter}%'))
+    
+    if date_from:
+        try:
+            date_from_dt = datetime.strptime(date_from, '%Y-%m-%d').date()
+            query = query.filter(CassiteriteStock.date >= date_from_dt)
+        except ValueError:
+            pass
+    
+    if date_to:
+        try:
+            date_to_dt = datetime.strptime(date_to, '%Y-%m-%d').date()
+            query = query.filter(CassiteriteStock.date <= date_to_dt)
+        except ValueError:
+            pass
+    
+    # Order by date descending
+    query = query.order_by(CassiteriteStock.date.desc(), CassiteriteStock.voucher_no)
+    
+    # Paginate
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    stocks = pagination.items
+    
+    return render_template(
+        'cassiterite/admin_sold_stocks.html',
+        stocks=stocks,
+        pagination=pagination,
+        voucher_filter=voucher_filter,
+        supplier_filter=supplier_filter,
+        date_from=date_from,
+        date_to=date_to
+    )

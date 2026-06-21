@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Edit Sold Cassiterite Stocks - Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body class="bg-gray-100 font-sans">
+<div class="container mx-auto px-4 py-8">
+    <div class="max-w-7xl mx-auto">
+        <div class="bg-white shadow-lg rounded-lg overflow-hidden">
+            <div class="bg-green-600 px-6 py-4 flex justify-between items-center">
+                <div>
+                    <h1 class="text-2xl font-bold text-white">Edit Sold Cassiterite Stocks (Admin Only)</h1>
+                    <p class="text-green-100 text-sm mt-1">
+                        Stocks that have been output (fully or partially). Edit these to handle supplier renegotiations.
+                    </p>
+                </div>
+                <a href="{{ url_for('cassiterite.dashboard') }}" class="bg-white hover:bg-gray-100 text-green-600 font-bold py-2 px-4 rounded-md transition duration-200">
+                    Back to Dashboard
+                </a>
+            </div>
+            
+            <div class="p-6">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="mb-4 p-4 rounded {% if category == 'success' %}bg-green-100 text-green-800{% elif category == 'danger' %}bg-red-100 text-red-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+                
+                <!-- Filters -->
+                <form method="GET" class="mb-6 bg-gray-50 p-4 rounded-lg">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Voucher No</label>
+                            <input type="text" name="voucher" value="{{ voucher_filter }}" class="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Search voucher...">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
+                            <input type="text" name="supplier" value="{{ supplier_filter }}" class="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Search supplier...">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Date From</label>
+                            <input type="date" name="date_from" value="{{ date_from }}" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Date To</label>
+                            <input type="date" name="date_to" value="{{ date_to }}" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        </div>
+                    </div>
+                    <div class="mt-4 flex gap-2">
+                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-md">
+                            Filter
+                        </button>
+                        <a href="{{ url_for('cassiterite.admin_sold_stocks') }}" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 px-4 rounded-md">
+                            Clear Filters
+                        </a>
+                    </div>
+                </form>
+                
+                <!-- Stocks Table -->
+                {% if stocks %}
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Voucher</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Supplier</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Input (kg)</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Balance (kg)</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Net Balance</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount w/ Taxes</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Percentage</th>
+                                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                {% for stock in stocks %}
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{{ stock.date }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{{ stock.voucher_no }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{{ stock.supplier }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">{{ "%.2f"|format(stock.input_kg or 0) }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">{{ "%.2f"|format(stock.local_balance or 0) }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right font-semibold bg-yellow-50">{{ "%.2f"|format(stock.net_balance or 0) }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">{{ "%.2f"|format(stock.amount or 0) }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">{{ "%.2f"|format(stock.amount_with_taxes or 0) }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">{{ "%.2f"|format(stock.percentage or 0) }}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-center">
+                                        <a href="{{ url_for('cassiterite.edit_sold_stock', stock_id=stock.id) }}" class="text-green-600 hover:text-green-800 font-medium">
+                                            Edit
+                                        </a>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Pagination -->
+                    <div class="mt-6 flex justify-center">
+                        <nav class="inline-flex rounded-md shadow-sm">
+                            {% if pagination.has_prev %}
+                                <a href="{{ url_for('cassiterite.admin_sold_stocks', page=pagination.prev_num, voucher=voucher_filter, supplier=supplier_filter, date_from=date_from, date_to=date_to) }}" class="px-4 py-2 border border-gray-300 bg-white text-gray-700 hover:bg-green-100 rounded-l-md">Previous</a>
+                            {% else %}
+                                <span class="px-4 py-2 border border-gray-300 bg-gray-100 text-gray-400 rounded-l-md cursor-not-allowed">Previous</span>
+                            {% endif %}
+                            <span class="px-4 py-2 border-t border-b border-gray-300 bg-white text-gray-700">Page {{ pagination.page }} of {{ pagination.pages }}</span>
+                            {% if pagination.has_next %}
+                                <a href="{{ url_for('cassiterite.admin_sold_stocks', page=pagination.next_num, voucher=voucher_filter, supplier=supplier_filter, date_from=date_from, date_to=date_to) }}" class="px-4 py-2 border border-gray-300 bg-white text-gray-700 hover:bg-green-100 rounded-r-md">Next</a>
+                            {% else %}
+                                <span class="px-4 py-2 border border-gray-300 bg-gray-100 text-gray-400 rounded-r-md cursor-not-allowed">Next</span>
+                            {% endif %}
+                        </nav>
+                    </div>
+                    
+                    <div class="mt-4 text-center text-sm text-gray-600">
+                        Showing {{ pagination.total }} sold stocks
+                    </div>
+                {% else %}
+                    <div class="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+                        <p class="text-gray-500 text-lg">No sold stocks found</p>
+                        <p class="text-gray-400 text-sm mt-2">Try adjusting your filters or check if there are any stocks with outputs.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
