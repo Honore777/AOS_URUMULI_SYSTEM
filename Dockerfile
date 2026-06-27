@@ -1,15 +1,11 @@
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-ARG HIGHS_VER=1.5.0
 
-# Install tiny runtime deps and HiGHS binary
+# Install tiny runtime deps and CBC solver
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget ca-certificates tar coinor-cbc && \
-    wget -qO /tmp/highs.tar.gz "https://github.com/ERGO-Research/HiGHS/releases/download/v${HIGHS_VER}/highs_${HIGHS_VER}_Linux_x86_64.tar.gz" && \
-    tar -xzf /tmp/highs.tar.gz -C /tmp && \
-    cp /tmp/highs*/bin/highs /usr/local/bin/highs && chmod +x /usr/local/bin/highs && \
-    rm -rf /var/lib/apt/lists/* /tmp/highs*
+    coinor-cbc && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY . /app
