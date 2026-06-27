@@ -98,12 +98,12 @@ else
     DOCKER_COMPOSE="docker-compose"
 fi
 
-$DOCKER_COMPOSE build
+$DOCKER_COMPOSE -f docker-compose.prod.yml build
 print_success "Docker images built"
 
 # Step 4: Start services
 print_info "Step 4: Starting services..."
-$DOCKER_COMPOSE up -d
+$DOCKER_COMPOSE -f docker-compose.prod.yml up -d
 print_success "Services started"
 
 # Step 5: Wait for database to be ready
@@ -112,7 +112,7 @@ MAX_ATTEMPTS=30
 ATTEMPT=0
 
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    if $DOCKER_COMPOSE exec -T db pg_isready -U urumuli_user > /dev/null 2>&1; then
+    if $DOCKER_COMPOSE -f docker-compose.prod.yml exec -T db pg_isready -U urumuli > /dev/null 2>&1; then
         print_success "Database is ready"
         break
     fi
@@ -128,12 +128,12 @@ fi
 
 # Step 6: Run database migrations
 print_info "Step 6: Running database migrations..."
-$DOCKER_COMPOSE exec -T web flask db upgrade
+$DOCKER_COMPOSE -f docker-compose.prod.yml exec -T web flask db upgrade
 print_success "Database migrations completed"
 
 # Step 7: Create admin user
 print_info "Step 7: Creating admin user..."
-$DOCKER_COMPOSE exec -T web python -c "
+$DOCKER_COMPOSE -f docker-compose.prod.yml exec -T web python -c "
 from app import app, db
 from core.models import User
 import os
@@ -171,7 +171,7 @@ fi
 print_info "Step 9: Setting up log rotation..."
 if [ -w "/etc/logrotate.d" ]; then
     sudo tee /etc/logrotate.d/urumuli > /dev/null << EOF
-/var/www/urumuli/logs/*.log {
+/home/urumuli/urumuli/logs/*.log {
     daily
     missingok
     rotate 14
@@ -195,7 +195,7 @@ fi
 
 # Step 11: Verify deployment
 print_info "Step 11: Verifying deployment..."
-$DOCKER_COMPOSE ps
+$DOCKER_COMPOSE -f docker-compose.prod.yml ps
 print_success "Deployment verification completed"
 
 echo ""
@@ -217,9 +217,9 @@ echo "  4. Set up monitoring and alerting"
 echo "  5. Test backup and restore procedures"
 echo ""
 print_info "Useful Commands:"
-echo "  - View logs: docker compose logs -f"
-echo "  - Restart services: docker compose restart"
-echo "  - Stop services: docker compose down"
+echo "  - View logs: docker compose -f docker-compose.prod.yml logs -f"
+echo "  - Restart services: docker compose -f docker-compose.prod.yml restart"
+echo "  - Stop services: docker compose -f docker-compose.prod.yml down"
 echo "  - Update application: ./scripts/update.sh"
 echo "  - Create backup: ./scripts/backup.sh"
 echo ""
