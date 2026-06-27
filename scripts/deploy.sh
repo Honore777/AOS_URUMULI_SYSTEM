@@ -188,9 +188,10 @@ else
 fi
 
 # Step 10: Setup backup cron job
-print_info "Step 10: Setting up backup cron job..."
-(crontab -l 2>/dev/null; echo "0 2 * * * /var/www/urumuli/scripts/backup.sh >> /var/www/urumuli/logs/backup.log 2>&1") | crontab -
-print_success "Backup cron job scheduled (daily at 2 AM)"
+# Disabled - using AOS backup service instead
+# print_info "Step 10: Setting up backup cron job..."
+# (crontab -l 2>/dev/null; echo "0 2 * * * /var/www/urumuli/scripts/backup.sh >> /var/www/urumuli/logs/backup.log 2>&1") | crontab -
+# print_success "Backup cron job scheduled (daily at 2 AM)"
 
 # Step 11: Verify deployment
 print_info "Step 11: Verifying deployment..."
