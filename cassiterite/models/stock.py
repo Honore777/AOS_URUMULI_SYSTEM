@@ -170,6 +170,7 @@ class CassiteriteStock(db.Model):
             self.local_balance = self.remaining_stock()
             self.unit_percent = calculate_unit_percentage(self.local_balance, self.percentage)
             self.t_unity = self.unit_percent
+            self.u = (self.percentage or 0) * (self.input_kg or 0)  # Calculate u from percentage and input_kg
             self.u_price = ((self.lme or 0) - (self.sec or 0)) * (self.percentage or 0) / 100
             self.amount = ((self.u_price or 0) - (self.tc or 0)) / 1000
             self.amount_with_taxes = (self.amount or 0) * (self.exchange or 0) * (self.input_kg or 0)

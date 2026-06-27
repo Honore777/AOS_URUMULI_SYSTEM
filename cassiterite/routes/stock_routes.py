@@ -216,6 +216,7 @@ def add_stock():
                 supplier=form.supplier.data,
                 input_kg=form.input_kg.data,
                 percentage=form.percentage.data,
+                u=form.percentage.data * form.input_kg.data,  # Calculate u from percentage and input_kg
                 lme=form.lme.data,
                 m_lme=form.m_lme.data,
                 sec=form.sec.data,
@@ -1437,7 +1438,7 @@ def edit_sold_stock(stock_id):
             
             # Update stock fields
             stock.percentage = percentage
-            stock.u = u
+            stock.u = percentage * input_kg  # Calculate u from percentage and input_kg
             stock.lme = lme
             stock.m_lme = m_lme
             stock.sec = sec
@@ -1451,8 +1452,21 @@ def edit_sold_stock(stock_id):
             stock.inkomane = inkomane_default * input_kg
             stock.tot_amount_tag = transport_tag * input_kg
             
-            # Recalculate derived fields (including amount, amount_with_taxes, net_balance)
+            # Calculate amount and amount_with_taxes from user inputs (preserve u_price)
+            stock.amount = ((u_price or 0) - (tc or 0)) / 1000
+            stock.amount_with_taxes = (stock.amount or 0) * (exchange or 0) * input_kg
+            
+            # Calculate rra_3_percent using the derived rra_3_percent_default
+            rra_base = (((lme or 0) * (percentage or 0) / 100) - 100) / 1000
+            stock.rra_3_percent = (rra_base * (exchange or 0) * input_kg * 3) / 100
+            
+            # Recalculate derived fields (local_balance, unit_percent, t_unity, moyenne, net_balance)
             stock.update_calculations()
+            
+            # Restore user-provided values that were overwritten by update_calculations
+            stock.u_price = u_price
+            stock.amount = ((u_price or 0) - (tc or 0)) / 1000
+            stock.amount_with_taxes = (stock.amount or 0) * (exchange or 0) * input_kg
             
             # Update related output records
             outputs_updated = 0
